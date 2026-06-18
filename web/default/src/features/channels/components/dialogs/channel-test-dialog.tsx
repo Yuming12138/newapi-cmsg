@@ -19,9 +19,13 @@ For commercial licensing, please contact support@quantumnous.com
 import { type ChangeEvent, useCallback, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
+  flexRender,
+  getCoreRowModel,
+  getPaginationRowModel,
   type ColumnDef,
   type RowSelectionState,
   type Table as TanStackTable,
+  useReactTable,
 } from '@tanstack/react-table'
 import { Check, Copy, Info, Loader2, Settings } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -33,6 +37,14 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import {
   Select,
   SelectContent,
@@ -58,16 +70,8 @@ import {
 import {
   DataTableBulkActions as BulkActionsToolbar,
   DataTablePagination,
-  DataTableView,
-  useDataTable,
 } from '@/components/data-table'
 import { Dialog } from '@/components/dialog'
-import {
-  sideDrawerContentClassName,
-  sideDrawerFooterClassName,
-  sideDrawerFormClassName,
-  sideDrawerHeaderClassName,
-} from '@/components/drawer-layout'
 import { StatusBadge } from '@/components/status-badge'
 import {
   channelsQueryKeys,
@@ -473,6 +477,7 @@ function ChannelTestDialogContent({
         await handleTestChannel(
           currentRow.id,
           {
+            channelName: currentRow.name,
             testModel: model,
             endpointType: endpointType === 'auto' ? undefined : endpointType,
             stream: effectiveStreamTest || undefined,
@@ -784,18 +789,19 @@ function ChannelTestDialogContent({
     ]
   )
 
-  const { table } = useDataTable({
+  const table = useReactTable({
     data: tableData,
     columns,
-    rowSelection,
-    pagination,
+    state: {
+      rowSelection,
+      pagination,
+    },
     enableRowSelection: true,
     getRowId: (row) => row.model,
+    getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
     onRowSelectionChange: setRowSelection,
     onPaginationChange: setPagination,
-    withFilteredRowModel: false,
-    withSortedRowModel: false,
-    withFacetedRowModel: false,
   })
 
   return (
@@ -912,41 +918,80 @@ function ChannelTestDialogContent({
             )}
 
             <div className='space-y-3'>
-              <DataTableView
-                table={table}
-                containerClassName='rounded-md'
-                containerProps={{
-                  role: 'region',
-                  'aria-label': t('Channel models'),
-                }}
-                tableContainerClassName='max-h-90 overflow-auto **:data-[slot=table-container]:overflow-visible'
-                tableClassName='w-max min-w-full table-auto'
-                pinnedColumns={[
-                  {
-                    columnId: 'actions',
-                    side: 'right',
-                    className: 'w-24 min-w-24 sm:w-28 sm:min-w-28',
-                    cellClassName: 'bg-popover',
-                  },
-                ]}
-                colgroup={
-                  <colgroup>
-                    <col className='w-10 min-w-10' />
-                    <col className='w-auto' />
-                    <col className='w-70' />
-                    <col className='w-24 sm:w-28' />
-                  </colgroup>
-                }
-                getColumnClassName={(columnId) =>
-                  getTestTableColumnClass(columnId)
-                }
-                emptyContent={
-                  models.length
-                    ? t('No models matched your search.')
-                    : t('This channel has no configured models.')
-                }
-                emptyCellClassName='text-muted-foreground h-16 text-center text-sm'
-              />
+              <div
+                className='overflow-hidden rounded-md border'
+                role='region'
+                aria-label={t('Channel models')}
+              >
+                <div className='max-h-90 overflow-auto'>
+                  <Table className='w-max min-w-full table-auto'>
+                    <colgroup>
+                      <col className='w-10 min-w-10' />
+                      <col className='w-auto' />
+                      <col className='w-70' />
+                      <col className='w-24 sm:w-28' />
+                    </colgroup>
+                    <TableHeader>
+                      {table.getHeaderGroups().map((headerGroup) => (
+                        <TableRow key={headerGroup.id}>
+                          {headerGroup.headers.map((header) => (
+                            <TableHead
+                              key={header.id}
+                              className={getTestTableColumnClass(
+                                header.column.id
+                              )}
+                            >
+                              {header.isPlaceholder
+                                ? null
+                                : flexRender(
+                                    header.column.columnDef.header,
+                                    header.getContext()
+                                  )}
+                            </TableHead>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableHeader>
+                    <TableBody>
+                      {table.getRowModel().rows.length ? (
+                        table.getRowModel().rows.map((row) => (
+                          <TableRow
+                            key={row.id}
+                            data-state={
+                              row.getIsSelected() ? 'selected' : undefined
+                            }
+                          >
+                            {row.getVisibleCells().map((cell) => (
+                              <TableCell
+                                key={cell.id}
+                                className={getTestTableColumnClass(
+                                  cell.column.id
+                                )}
+                              >
+                                {flexRender(
+                                  cell.column.columnDef.cell,
+                                  cell.getContext()
+                                )}
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        ))
+                      ) : (
+                        <TableRow>
+                          <TableCell
+                            colSpan={table.getVisibleLeafColumns().length}
+                            className='text-muted-foreground h-16 text-center text-sm'
+                          >
+                            {models.length
+                              ? t('No models matched your search.')
+                              : t('This channel has no configured models.')}
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
 
               <DataTablePagination table={table} />
             </div>
@@ -1133,20 +1178,18 @@ function FailureDetailsSheet({
       <SheetContent
         side={isMobile ? 'bottom' : 'right'}
         className={
-          isMobile
-            ? sideDrawerContentClassName('h-auto max-h-[85dvh] rounded-t-xl')
-            : sideDrawerContentClassName('sm:max-w-lg')
+          isMobile ? 'h-auto max-h-[85dvh] rounded-t-xl' : 'sm:max-w-lg'
         }
       >
         {details && (
           <>
-            <SheetHeader className={sideDrawerHeaderClassName('sm:px-5')}>
+            <SheetHeader className='sm:px-5'>
               <SheetTitle className='pr-10'>{t('Details')}</SheetTitle>
               <SheetDescription className='pr-10 wrap-break-word'>
                 {details.model}
               </SheetDescription>
             </SheetHeader>
-            <div className={sideDrawerFormClassName('gap-4 sm:px-5')}>
+            <div className='flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4 sm:px-5'>
               <section className='space-y-1'>
                 <div className='text-muted-foreground text-xs font-medium'>
                   {t('Model')}
@@ -1170,7 +1213,7 @@ function FailureDetailsSheet({
                 </pre>
               </section>
             </div>
-            <SheetFooter className={sideDrawerFooterClassName('sm:px-5')}>
+            <SheetFooter className='sm:px-5'>
               <Button
                 variant='outline'
                 className='w-full sm:w-auto'
