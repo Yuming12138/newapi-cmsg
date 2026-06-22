@@ -45,6 +45,7 @@ const defaultOperationsSettings: OperationsSettings = {
   'cliproxy_cpa_quota_guard.min_remaining_percent_7d': 20,
   'monitor_setting.auto_test_channel_enabled': false,
   'monitor_setting.auto_test_channel_minutes': 10,
+  'monitor_setting.channel_test_mode': 'scheduled_all',
   SMTPServer: '',
   SMTPPort: '',
   SMTPAccount: '',
