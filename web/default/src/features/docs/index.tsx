@@ -21,13 +21,18 @@ import type { LucideIcon } from 'lucide-react'
 import {
   BookOpen,
   CheckCircle2,
+  Download,
   ExternalLink,
   FileJson2,
   FolderOpen,
+  ImageIcon,
   KeyRound,
+  MessageSquare,
   Monitor,
+  Search,
   ShieldAlert,
   Terminal,
+  Upload,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -36,6 +41,8 @@ import { PublicLayout } from '@/components/layout'
 import { Footer } from '@/components/layout/components/footer'
 
 const API_BASE_URL = 'https://api.cmsg666.xyz/v1'
+const CHAT_WEB_URL = 'https://webui.cmsg666.xyz'
+const IMAGE_GENERATION_PATH = '/image-generation'
 
 const authJson = `{
   "OPENAI_API_KEY": "自己的秘钥"
@@ -112,6 +119,28 @@ cd 你的项目目录
 # 3. 启动 Codex
 codex`
 
+const chatApiExample = `curl ${API_BASE_URL}/chat/completions \\
+  -H "Authorization: Bearer 自己的密钥" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "gpt-5.5",
+    "messages": [
+      {"role": "user", "content": "用三句话说明这个接口怎么用"}
+    ]
+  }'`
+
+const imageApiExample = `curl ${API_BASE_URL}/images/generations \\
+  -H "Authorization: Bearer 自己的密钥" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "gpt-image-2",
+    "prompt": "一张干净的产品照，白色马克杯放在木桌上",
+    "size": "1024x1024",
+    "quality": "auto",
+    "output_format": "png",
+    "n": 1
+  }'`
+
 const codexPaths = [
   {
     system: 'Windows',
@@ -142,7 +171,8 @@ const quickSteps: Array<{
   },
   {
     title: '创建 API 密钥',
-    description: '在 API 秘钥页面创建一个密钥。密钥通常以 sk- 开头，只显示一次。',
+    description:
+      '在 API 秘钥页面创建一个密钥。密钥通常以 sk- 开头，只显示一次。',
     icon: KeyRound,
   },
   {
@@ -160,6 +190,68 @@ const quickSteps: Array<{
     title: '写入配置文件',
     description: `把 API 密钥写进 auth.json，再把 ${API_BASE_URL} 写进 config.toml。`,
     icon: FileJson2,
+  },
+]
+
+const webChatSteps: Array<{
+  title: string
+  description: string
+  icon: LucideIcon
+}> = [
+  {
+    title: '打开聊天入口',
+    description:
+      '登录本站后点左侧“聊天”，也可以直接打开聊天页。首次使用按页面提示注册或登录。',
+    icon: MessageSquare,
+  },
+  {
+    title: '选择模型',
+    description:
+      '常规对话选 gpt-5.5。想快一点可选 mini 类模型，复杂任务再切回主模型。',
+    icon: CheckCircle2,
+  },
+  {
+    title: '需要联网时再打开搜索',
+    description:
+      '输入框附近有网页搜索开关。查当天信息、网页资料、新闻和价格时再打开。',
+    icon: Search,
+  },
+  {
+    title: '读文件就上传附件',
+    description:
+      '点附件按钮或把文件拖进输入框。适合读 PDF、表格、文档和代码片段。',
+    icon: Upload,
+  },
+]
+
+const imageSteps: Array<{
+  title: string
+  description: string
+  icon: LucideIcon
+}> = [
+  {
+    title: '进入图片生成',
+    description:
+      '登录本站后点左侧“图片生成”。页面会显示提示词、分组、尺寸、质量、数量和格式。',
+    icon: ImageIcon,
+  },
+  {
+    title: '分组选 cliproxy-codex',
+    description:
+      '页面默认会优先选择 cliproxy-codex。若手动改过分组，生成失败时先切回这个分组。',
+    icon: CheckCircle2,
+  },
+  {
+    title: '提示词写清楚',
+    description:
+      '把主体、场景、风格、比例和不要出现的内容写清楚。先生成 1 张，满意后再加数量。',
+    icon: FileJson2,
+  },
+  {
+    title: '生成后下载',
+    description:
+      '任务提交后页面会自动轮询。成功后可以预览和下载，最近任务会显示在页面下方。',
+    icon: Download,
   },
 ]
 
@@ -270,6 +362,27 @@ function StepCard(props: {
   )
 }
 
+function UsageCard(props: {
+  title: string
+  description: string
+  icon: LucideIcon
+}) {
+  const Icon = props.icon
+  return (
+    <div className='border-border bg-card rounded-lg border p-4'>
+      <div className='mb-3 flex items-center gap-3'>
+        <div className='bg-muted text-foreground flex size-9 items-center justify-center rounded-lg'>
+          <Icon className='size-4' />
+        </div>
+        <h3 className='font-semibold'>{props.title}</h3>
+      </div>
+      <p className='text-muted-foreground text-sm leading-6'>
+        {props.description}
+      </p>
+    </div>
+  )
+}
+
 export function Docs() {
   return (
     <PublicLayout showMainContainer={false}>
@@ -283,15 +396,22 @@ export function Docs() {
               </div>
               <div className='max-w-3xl space-y-4'>
                 <h1 className='text-3xl leading-tight font-semibold md:text-5xl'>
-                  从拿到 API 密钥到跑起 Codex
+                  Codex 配置、网页聊天和图片生成
                 </h1>
                 <p className='text-muted-foreground text-base leading-7 md:text-lg'>
-                  这页只讲最常用的本地 Codex 用法：桌面端、终端版、auth.json、
-                  config.toml、模型名和 base_url。照着做完后，Codex 会通过本站
-                  New API 网关请求模型。
+                  这页只放常用入口和配置：API 密钥、桌面端 Codex、终端版
+                  Codex、auth.json、config.toml、网页聊天和图片生成。只想对话，
+                  直接进聊天；要在项目里工作，再配置 Codex。
                 </p>
               </div>
               <div className='flex flex-wrap gap-3'>
+                <Button render={<a href={CHAT_WEB_URL} />}>打开聊天</Button>
+                <Button
+                  variant='outline'
+                  render={<a href={IMAGE_GENERATION_PATH} />}
+                >
+                  图片生成
+                </Button>
                 <Button render={<a href='/sign-up' />}>注册账号</Button>
                 <Button variant='outline' render={<a href='/keys' />}>
                   创建 API 密钥
@@ -315,7 +435,7 @@ export function Docs() {
               <p className='mb-3 font-medium'>快速跳转</p>
               <div className='grid gap-2'>
                 <a className='hover:text-primary' href='#quickstart'>
-                  1. 跑通顺序
+                  1. 跑通 Codex
                 </a>
                 <a className='hover:text-primary' href='#api-key'>
                   2. 创建 API 密钥
@@ -332,8 +452,14 @@ export function Docs() {
                 <a className='hover:text-primary' href='#config'>
                   6. config.toml
                 </a>
+                <a className='hover:text-primary' href='#web-chat'>
+                  7. 网页聊天
+                </a>
+                <a className='hover:text-primary' href='#image-generation'>
+                  8. 图片生成
+                </a>
                 <a className='hover:text-primary' href='#check'>
-                  7. 启动检查
+                  9. 启动检查
                 </a>
               </div>
             </nav>
@@ -341,11 +467,7 @@ export function Docs() {
         </section>
 
         <div className='mx-auto max-w-6xl px-4'>
-          <Section
-            id='quickstart'
-            eyebrow='Quick Start'
-            title='最快的跑通路径'
-          >
+          <Section id='quickstart' eyebrow='Quick Start' title='最快的跑通路径'>
             <div className='grid gap-4 md:grid-cols-2 lg:grid-cols-5'>
               {quickSteps.map((step, index) => (
                 <StepCard key={step.title} index={index + 1} {...step} />
@@ -366,7 +488,8 @@ export function Docs() {
                 className='bg-background mx-auto max-h-[760px] w-auto max-w-full object-contain'
               />
               <figcaption className='text-muted-foreground border-border border-t px-4 py-3 text-sm'>
-                创建 API 密钥时，名称可自定义，分组按实际用途选择；保存后复制密钥。
+                创建 API
+                密钥时，名称可自定义，分组按实际用途选择；保存后复制密钥。
               </figcaption>
             </figure>
           </Section>
@@ -487,6 +610,84 @@ export function Docs() {
                 在更大范围内直接读写和执行命令。除非你明确知道风险，否则优先使用
                 workspace-write 和 on-request。
               </InfoBox>
+            </div>
+          </Section>
+
+          <Section
+            id='web-chat'
+            eyebrow='Chat'
+            title='网页聊天怎么用'
+            description='网页聊天适合临时问答、读文件、联网查资料和保留对话记录。它和 API 密钥不是一回事：网页聊天不需要把自己的密钥贴进去；Codex、脚本和第三方客户端才需要创建 API 密钥。'
+          >
+            <div className='grid gap-6'>
+              <div className='grid gap-4 md:grid-cols-2 lg:grid-cols-4'>
+                {webChatSteps.map((step) => (
+                  <UsageCard key={step.title} {...step} />
+                ))}
+              </div>
+              <div className='grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]'>
+                <CodeBlock
+                  title='聊天 API 示例'
+                  language='curl'
+                  code={chatApiExample}
+                />
+                <div className='grid gap-4'>
+                  <InfoBox icon={MessageSquare} title='聊天账号'>
+                    聊天页有自己的登录状态，用来分开保存会话。第一次打开时，
+                    按页面提示注册或登录即可。
+                  </InfoBox>
+                  <InfoBox icon={Search} title='联网搜索'>
+                    只有需要查网页时才打开搜索。普通问答、改写、总结和读文件，
+                    可以先不打开。
+                  </InfoBox>
+                </div>
+              </div>
+              <div className='flex flex-wrap gap-3'>
+                <Button render={<a href={CHAT_WEB_URL} />}>打开聊天</Button>
+                <Button variant='outline' render={<a href='/keys' />}>
+                  创建 API 密钥
+                </Button>
+              </div>
+            </div>
+          </Section>
+
+          <Section
+            id='image-generation'
+            eyebrow='Images'
+            title='图片生成怎么用'
+            description='图片生成走本站的图片生成页面或 /v1/images/generations 接口。网页页面适合直接试提示词；脚本批量生成时再用 API。'
+          >
+            <div className='grid gap-6'>
+              <div className='grid gap-4 md:grid-cols-2 lg:grid-cols-4'>
+                {imageSteps.map((step) => (
+                  <UsageCard key={step.title} {...step} />
+                ))}
+              </div>
+              <div className='grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]'>
+                <CodeBlock
+                  title='图片生成 API 示例'
+                  language='curl'
+                  code={imageApiExample}
+                />
+                <div className='grid gap-4'>
+                  <InfoBox icon={ImageIcon} title='页面参数'>
+                    尺寸常用 1024x1024；质量不确定就选“自动”；输出格式常用 PNG。
+                    数量越多，等待时间和消耗都会增加。
+                  </InfoBox>
+                  <InfoBox tone='warning' icon={ShieldAlert} title='分组报错时'>
+                    如果看到“分组下模型无可用渠道”，先确认分组是
+                    cliproxy-codex。API 调用也建议使用这个分组创建密钥。
+                  </InfoBox>
+                </div>
+              </div>
+              <div className='flex flex-wrap gap-3'>
+                <Button render={<a href={IMAGE_GENERATION_PATH} />}>
+                  打开图片生成
+                </Button>
+                <Button variant='outline' render={<a href='/keys' />}>
+                  创建 API 密钥
+                </Button>
+              </div>
             </div>
           </Section>
 
