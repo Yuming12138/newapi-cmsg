@@ -63,7 +63,7 @@ export function useSidebarData(): SidebarData {
             icon: FlaskConical,
           },
           {
-            title: 'Open WebUI',
+            title: t('Chat'),
             url: 'https://webui.cmsg666.xyz',
             icon: MonitorPlay,
             external: true,

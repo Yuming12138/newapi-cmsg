@@ -66,7 +66,7 @@ export function SidebarModulesCard() {
         },
         {
           key: 'open_webui',
-          title: 'Open WebUI',
+          title: t('Chat'),
           description: t('Full web chat interface with files and tools.'),
         },
         {

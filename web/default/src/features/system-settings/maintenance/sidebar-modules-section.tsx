@@ -83,7 +83,7 @@ export function SidebarModulesSection({
         description: t('Experiment with prompts and models in real time.'),
       },
       open_webui: {
-        title: 'Open WebUI',
+        title: t('Chat'),
         description: t('Full web chat interface with files and tools.'),
       },
       image_generation: {
