@@ -200,24 +200,6 @@ export function resolveChatUrl({
   return url
 }
 
-export function openChatLink(url: string, type: ChatLinkType) {
-  if (typeof window === 'undefined') return
-
-  if (type === 'web') {
-    window.open(url, '_blank', 'noopener')
-    return
-  }
-
-  const link = window.document.createElement('a')
-  link.href = url
-  link.style.display = 'none'
-  window.document.body.appendChild(link)
-  link.click()
-  window.setTimeout(() => {
-    link.remove()
-  }, 0)
-}
-
 export function getFirstActiveKey(
   keys: ActiveApiKey[] | undefined
 ): ActiveApiKey | undefined {

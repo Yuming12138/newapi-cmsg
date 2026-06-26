@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMemo, useCallback, useRef, useState } from 'react'
+import { useMemo, useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useLocation } from '@tanstack/react-router'
 import { ExternalLink, Loader2, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -44,7 +44,6 @@ import { fetchActiveChatKey } from '@/features/chat/hooks/use-active-chat-key'
 import { useChatPresets } from '@/features/chat/hooks/use-chat-presets'
 import {
   chatLinkRequiresApiKey,
-  openChatLink,
   resolveChatUrl,
   type ChatPreset,
 } from '@/features/chat/lib/chat-links'
@@ -58,12 +57,14 @@ function ChatMenuItem({
   preset,
   active,
   loading,
+  resolvedUrl,
   onOpen,
   onNavigate,
 }: {
   preset: ChatPreset
   active: boolean
   loading: boolean
+  resolvedUrl?: string
   onOpen: (preset: ChatPreset) => void | Promise<void>
   onNavigate: () => void
 }) {
@@ -81,6 +82,22 @@ function ChatMenuItem({
           }
         >
           <span>{preset.name}</span>
+        </SidebarMenuSubButton>
+      </SidebarMenuSubItem>
+    )
+  }
+
+  if (resolvedUrl) {
+    return (
+      <SidebarMenuSubItem>
+        <SidebarMenuSubButton
+          href={resolvedUrl}
+          onClick={onNavigate}
+          isActive={false}
+          className='justify-between'
+        >
+          <span>{preset.name}</span>
+          <ExternalLink className='h-4 w-4' />
         </SidebarMenuSubButton>
       </SidebarMenuSubItem>
     )
@@ -113,11 +130,15 @@ function ChatMenuItem({
 function DropdownPresetItem({
   preset,
   loading,
+  resolvedUrl,
   onOpen,
+  onNavigate,
 }: {
   preset: ChatPreset
   loading: boolean
+  resolvedUrl?: string
   onOpen: (preset: ChatPreset) => void | Promise<void>
+  onNavigate: () => void
 }) {
   if (preset.type === 'web') {
     return (
@@ -125,6 +146,15 @@ function DropdownPresetItem({
         render={<Link to='/chat/$chatId' params={{ chatId: preset.id }} />}
       >
         {preset.name}
+      </DropdownMenuItem>
+    )
+  }
+
+  if (resolvedUrl) {
+    return (
+      <DropdownMenuItem render={<a href={resolvedUrl} onClick={onNavigate} />}>
+        {preset.name}
+        <ExternalLink className='ml-auto h-4 w-4 opacity-70' />
       </DropdownMenuItem>
     )
   }
@@ -155,12 +185,24 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
   const { state, isMobile, setOpenMobile } = useSidebar()
   const href = useLocation({ select: (location) => location.href })
   const [loadingPresetId, setLoadingPresetId] = useState<string | null>(null)
+  const [resolvedExternalUrls, setResolvedExternalUrls] = useState<
+    Record<string, string>
+  >({})
   const loadingPresetIdRef = useRef<string | null>(null)
 
   const visiblePresets = useMemo(
     () => chatPresets.filter((preset) => preset.type !== 'fluent'),
     [chatPresets]
   )
+  const presetsSignature = useMemo(
+    () =>
+      visiblePresets.map((preset) => `${preset.id}:${preset.url}`).join('\n'),
+    [visiblePresets]
+  )
+
+  useEffect(() => {
+    setResolvedExternalUrls({})
+  }, [presetsSignature, serverAddress])
 
   const handleOpenExternal = useCallback(
     async (preset: ChatPreset) => {
@@ -205,12 +247,15 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
         return
       }
 
-      if (typeof window === 'undefined') return
-
-      openChatLink(url, preset.type)
-      setOpenMobile(false)
+      setResolvedExternalUrls((current) => ({
+        ...current,
+        [preset.id]: url,
+      }))
+      toast.success(
+        t('Chat link is ready. Click the item again to open the client.')
+      )
     },
-    [serverAddress, setOpenMobile, t]
+    [serverAddress, t]
   )
 
   const normalizedHref = normalizeHref(href)
@@ -238,7 +283,9 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
                 key={preset.id}
                 preset={preset}
                 loading={loadingPresetId === preset.id}
+                resolvedUrl={resolvedExternalUrls[preset.id]}
                 onOpen={handleOpenExternal}
+                onNavigate={() => setOpenMobile(false)}
               />
             ))}
           </DropdownMenuContent>
@@ -270,6 +317,7 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
               preset={preset}
               active={normalizedHref === `/chat/${preset.id}`}
               loading={loadingPresetId === preset.id}
+              resolvedUrl={resolvedExternalUrls[preset.id]}
               onOpen={handleOpenExternal}
               onNavigate={() => setOpenMobile(false)}
             />
