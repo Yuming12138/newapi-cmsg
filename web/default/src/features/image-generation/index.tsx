@@ -55,6 +55,7 @@ import type {
 } from './types'
 
 const MODEL = 'gpt-image-2' as const
+const PREFERRED_GROUP = 'cliproxy-codex'
 
 const SIZES: ImageSize[] = ['1024x1024', '1536x1024', '1024x1536', 'auto']
 const QUALITIES: ImageQuality[] = ['auto', 'high', 'medium', 'low']
@@ -134,7 +135,7 @@ export function ImageGeneration() {
 
   useEffect(() => {
     if (group || groups.length === 0) return
-    const preferred = groups.find((item) => item.value === 'asxs')
+    const preferred = groups.find((item) => item.value === PREFERRED_GROUP)
     setGroup(preferred?.value ?? groups[0]?.value ?? 'auto')
   }, [group, groups])
 
