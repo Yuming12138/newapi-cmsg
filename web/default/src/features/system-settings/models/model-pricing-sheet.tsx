@@ -430,6 +430,7 @@ export function ModelPricingEditorPanel({
   const [billingExpr, setBillingExpr] = useState('')
   const [requestRuleExpr, setRequestRuleExpr] = useState('')
   const [previewOpen, setPreviewOpen] = useState(true)
+  const [editorReloadToken, setEditorReloadToken] = useState(0)
   const isEditMode = !!editData
 
   const form = useForm<ModelPricingFormValues>({
@@ -492,6 +493,7 @@ export function ModelPricingEditorPanel({
     setLanePrices(nextLaneState.prices)
     setLaneEnabled(nextLaneState.enabled)
     setPreviewOpen(true)
+    setEditorReloadToken((token) => token + 1)
   }, [editData, form])
 
   const setFormValue = (field: keyof ModelPricingFormValues, value: string) => {
@@ -897,6 +899,7 @@ export function ModelPricingEditorPanel({
                   className='flex flex-col gap-5'
                 >
                   <TieredPricingEditor
+                    key={editorReloadToken}
                     modelName={watchedValues.name}
                     billingExpr={billingExpr}
                     requestRuleExpr={requestRuleExpr}
