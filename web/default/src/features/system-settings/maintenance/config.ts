@@ -57,6 +57,7 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
   chat: {
     enabled: true,
     playground: true,
+    open_webui: true,
     image_generation: true,
     chat: true,
   },

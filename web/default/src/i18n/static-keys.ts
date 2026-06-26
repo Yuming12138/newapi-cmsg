@@ -63,6 +63,7 @@ export const STATIC_I18N_KEYS = [
   'All Groups',
   'All Tags',
   'More...',
+  'More Apps',
   'Less',
 
   // Roles
@@ -416,7 +417,9 @@ export const STATIC_I18N_KEYS = [
   'Chat Area',
   'Playground and chat functions',
   'Playground',
+  'Open WebUI',
   'AI model testing environment',
+  'Full web chat interface with files and tools.',
   'Chat session management',
   'Console Area',
   'Data management and log viewing',

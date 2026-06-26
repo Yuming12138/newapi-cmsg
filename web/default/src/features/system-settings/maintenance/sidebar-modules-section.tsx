@@ -82,6 +82,10 @@ export function SidebarModulesSection({
         title: t('Playground'),
         description: t('Experiment with prompts and models in real time.'),
       },
+      open_webui: {
+        title: 'Open WebUI',
+        description: t('Full web chat interface with files and tools.'),
+      },
       image_generation: {
         title: t('Image Generation'),
         description: t('Generate images with the GPT Image API.'),

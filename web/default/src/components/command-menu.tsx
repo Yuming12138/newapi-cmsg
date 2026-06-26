@@ -36,6 +36,10 @@ import {
 import { getNavGroupsForPath } from './layout/lib/workspace-registry'
 import { ScrollArea } from './ui/scroll-area'
 
+function isExternalUrl(url: string) {
+  return /^https?:\/\//i.test(url)
+}
+
 export function CommandMenu() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -71,6 +75,11 @@ export function CommandMenu() {
                         key={`${navItem.url}-${i}`}
                         value={navItem.title}
                         onSelect={() => {
+                          const url = navItem.url as string
+                          if (navItem.external || isExternalUrl(url)) {
+                            runCommand(() => window.open(url, '_blank'))
+                            return
+                          }
                           runCommand(() => navigate({ to: navItem.url }))
                         }}
                       >
@@ -86,6 +95,11 @@ export function CommandMenu() {
                       key={`${navItem.title}-${subItem.url}-${i}`}
                       value={`${navItem.title}-${subItem.url}`}
                       onSelect={() => {
+                        const url = subItem.url as string
+                        if (subItem.external || isExternalUrl(url)) {
+                          runCommand(() => window.open(url, '_blank'))
+                          return
+                        }
                         runCommand(() => navigate({ to: subItem.url }))
                       }}
                     >

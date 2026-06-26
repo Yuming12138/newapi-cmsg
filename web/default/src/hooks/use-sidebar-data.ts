@@ -31,6 +31,7 @@ import {
   FlaskConical,
   ImageIcon,
   MessageSquare,
+  MonitorPlay,
   CreditCard,
   ListTodo,
   Settings,
@@ -62,12 +63,19 @@ export function useSidebarData(): SidebarData {
             icon: FlaskConical,
           },
           {
+            title: 'Open WebUI',
+            url: 'https://webui.cmsg666.xyz',
+            icon: MonitorPlay,
+            external: true,
+            configUrls: ['/open-webui'],
+          },
+          {
             title: t('Image Generation'),
             url: '/image-generation',
             icon: ImageIcon,
           },
           {
-            title: t('Chat'),
+            title: t('More Apps'),
             icon: MessageSquare,
             type: 'chat-presets',
           },

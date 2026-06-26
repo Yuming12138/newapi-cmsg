@@ -65,6 +65,11 @@ export function SidebarModulesCard() {
           description: t('AI model testing environment'),
         },
         {
+          key: 'open_webui',
+          title: 'Open WebUI',
+          description: t('Full web chat interface with files and tools.'),
+        },
+        {
           key: 'image_generation',
           title: t('Image Generation'),
           description: t('Generate images with the GPT Image API.'),
