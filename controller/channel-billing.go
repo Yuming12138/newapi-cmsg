@@ -536,6 +536,9 @@ func updateChannelBalance(channel *model.Channel) (float64, error) {
 	if balance, handled, err := service.UpdateChannelBudgetGuardBalance(context.Background(), channel); handled || err != nil {
 		return balance, err
 	}
+	if balance, handled, err := service.UpdateCliproxyCPAQuotaGuardBalance(channel); handled || err != nil {
+		return balance, err
+	}
 	if balance, handled, err := service.UpdateMimoCreditGuardBalance(context.Background(), channel); handled || err != nil {
 		return balance, err
 	}

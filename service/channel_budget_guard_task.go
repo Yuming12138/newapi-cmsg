@@ -287,6 +287,30 @@ func UpdateChannelBudgetGuardBalance(ctx context.Context, channel *model.Channel
 	return channel.Balance, true, nil
 }
 
+func UpdateCliproxyCPAQuotaGuardBalance(channel *model.Channel) (float64, bool, error) {
+	if channel == nil {
+		return 0, false, fmt.Errorf("channel is nil")
+	}
+	otherInfo := parseGuardObject(channel.OtherInfo)
+	guardInfo, ok := otherInfo["cliproxy_cpa_quota_guard"].(map[string]interface{})
+	if !ok {
+		return 0, false, nil
+	}
+	health, _ := guardInfo["health"].(map[string]interface{})
+	if health == nil {
+		return channel.Balance, true, nil
+	}
+	if balance, ok := guardObjectFloat(health, "balance_units"); ok {
+		channel.Balance = balance
+		return balance, true, nil
+	}
+	if balance, ok := guardObjectFloat(health, "remaining_share_percent"); ok {
+		channel.Balance = balance
+		return balance, true, nil
+	}
+	return channel.Balance, true, nil
+}
+
 func GetASXSChannelBudgetPoolSnapshot(ctx context.Context) (ChannelBudgetPoolSummary, bool, error) {
 	if ctx == nil {
 		ctx = context.Background()

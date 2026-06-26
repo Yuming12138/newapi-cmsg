@@ -99,6 +99,129 @@ function parseIonetMeta(otherInfo: string | null | undefined): null | {
   return null
 }
 
+type CliproxyCPAQuotaWindow = {
+  shareRemainingPercent: number | null
+  remainingPercent: number | null
+  usedPercent: number | null
+  resetAfterSeconds: number | null
+  resetAt: number | null
+}
+
+type CliproxyCPAQuotaMeta = {
+  shareLimitPercent: number | null
+  remainingSharePercent: number | null
+  balanceUnits: number | null
+  updatedAt: number | null
+  fiveHour: CliproxyCPAQuotaWindow | null
+  weekly: CliproxyCPAQuotaWindow | null
+  nextResetAfterSeconds: number | null
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object'
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function numberValue(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function parseCliproxyCPAQuotaWindow(
+  value: unknown,
+  shareLimitPercent: number | null
+): CliproxyCPAQuotaWindow | null {
+  const item = asObject(value)
+  if (!item) return null
+  const usedPercent = numberValue(item.used_percent)
+  const remainingPercent = numberValue(item.remaining_percent)
+  const shareRemainingPercent =
+    usedPercent == null || shareLimitPercent == null
+      ? null
+      : Math.max(0, shareLimitPercent - usedPercent)
+
+  return {
+    shareRemainingPercent,
+    remainingPercent,
+    usedPercent,
+    resetAfterSeconds: numberValue(item.reset_after_seconds),
+    resetAt: numberValue(item.reset_at),
+  }
+}
+
+function parseCliproxyCPAQuotaMeta(
+  otherInfo: string | null | undefined
+): CliproxyCPAQuotaMeta | null {
+  if (!otherInfo) return null
+  try {
+    const parsed = asObject(JSON.parse(otherInfo))
+    const guard = asObject(parsed?.cliproxy_cpa_quota_guard)
+    const health = asObject(guard?.health)
+    const windows = asObject(health?.windows)
+    if (!guard || !health || !windows) return null
+
+    const shareLimitPercent = numberValue(health.share_limit_percent)
+    const fiveHour = parseCliproxyCPAQuotaWindow(
+      windows['5h'],
+      shareLimitPercent
+    )
+    const weekly = parseCliproxyCPAQuotaWindow(windows['7d'], shareLimitPercent)
+    if (!fiveHour && !weekly) return null
+
+    const resetCandidates = [
+      fiveHour?.resetAfterSeconds,
+      weekly?.resetAfterSeconds,
+    ].filter((value): value is number => value != null && value >= 0)
+
+    return {
+      shareLimitPercent,
+      remainingSharePercent: numberValue(health.remaining_share_percent),
+      balanceUnits: numberValue(health.balance_units),
+      updatedAt: numberValue(guard.updated_at),
+      fiveHour,
+      weekly,
+      nextResetAfterSeconds:
+        resetCandidates.length > 0 ? Math.min(...resetCandidates) : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+function formatPercent(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  const rounded = Math.round(value * 10) / 10
+  return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)}%`
+}
+
+function formatShortDuration(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds)) return '-'
+  const totalSeconds = Math.max(0, Math.round(seconds))
+  const days = Math.floor(totalSeconds / 86400)
+  const hours = Math.floor((totalSeconds % 86400) / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  if (days > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${minutes}m`
+  if (minutes > 0) return `${minutes}m`
+  return `${totalSeconds}s`
+}
+
+function formatCliproxyCPASummary(meta: CliproxyCPAQuotaMeta): string {
+  const parts = [
+    `5h ${formatPercent(meta.fiveHour?.shareRemainingPercent)}`,
+    `7d ${formatPercent(meta.weekly?.shareRemainingPercent)}`,
+  ]
+  if (meta.nextResetAfterSeconds != null) {
+    parts.push(`reset ${formatShortDuration(meta.nextResetAfterSeconds)}`)
+  }
+  return parts.join(' · ')
+}
+
 /**
  * Render limited items with "and X more" indicator
  */
@@ -316,6 +439,7 @@ function BalanceCell({ channel }: { channel: Channel }) {
 
   const usedDisplay = withSuffix(formatQuotaValue(usedQuota))
   const remainingDisplay = withSuffix(formatBalance(balance))
+  const cliproxyCPAQuota = parseCliproxyCPAQuotaMeta(channel.other_info)
 
   // Tag row: only show cumulative used quota
   if (isTagRow) {
@@ -360,56 +484,131 @@ function BalanceCell({ channel }: { channel: Channel }) {
 
   return (
     <TooltipProvider>
-      <div className='flex items-center gap-1.5 text-xs font-medium'>
-        <span
-          className={cn(
-            'size-1.5 shrink-0 rounded-full',
-            dotColorMap[isUpdating ? 'neutral' : variant]
-          )}
-          aria-hidden='true'
-        />
-        <Tooltip>
-          <TooltipTrigger
-            render={<span className='text-muted-foreground cursor-help' />}
-          >
-            {usedDisplay}
-          </TooltipTrigger>
-          <TooltipContent>
-            <p>
-              {t('Used:')} {usedDisplay}
-            </p>
-          </TooltipContent>
-        </Tooltip>
-        <span className='text-muted-foreground/30'>·</span>
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <span
-                className={cn(
-                  'cursor-pointer transition-opacity hover:opacity-70',
-                  channel.type === 57
-                    ? 'text-primary'
-                    : textColorMap[isUpdating ? 'neutral' : variant]
+      <div
+        className={cn(
+          'flex text-xs font-medium',
+          cliproxyCPAQuota
+            ? 'flex-col items-start gap-0.5'
+            : 'items-center gap-1.5'
+        )}
+      >
+        <div className='flex items-center gap-1.5'>
+          <span
+            className={cn(
+              'size-1.5 shrink-0 rounded-full',
+              dotColorMap[isUpdating ? 'neutral' : variant]
+            )}
+            aria-hidden='true'
+          />
+          <Tooltip>
+            <TooltipTrigger
+              render={<span className='text-muted-foreground cursor-help' />}
+            >
+              {usedDisplay}
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>
+                {t('Used:')} {usedDisplay}
+              </p>
+            </TooltipContent>
+          </Tooltip>
+          <span className='text-muted-foreground/30'>·</span>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span
+                  className={cn(
+                    'cursor-pointer transition-opacity hover:opacity-70',
+                    channel.type === 57
+                      ? 'text-primary'
+                      : textColorMap[isUpdating ? 'neutral' : variant]
+                  )}
+                  onClick={handleClickUpdate}
+                />
+              }
+            >
+              {isUpdating
+                ? 'Updating...'
+                : channel.type === 57
+                  ? t('Account Info')
+                  : remainingDisplay}
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>
+                {channel.type === 57
+                  ? t('Click to view Codex usage')
+                  : `${t('Remaining:')} ${remainingDisplay}`}
+              </p>
+              {cliproxyCPAQuota && (
+                <>
+                  <p>
+                    CPA share:{' '}
+                    {formatPercent(cliproxyCPAQuota.remainingSharePercent)} /{' '}
+                    {formatPercent(cliproxyCPAQuota.shareLimitPercent)}
+                  </p>
+                  <p>
+                    5h share:{' '}
+                    {formatPercent(
+                      cliproxyCPAQuota.fiveHour?.shareRemainingPercent
+                    )}
+                    , window:{' '}
+                    {formatPercent(cliproxyCPAQuota.fiveHour?.remainingPercent)}
+                    , reset:{' '}
+                    {formatShortDuration(
+                      cliproxyCPAQuota.fiveHour?.resetAfterSeconds
+                    )}
+                  </p>
+                  <p>
+                    7d share:{' '}
+                    {formatPercent(
+                      cliproxyCPAQuota.weekly?.shareRemainingPercent
+                    )}
+                    , window:{' '}
+                    {formatPercent(cliproxyCPAQuota.weekly?.remainingPercent)},
+                    reset:{' '}
+                    {formatShortDuration(
+                      cliproxyCPAQuota.weekly?.resetAfterSeconds
+                    )}
+                  </p>
+                  {cliproxyCPAQuota.updatedAt && (
+                    <p>
+                      {t('Updated:')}{' '}
+                      {formatTimestampToDate(cliproxyCPAQuota.updatedAt)}
+                    </p>
+                  )}
+                </>
+              )}
+              {channel.type !== 57 && <p>{t('Click to update balance')}</p>}
+            </TooltipContent>
+          </Tooltip>
+        </div>
+        {cliproxyCPAQuota && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className='text-muted-foreground max-w-[230px] cursor-help truncate text-[11px] leading-none font-normal' />
+              }
+            >
+              {formatCliproxyCPASummary(cliproxyCPAQuota)}
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>
+                5h available:{' '}
+                {formatPercent(
+                  cliproxyCPAQuota.fiveHour?.shareRemainingPercent
                 )}
-                onClick={handleClickUpdate}
-              />
-            }
-          >
-            {isUpdating
-              ? 'Updating...'
-              : channel.type === 57
-                ? t('Account Info')
-                : remainingDisplay}
-          </TooltipTrigger>
-          <TooltipContent>
-            <p>
-              {channel.type === 57
-                ? t('Click to view Codex usage')
-                : `${t('Remaining:')} ${remainingDisplay}`}
-            </p>
-            {channel.type !== 57 && <p>{t('Click to update balance')}</p>}
-          </TooltipContent>
-        </Tooltip>
+              </p>
+              <p>
+                7d available:{' '}
+                {formatPercent(cliproxyCPAQuota.weekly?.shareRemainingPercent)}
+              </p>
+              <p>
+                Next reset:{' '}
+                {formatShortDuration(cliproxyCPAQuota.nextResetAfterSeconds)}
+              </p>
+            </TooltipContent>
+          </Tooltip>
+        )}
       </div>
 
       <CodexUsageDialog

@@ -82,6 +82,36 @@ func TestInitialUserQuotaGuardStateUnlockedUsesResolvedPoolQuota(t *testing.T) {
 	}
 }
 
+func TestUpdateCliproxyCPAQuotaGuardBalanceUsesGuardSnapshot(t *testing.T) {
+	channel := &model.Channel{
+		Id:      12,
+		Name:    "cliproxy-codex-pool",
+		Balance: 0,
+		OtherInfo: `{
+			"cliproxy_cpa_quota_guard": {
+				"managed": true,
+				"health": {
+					"ok": true,
+					"balance_units": 31,
+					"remaining_share_percent": 31,
+					"share_limit_percent": 50,
+					"windows": {
+						"5h": {"used_percent": 15, "remaining_percent": 85, "reset_after_seconds": 5916},
+						"7d": {"used_percent": 19, "remaining_percent": 81, "reset_after_seconds": 500089}
+					}
+				}
+			}
+		}`,
+	}
+	balance, handled, err := UpdateCliproxyCPAQuotaGuardBalance(channel)
+	if err != nil {
+		t.Fatalf("UpdateCliproxyCPAQuotaGuardBalance() error = %v", err)
+	}
+	if !handled || balance != 31 || channel.Balance != 31 {
+		t.Fatalf("balance=%v handled=%v channel.Balance=%v", balance, handled, channel.Balance)
+	}
+}
+
 func TestASXSChannelBudgetPoolIncludesXMAPIGroupFallback(t *testing.T) {
 	asxsBaseURL := "https://api.asxs.top"
 	xmapiBaseURL := "https://code.xmapi.cc"
