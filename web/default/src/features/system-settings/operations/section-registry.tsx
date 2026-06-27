@@ -57,6 +57,12 @@ const OPERATIONS_SECTIONS = [
           AutomaticDisableKeywords: settings.AutomaticDisableKeywords,
           AutomaticDisableStatusCodes: settings.AutomaticDisableStatusCodes,
           AutomaticRetryStatusCodes: settings.AutomaticRetryStatusCodes,
+          'cliproxy_cpa_quota_guard.enabled':
+            settings['cliproxy_cpa_quota_guard.enabled'],
+          'cliproxy_cpa_quota_guard.min_remaining_percent_5h':
+            settings['cliproxy_cpa_quota_guard.min_remaining_percent_5h'],
+          'cliproxy_cpa_quota_guard.min_remaining_percent_7d':
+            settings['cliproxy_cpa_quota_guard.min_remaining_percent_7d'],
           'monitor_setting.auto_test_channel_enabled':
             settings['monitor_setting.auto_test_channel_enabled'],
           'monitor_setting.auto_test_channel_minutes':

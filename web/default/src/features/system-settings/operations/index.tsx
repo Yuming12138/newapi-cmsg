@@ -40,6 +40,9 @@ const defaultOperationsSettings: OperationsSettings = {
   AutomaticDisableStatusCodes: '401',
   AutomaticRetryStatusCodes:
     '100-199,300-399,401-407,409-499,500-503,505-523,525-599',
+  'cliproxy_cpa_quota_guard.enabled': true,
+  'cliproxy_cpa_quota_guard.min_remaining_percent_5h': 30,
+  'cliproxy_cpa_quota_guard.min_remaining_percent_7d': 20,
   'monitor_setting.auto_test_channel_enabled': false,
   'monitor_setting.auto_test_channel_minutes': 10,
   SMTPServer: '',

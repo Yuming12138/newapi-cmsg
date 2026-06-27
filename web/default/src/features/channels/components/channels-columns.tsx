@@ -108,8 +108,13 @@ type CliproxyCPAQuotaWindow = {
 }
 
 type CliproxyCPAQuotaMeta = {
+  guardMode: string | null
+  enabled: boolean | null
   shareLimitPercent: number | null
+  minRemainingPercent5h: number | null
+  minRemainingPercent7d: number | null
   remainingSharePercent: number | null
+  remainingHeadroomPercent: number | null
   balanceUnits: number | null
   updatedAt: number | null
   fiveHour: CliproxyCPAQuotaWindow | null
@@ -228,6 +233,19 @@ function parseCliproxyCPAQuotaMeta(
           : null,
       nextResetAt:
         resetAtCandidates.length > 0 ? Math.min(...resetAtCandidates) : null,
+      guardMode:
+        typeof health.guard_mode === 'string' ? health.guard_mode : null,
+      enabled:
+        typeof health.low_watermark_enabled === 'boolean'
+          ? health.low_watermark_enabled
+          : typeof health.enabled === 'boolean'
+            ? health.enabled
+            : null,
+      minRemainingPercent5h: numberValue(health.min_remaining_percent_5h),
+      minRemainingPercent7d: numberValue(health.min_remaining_percent_7d),
+      remainingHeadroomPercent: numberValue(
+        health.remaining_headroom_percent
+      ),
     }
   } catch {
     return null
@@ -277,9 +295,17 @@ function formatCliproxyCPAResetTime(
 }
 
 function formatCliproxyCPASummary(meta: CliproxyCPAQuotaMeta): string {
+  const fiveHourPercent =
+    meta.guardMode === 'low_watermark'
+      ? meta.fiveHour?.remainingPercent
+      : meta.fiveHour?.shareRemainingPercent
+  const weeklyPercent =
+    meta.guardMode === 'low_watermark'
+      ? meta.weekly?.remainingPercent
+      : meta.weekly?.shareRemainingPercent
   const parts = [
-    `5h ${formatPercent(meta.fiveHour?.shareRemainingPercent)}`,
-    `7d ${formatPercent(meta.weekly?.shareRemainingPercent)}`,
+    `5h ${formatPercent(fiveHourPercent)}`,
+    `7d ${formatPercent(weeklyPercent)}`,
   ]
   if (meta.nextResetAt != null) {
     parts.push(`next ${formatCompactTimestamp(meta.nextResetAt)}`)
@@ -609,16 +635,29 @@ function BalanceCell({ channel }: { channel: Channel }) {
               {cliproxyCPAQuota && (
                 <>
                   <p>
-                    CPA share:{' '}
-                    {formatPercent(cliproxyCPAQuota.remainingSharePercent)} /{' '}
-                    {formatPercent(cliproxyCPAQuota.shareLimitPercent)}
+                    CPA guard:{' '}
+                    {cliproxyCPAQuota.enabled === false ? 'off' : 'on'}
+                    {cliproxyCPAQuota.guardMode === 'low_watermark'
+                      ? ', low watermark'
+                      : ''}
                   </p>
+                  {cliproxyCPAQuota.guardMode === 'low_watermark' ? (
+                    <p>
+                      Low watermark: 5h{' '}
+                      {formatPercent(
+                        cliproxyCPAQuota.minRemainingPercent5h
+                      )}, 7d{' '}
+                      {formatPercent(cliproxyCPAQuota.minRemainingPercent7d)}
+                    </p>
+                  ) : (
+                    <p>
+                      CPA share:{' '}
+                      {formatPercent(cliproxyCPAQuota.remainingSharePercent)} /{' '}
+                      {formatPercent(cliproxyCPAQuota.shareLimitPercent)}
+                    </p>
+                  )}
                   <p>
-                    5h share:{' '}
-                    {formatPercent(
-                      cliproxyCPAQuota.fiveHour?.shareRemainingPercent
-                    )}
-                    , window:{' '}
+                    5h remaining:{' '}
                     {formatPercent(cliproxyCPAQuota.fiveHour?.remainingPercent)}
                     , reset:{' '}
                     {formatCliproxyCPAResetTime(
@@ -627,11 +666,7 @@ function BalanceCell({ channel }: { channel: Channel }) {
                     )}
                   </p>
                   <p>
-                    7d share:{' '}
-                    {formatPercent(
-                      cliproxyCPAQuota.weekly?.shareRemainingPercent
-                    )}
-                    , window:{' '}
+                    7d remaining:{' '}
                     {formatPercent(cliproxyCPAQuota.weekly?.remainingPercent)},
                     reset:{' '}
                     {formatCliproxyCPAResetTime(
@@ -662,10 +697,22 @@ function BalanceCell({ channel }: { channel: Channel }) {
             </TooltipTrigger>
             <TooltipContent>
               <p>
-                5h available:{' '}
-                {formatPercent(
-                  cliproxyCPAQuota.fiveHour?.shareRemainingPercent
-                )}
+                Guard:{' '}
+                {cliproxyCPAQuota.enabled === false ? 'off' : 'on'}
+                {cliproxyCPAQuota.guardMode === 'low_watermark'
+                  ? ', low watermark'
+                  : ''}
+              </p>
+              {cliproxyCPAQuota.guardMode === 'low_watermark' && (
+                <p>
+                  Low watermark: 5h{' '}
+                  {formatPercent(cliproxyCPAQuota.minRemainingPercent5h)}, 7d{' '}
+                  {formatPercent(cliproxyCPAQuota.minRemainingPercent7d)}
+                </p>
+              )}
+              <p>
+                5h remaining:{' '}
+                {formatPercent(cliproxyCPAQuota.fiveHour?.remainingPercent)}
               </p>
               <p>
                 5h reset:{' '}
@@ -675,8 +722,8 @@ function BalanceCell({ channel }: { channel: Channel }) {
                 )}
               </p>
               <p>
-                7d available:{' '}
-                {formatPercent(cliproxyCPAQuota.weekly?.shareRemainingPercent)}
+                7d remaining:{' '}
+                {formatPercent(cliproxyCPAQuota.weekly?.remainingPercent)}
               </p>
               <p>
                 7d reset:{' '}

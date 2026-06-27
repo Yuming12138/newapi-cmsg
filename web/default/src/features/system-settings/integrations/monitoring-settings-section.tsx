@@ -46,6 +46,11 @@ const numericString = z.string().refine((value) => {
   return !Number.isNaN(Number(trimmed)) && Number(trimmed) >= 0
 }, 'Enter a non-negative number or leave empty')
 
+const percentNumber = z.coerce
+  .number()
+  .min(0, 'Must be at least 0%')
+  .max(100, 'Must be at most 100%')
+
 const monitoringSchema = z
   .object({
     ChannelDisableThreshold: numericString,
@@ -55,6 +60,11 @@ const monitoringSchema = z
     AutomaticDisableKeywords: z.string(),
     AutomaticDisableStatusCodes: z.string(),
     AutomaticRetryStatusCodes: z.string(),
+    cliproxy_cpa_quota_guard: z.object({
+      enabled: z.boolean(),
+      min_remaining_percent_5h: percentNumber,
+      min_remaining_percent_7d: percentNumber,
+    }),
     monitor_setting: z.object({
       auto_test_channel_enabled: z.boolean(),
       auto_test_channel_minutes: z.coerce
@@ -103,6 +113,9 @@ type MonitoringSettingsSectionProps = {
     AutomaticDisableKeywords: string
     AutomaticDisableStatusCodes: string
     AutomaticRetryStatusCodes: string
+    'cliproxy_cpa_quota_guard.enabled': boolean
+    'cliproxy_cpa_quota_guard.min_remaining_percent_5h': number
+    'cliproxy_cpa_quota_guard.min_remaining_percent_7d': number
     'monitor_setting.auto_test_channel_enabled': boolean
     'monitor_setting.auto_test_channel_minutes': number
   }
@@ -120,6 +133,9 @@ type NormalizedMonitoringValues = {
   AutomaticDisableKeywords: string
   AutomaticDisableStatusCodes: string
   AutomaticRetryStatusCodes: string
+  'cliproxy_cpa_quota_guard.enabled': boolean
+  'cliproxy_cpa_quota_guard.min_remaining_percent_5h': number
+  'cliproxy_cpa_quota_guard.min_remaining_percent_7d': number
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
 }
@@ -136,6 +152,13 @@ const buildFormDefaults = (
   ),
   AutomaticDisableStatusCodes: defaults.AutomaticDisableStatusCodes ?? '',
   AutomaticRetryStatusCodes: defaults.AutomaticRetryStatusCodes ?? '',
+  cliproxy_cpa_quota_guard: {
+    enabled: defaults['cliproxy_cpa_quota_guard.enabled'],
+    min_remaining_percent_5h:
+      defaults['cliproxy_cpa_quota_guard.min_remaining_percent_5h'],
+    min_remaining_percent_7d:
+      defaults['cliproxy_cpa_quota_guard.min_remaining_percent_7d'],
+  },
   monitor_setting: {
     auto_test_channel_enabled:
       defaults['monitor_setting.auto_test_channel_enabled'],
@@ -160,6 +183,12 @@ const normalizeDefaults = (
   AutomaticRetryStatusCodes: parseHttpStatusCodeRules(
     defaults.AutomaticRetryStatusCodes ?? ''
   ).normalized,
+  'cliproxy_cpa_quota_guard.enabled':
+    defaults['cliproxy_cpa_quota_guard.enabled'],
+  'cliproxy_cpa_quota_guard.min_remaining_percent_5h':
+    defaults['cliproxy_cpa_quota_guard.min_remaining_percent_5h'],
+  'cliproxy_cpa_quota_guard.min_remaining_percent_7d':
+    defaults['cliproxy_cpa_quota_guard.min_remaining_percent_7d'],
   'monitor_setting.auto_test_channel_enabled':
     defaults['monitor_setting.auto_test_channel_enabled'],
   'monitor_setting.auto_test_channel_minutes':
@@ -182,6 +211,12 @@ const normalizeFormValues = (
   AutomaticRetryStatusCodes: parseHttpStatusCodeRules(
     values.AutomaticRetryStatusCodes
   ).normalized,
+  'cliproxy_cpa_quota_guard.enabled':
+    values.cliproxy_cpa_quota_guard.enabled,
+  'cliproxy_cpa_quota_guard.min_remaining_percent_5h':
+    values.cliproxy_cpa_quota_guard.min_remaining_percent_5h,
+  'cliproxy_cpa_quota_guard.min_remaining_percent_7d':
+    values.cliproxy_cpa_quota_guard.min_remaining_percent_7d,
   'monitor_setting.auto_test_channel_enabled':
     values.monitor_setting.auto_test_channel_enabled,
   'monitor_setting.auto_test_channel_minutes':
@@ -302,6 +337,101 @@ export function MonitoringSettingsSection({
                   </FormControl>
                   <FormDescription>
                     {t('How frequently the system tests all channels')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
+          <div className='grid gap-6 md:grid-cols-3'>
+            <FormField
+              control={form.control}
+              name='cliproxy_cpa_quota_guard.enabled'
+              render={({ field }) => (
+                <FormItem className='flex flex-row items-center justify-between rounded-lg border p-4 md:col-span-1'>
+                  <div className='space-y-0.5'>
+                    <FormLabel className='text-base'>
+                      {t('CLIProxy quota guard')}
+                    </FormLabel>
+                    <FormDescription>
+                      {t(
+                        'Disable the shared Codex pool only when CPA remaining quota is low'
+                      )}
+                    </FormDescription>
+                  </div>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='cliproxy_cpa_quota_guard.min_remaining_percent_5h'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('5h minimum remaining (%)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={
+                        typeof field.value === 'number' &&
+                        Number.isFinite(field.value)
+                          ? field.value
+                          : ''
+                      }
+                      onChange={(event) =>
+                        field.onChange(event.target.valueAsNumber)
+                      }
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      ref={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Auto-disable below this 5-hour remaining percentage')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='cliproxy_cpa_quota_guard.min_remaining_percent_7d'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('7d minimum remaining (%)')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='number'
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={
+                        typeof field.value === 'number' &&
+                        Number.isFinite(field.value)
+                          ? field.value
+                          : ''
+                      }
+                      onChange={(event) =>
+                        field.onChange(event.target.valueAsNumber)
+                      }
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      ref={field.ref}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Auto-disable below this 7-day remaining percentage')}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

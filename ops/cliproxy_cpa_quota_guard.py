@@ -4,7 +4,8 @@
 The channel consumes a shared CPA Codex account whose upstream quota is reported
 as rolling 5h and 7d windows. New API only understands channel balance/status,
 so this script polls CPA's management API, reads the upstream Codex wham usage
-payload, and toggles the New API channel when our configured share is exhausted.
+payload, and toggles the New API channel when the shared account drops below the
+configured low-watermark thresholds.
 """
 
 from __future__ import annotations
@@ -38,9 +39,17 @@ DEFAULT_CONFIG = {
     "cpa_base_url": "https://cliproxy.cmsg666.xyz",
     "wham_usage_url": "https://chatgpt.com/backend-api/wham/usage",
     "timeout_sec": 30,
-    "share_limit_percent": 50.0,
+    "enabled": True,
+    "min_remaining_percent_5h": 30.0,
+    "min_remaining_percent_7d": 20.0,
     "fail_closed_after_consecutive_failures": 3,
     "balance_units_per_percent": 1.0,
+}
+
+OPTION_CONFIG_MAP = {
+    "cliproxy_cpa_quota_guard.enabled": ("enabled", "bool"),
+    "cliproxy_cpa_quota_guard.min_remaining_percent_5h": ("min_remaining_percent_5h", "float"),
+    "cliproxy_cpa_quota_guard.min_remaining_percent_7d": ("min_remaining_percent_7d", "float"),
 }
 
 
@@ -124,6 +133,48 @@ def db_from_config(config: dict[str, Any]) -> DB:
     user = db_cfg.get("user") or subprocess.check_output([docker, "exec", container, "printenv", "POSTGRES_USER"], text=True).strip()
     database = db_cfg.get("database") or subprocess.check_output([docker, "exec", container, "printenv", "POSTGRES_DB"], text=True).strip()
     return DB(docker=docker, container=container, user=str(user), database=str(database))
+
+
+def bool_value(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return default
+
+
+def clamp_percent(value: Any, default: float) -> float:
+    parsed = number(value)
+    if parsed is None:
+        parsed = default
+    return max(0.0, min(100.0, float(parsed)))
+
+
+def load_option_overrides(db: DB) -> dict[str, Any]:
+    keys = ", ".join(sql_literal(key) for key in OPTION_CONFIG_MAP)
+    sql = f"""
+select key || chr(9) || value
+from options
+where key in ({keys});
+"""
+    output = db.psql(sql, capture=True)
+    overrides: dict[str, Any] = {}
+    for line in output.splitlines():
+        if "\t" not in line:
+            continue
+        key, value = line.split("\t", 1)
+        config_key, value_type = OPTION_CONFIG_MAP.get(key, ("", ""))
+        if not config_key:
+            continue
+        if value_type == "bool":
+            overrides[config_key] = bool_value(value)
+        elif value_type == "float":
+            parsed = number(value)
+            if parsed is not None:
+                overrides[config_key] = parsed
+    return overrides
 
 
 def fetch_channel(db: DB, channel_id: int) -> dict[str, Any]:
@@ -355,23 +406,34 @@ def quota_windows(usage: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def evaluate_quota(config: dict[str, Any], usage: dict[str, Any]) -> dict[str, Any]:
     windows = quota_windows(usage)
-    limit = float(config.get("share_limit_percent") or 50.0)
-    used_5h = windows["5h"].get("used_percent")
-    used_7d = windows["7d"].get("used_percent")
-    if used_5h is None or used_7d is None:
-        raise RuntimeError("missing_used_percent")
-    remaining_share_5h = max(0.0, limit - float(used_5h))
-    remaining_share_7d = max(0.0, limit - float(used_7d))
-    remaining_share = min(remaining_share_5h, remaining_share_7d)
-    within_share = float(used_5h) < limit and float(used_7d) < limit
-    balance_units = remaining_share * float(config.get("balance_units_per_percent") or 1.0)
+    enabled = bool_value(config.get("enabled"), True)
+    threshold_5h = clamp_percent(config.get("min_remaining_percent_5h"), 30.0)
+    threshold_7d = clamp_percent(config.get("min_remaining_percent_7d"), 20.0)
+    remaining_5h = windows["5h"].get("remaining_percent")
+    remaining_7d = windows["7d"].get("remaining_percent")
+    if remaining_5h is None or remaining_7d is None:
+        raise RuntimeError("missing_remaining_percent")
+    remaining_5h = float(remaining_5h)
+    remaining_7d = float(remaining_7d)
+    headroom_5h = remaining_5h - threshold_5h
+    headroom_7d = remaining_7d - threshold_7d
+    remaining_headroom = min(headroom_5h, headroom_7d)
+    quota_ok = (not enabled) or (remaining_5h >= threshold_5h and remaining_7d >= threshold_7d)
+    visible_remaining = min(remaining_5h, remaining_7d)
+    balance_units = visible_remaining * float(config.get("balance_units_per_percent") or 1.0)
     guard_auth = usage.get("_guard_auth") if isinstance(usage.get("_guard_auth"), dict) else {}
     return {
         "ok": True,
-        "within_share": within_share,
-        "reason": "within_50_percent_share" if within_share else "share_limit_reached",
-        "share_limit_percent": limit,
-        "remaining_share_percent": round(remaining_share, 6),
+        "quota_ok": quota_ok,
+        "within_share": quota_ok,
+        "reason": "above_low_watermark" if quota_ok else "low_watermark_reached",
+        "guard_mode": "low_watermark",
+        "enabled": enabled,
+        "low_watermark_enabled": enabled,
+        "min_remaining_percent_5h": threshold_5h,
+        "min_remaining_percent_7d": threshold_7d,
+        "remaining_headroom_percent": round(remaining_headroom, 6),
+        "remaining_share_percent": round(visible_remaining, 6),
         "balance_units": round(balance_units, 6),
         "plan_type": usage.get("plan_type") or usage.get("planType") or guard_auth.get("plan_type_hint"),
         "account_id_hash": guard_auth.get("account_id_hash"),
@@ -388,9 +450,9 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
     other_info = parse_json_object(channel.get("other_info"))
 
     ok = bool(result.get("ok"))
-    within_share = bool(result.get("within_share")) if ok else False
+    quota_ok = bool(result.get("quota_ok", result.get("within_share"))) if ok else False
     fail_closed = bool(result.get("fail_closed"))
-    desired_enabled = ok and within_share
+    desired_enabled = ok and quota_ok
 
     guard_info = {
         "managed": True,
@@ -432,7 +494,7 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
 
     name = channel.get("name") or f"channel-{cid}"
     if desired_enabled:
-        return f"{name}: enabled remaining_share={float(result.get('remaining_share_percent') or 0):.3f}% balance={float(result.get('balance_units') or 0):.6f}"
+        return f"{name}: enabled remaining={float(result.get('remaining_share_percent') or 0):.3f}% balance={float(result.get('balance_units') or 0):.6f}"
     if ok:
         return f"{name}: auto-disabled {result.get('reason')}"
     if fail_closed:
@@ -446,6 +508,8 @@ def main() -> int:
     env = load_env_values(Path(str(config.get("env_path") or DEFAULT_CONFIG["env_path"])))
     state_path = Path(str(config.get("state_path") or DEFAULT_CONFIG["state_path"]))
     state = load_json(state_path, {})
+    db = db_from_config(config)
+    config = deep_merge(config, load_option_overrides(db))
 
     try:
         usage = call_wham_usage(config, env)
@@ -466,7 +530,6 @@ def main() -> int:
             "fail_closed": failure_count >= int(config.get("fail_closed_after_consecutive_failures") or 3),
         }
 
-    db = db_from_config(config)
     channel = fetch_channel(db, int(config.get("channel_id") or 12))
     message = apply_result(db, channel, result, state)
     save_json_atomic(state_path, state)

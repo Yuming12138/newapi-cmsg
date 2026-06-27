@@ -269,6 +269,9 @@ export type OperationsSettings = {
   AutomaticDisableKeywords: string
   AutomaticDisableStatusCodes: string
   AutomaticRetryStatusCodes: string
+  'cliproxy_cpa_quota_guard.enabled': boolean
+  'cliproxy_cpa_quota_guard.min_remaining_percent_5h': number
+  'cliproxy_cpa_quota_guard.min_remaining_percent_7d': number
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
   SMTPServer: string
