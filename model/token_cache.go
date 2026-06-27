@@ -1,7 +1,9 @@
 package model
 
 import (
+	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -28,12 +30,41 @@ func cacheDeleteToken(key string) error {
 }
 
 func cacheIncrTokenQuota(key string, increment int64) error {
-	key = common.GenerateHMAC(key)
-	err := common.RedisHIncrBy(fmt.Sprintf("token:%s", key), constant.TokenFiledRemainQuota, increment)
+	return cacheAdjustTokenQuota(key, increment)
+}
+
+func cacheAdjustTokenQuota(key string, quotaDelta int64) error {
+	redisKey := fmt.Sprintf("token:%s", common.GenerateHMAC(key))
+	ctx := context.Background()
+
+	ttl, err := common.RDB.TTL(ctx, redisKey).Result()
 	if err != nil {
 		return err
 	}
-	return nil
+	if ttl <= 0 {
+		return nil
+	}
+
+	unlimitedRaw, err := common.RDB.HGet(ctx, redisKey, "UnlimitedQuota").Result()
+	if err != nil {
+		return err
+	}
+	unlimited, err := strconv.ParseBool(unlimitedRaw)
+	if err != nil {
+		return err
+	}
+
+	txn := common.RDB.TxPipeline()
+	if unlimited {
+		txn.HSet(ctx, redisKey, constant.TokenFiledRemainQuota, 0)
+	} else {
+		txn.HIncrBy(ctx, redisKey, constant.TokenFiledRemainQuota, quotaDelta)
+	}
+	txn.HIncrBy(ctx, redisKey, constant.TokenFieldUsedQuota, -quotaDelta)
+	txn.Expire(ctx, redisKey, ttl)
+
+	_, err = txn.Exec(ctx)
+	return err
 }
 
 func cacheDecrTokenQuota(key string, decrement int64) error {

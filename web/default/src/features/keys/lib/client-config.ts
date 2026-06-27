@@ -18,9 +18,11 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 type StatusAddressSource = {
+  [key: string]: unknown
   server_address?: string | null
   serverAddress?: string | null
   data?: {
+    [key: string]: unknown
     server_address?: string | null
     serverAddress?: string | null
   } | null

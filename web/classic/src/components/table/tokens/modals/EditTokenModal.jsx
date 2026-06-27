@@ -169,6 +169,9 @@ const EditTokenModal = (props) => {
       } else {
         data.model_limits = [];
       }
+      if (data.unlimited_quota) {
+        data.remain_quota = 0;
+      }
       data.remain_amount = Number(
         quotaToDisplayAmount(data.remain_quota || 0).toFixed(6),
       );

@@ -295,6 +295,9 @@ func (token *Token) Update() (err error) {
 			})
 		}
 	}()
+	if token.UnlimitedQuota {
+		token.RemainQuota = 0
+	}
 	updates := map[string]any{
 		"name":                 token.Name,
 		"status":               token.Status,
@@ -406,7 +409,7 @@ func IncreaseTokenQuota(tokenId int, key string, quota int) (err error) {
 func increaseTokenQuota(id int, quota int) (err error) {
 	err = DB.Model(&Token{}).Where("id = ?", id).Updates(
 		map[string]interface{}{
-			"remain_quota":  gorm.Expr("remain_quota + ?", quota),
+			"remain_quota":  gorm.Expr("CASE WHEN unlimited_quota THEN 0 ELSE remain_quota + ? END", quota),
 			"used_quota":    gorm.Expr("used_quota - ?", quota),
 			"accessed_time": common.GetTimestamp(),
 		},
@@ -434,14 +437,7 @@ func DecreaseTokenQuota(id int, key string, quota int) (err error) {
 }
 
 func decreaseTokenQuota(id int, quota int) (err error) {
-	err = DB.Model(&Token{}).Where("id = ?", id).Updates(
-		map[string]interface{}{
-			"remain_quota":  gorm.Expr("remain_quota - ?", quota),
-			"used_quota":    gorm.Expr("used_quota + ?", quota),
-			"accessed_time": common.GetTimestamp(),
-		},
-	).Error
-	return err
+	return increaseTokenQuota(id, -quota)
 }
 
 // CountUserTokens returns total number of tokens for the given user, used for pagination

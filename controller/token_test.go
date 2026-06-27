@@ -48,21 +48,21 @@ type sqliteColumnInfo struct {
 }
 
 type legacyToken struct {
-	Id                 int            `gorm:"primaryKey"`
-	UserId             int            `gorm:"index"`
-	Key                string         `gorm:"column:key;type:char(48);uniqueIndex"`
-	Status             int            `gorm:"default:1"`
-	Name               string         `gorm:"index"`
-	CreatedTime        int64          `gorm:"bigint"`
-	AccessedTime       int64          `gorm:"bigint"`
-	ExpiredTime        int64          `gorm:"bigint;default:-1"`
-	RemainQuota        int            `gorm:"default:0"`
+	Id                 int    `gorm:"primaryKey"`
+	UserId             int    `gorm:"index"`
+	Key                string `gorm:"column:key;type:char(48);uniqueIndex"`
+	Status             int    `gorm:"default:1"`
+	Name               string `gorm:"index"`
+	CreatedTime        int64  `gorm:"bigint"`
+	AccessedTime       int64  `gorm:"bigint"`
+	ExpiredTime        int64  `gorm:"bigint;default:-1"`
+	RemainQuota        int    `gorm:"default:0"`
 	UnlimitedQuota     bool
 	ModelLimitsEnabled bool
-	ModelLimits        string         `gorm:"type:text"`
-	AllowIps           *string        `gorm:"default:''"`
-	UsedQuota          int            `gorm:"default:0"`
-	Group              string         `gorm:"column:group;default:''"`
+	ModelLimits        string  `gorm:"type:text"`
+	AllowIps           *string `gorm:"default:''"`
+	UsedQuota          int     `gorm:"default:0"`
+	Group              string  `gorm:"column:group;default:''"`
 	CrossGroupRetry    bool
 	DeletedAt          gorm.DeletedAt `gorm:"index"`
 }
@@ -547,6 +547,128 @@ func TestUpdateTokenCanClearGroupAndDisableCrossGroupRetry(t *testing.T) {
 	}
 	if strings.Contains(recorder.Body.String(), token.Key) {
 		t.Fatalf("update response leaked raw token key: %s", recorder.Body.String())
+	}
+}
+
+func TestUpdateUnlimitedTokenWithNegativeRemainQuotaCanSwitchGroup(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 1, "unlimited-negative-token", "negative1234quota5678")
+	token.RemainQuota = -12345
+	token.UsedQuota = 12345
+	token.Group = "asxs"
+	token.UnlimitedQuota = true
+	if err := db.Save(token).Error; err != nil {
+		t.Fatalf("failed to prepare token state: %v", err)
+	}
+
+	body := map[string]any{
+		"id":                   token.Id,
+		"name":                 token.Name,
+		"expired_time":         -1,
+		"remain_quota":         -12345,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"group":                "cliproxy-codex",
+		"cross_group_retry":    false,
+	}
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", body, 1)
+	UpdateToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected success response, got message: %s", response.Message)
+	}
+
+	updated, err := model.GetTokenByIds(token.Id, 1)
+	if err != nil {
+		t.Fatalf("failed to reload token: %v", err)
+	}
+	if updated.Group != "cliproxy-codex" {
+		t.Fatalf("expected group to be switched, got %q", updated.Group)
+	}
+	if !updated.UnlimitedQuota {
+		t.Fatalf("expected token to remain unlimited")
+	}
+	if updated.RemainQuota != 0 {
+		t.Fatalf("expected unlimited token remain_quota to be normalized to 0, got %d", updated.RemainQuota)
+	}
+}
+
+func TestUnlimitedTokenQuotaAdjustmentsDoNotMakeRemainQuotaNegative(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 1, "unlimited-usage-token", "usage1234token5678")
+	token.RemainQuota = 0
+	token.UsedQuota = 0
+	token.UnlimitedQuota = true
+	if err := db.Save(token).Error; err != nil {
+		t.Fatalf("failed to prepare unlimited token: %v", err)
+	}
+
+	if err := model.DecreaseTokenQuota(token.Id, token.Key, 250); err != nil {
+		t.Fatalf("failed to decrease unlimited token quota: %v", err)
+	}
+
+	var consumed model.Token
+	if err := db.First(&consumed, "id = ?", token.Id).Error; err != nil {
+		t.Fatalf("failed to reload consumed token: %v", err)
+	}
+	if consumed.RemainQuota != 0 {
+		t.Fatalf("expected unlimited token remain_quota to stay 0 after consume, got %d", consumed.RemainQuota)
+	}
+	if consumed.UsedQuota != 250 {
+		t.Fatalf("expected unlimited token used_quota to record usage, got %d", consumed.UsedQuota)
+	}
+
+	if err := model.IncreaseTokenQuota(token.Id, token.Key, 250); err != nil {
+		t.Fatalf("failed to refund unlimited token quota: %v", err)
+	}
+
+	var refunded model.Token
+	if err := db.First(&refunded, "id = ?", token.Id).Error; err != nil {
+		t.Fatalf("failed to reload refunded token: %v", err)
+	}
+	if refunded.RemainQuota != 0 {
+		t.Fatalf("expected unlimited token remain_quota to stay 0 after refund, got %d", refunded.RemainQuota)
+	}
+	if refunded.UsedQuota != 0 {
+		t.Fatalf("expected unlimited token used_quota to be refunded, got %d", refunded.UsedQuota)
+	}
+}
+
+func TestStatusOnlyUpdateNormalizesUnlimitedTokenRemainQuota(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 1, "unlimited-status-token", "status1234token5678")
+	token.RemainQuota = -777
+	token.UnlimitedQuota = true
+	if err := db.Save(token).Error; err != nil {
+		t.Fatalf("failed to prepare unlimited token: %v", err)
+	}
+
+	body := map[string]any{
+		"id":     token.Id,
+		"status": common.TokenStatusDisabled,
+	}
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/?status_only=true", body, 1)
+	ctx.Request.URL.RawQuery = "status_only=true"
+	UpdateToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected success response, got message: %s", response.Message)
+	}
+
+	var updated model.Token
+	if err := db.First(&updated, "id = ?", token.Id).Error; err != nil {
+		t.Fatalf("failed to reload token: %v", err)
+	}
+	if updated.Status != common.TokenStatusDisabled {
+		t.Fatalf("expected status to be disabled, got %d", updated.Status)
+	}
+	if updated.RemainQuota != 0 {
+		t.Fatalf("expected unlimited token remain_quota to be normalized to 0, got %d", updated.RemainQuota)
 	}
 }
 

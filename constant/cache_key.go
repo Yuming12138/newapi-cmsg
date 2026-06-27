@@ -10,5 +10,6 @@ const (
 
 const (
 	TokenFiledRemainQuota = "RemainQuota"
+	TokenFieldUsedQuota   = "UsedQuota"
 	TokenFieldGroup       = "Group"
 )

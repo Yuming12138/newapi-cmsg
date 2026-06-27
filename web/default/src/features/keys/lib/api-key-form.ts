@@ -27,7 +27,7 @@ import { type ApiKeyFormData, type ApiKey } from '../types'
 
 export const apiKeyFormSchema = z.object({
   name: z.string().min(1, 'Name is required'),
-  remain_quota_dollars: z.number().min(0).optional(),
+  remain_quota_dollars: z.number().optional(),
   expired_time: z.date().optional(),
   unlimited_quota: z.boolean(),
   model_limits: z.array(z.string()),
@@ -35,6 +35,14 @@ export const apiKeyFormSchema = z.object({
   group: z.string().optional(),
   cross_group_retry: z.boolean().optional(),
   tokenCount: z.number().min(1).optional(),
+}).superRefine((data, ctx) => {
+  if (!data.unlimited_quota && (data.remain_quota_dollars ?? 0) < 0) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['remain_quota_dollars'],
+      message: 'Quota must be greater than or equal to 0',
+    })
+  }
 })
 
 export type ApiKeyFormValues = z.infer<typeof apiKeyFormSchema>
@@ -98,9 +106,13 @@ export function transformFormDataToPayload(
 export function transformApiKeyToFormDefaults(
   apiKey: ApiKey
 ): ApiKeyFormValues {
+  const remainQuotaDollars = quotaUnitsToDollars(apiKey.remain_quota)
+
   return {
     name: apiKey.name,
-    remain_quota_dollars: quotaUnitsToDollars(apiKey.remain_quota),
+    remain_quota_dollars: apiKey.unlimited_quota
+      ? 0
+      : Math.max(0, remainQuotaDollars),
     expired_time:
       apiKey.expired_time > 0
         ? new Date(apiKey.expired_time * 1000)
