@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -13,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/bytedance/gopkg/util/gopool"
+	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
 )
 
@@ -50,6 +52,14 @@ const (
 	LogTypeRefund  = 6
 )
 
+const (
+	openWebUIJWTSecretEnv     = "FORWARD_USER_INFO_HEADER_JWT_SECRET"
+	openWebUIJWTHeaderEnv     = "FORWARD_USER_INFO_HEADER_JWT"
+	defaultOpenWebUIJWTHeader = "X-OpenWebUI-User-Jwt"
+	openWebUIChatIDHeader     = "X-OpenWebUI-Chat-Id"
+	openWebUIMessageIDHeader  = "X-OpenWebUI-Message-Id"
+)
+
 func formatUserLogs(logs []*Log, startIdx int) {
 	for i := range logs {
 		logs[i].ChannelName = ""
@@ -64,6 +74,112 @@ func formatUserLogs(logs []*Log, startIdx int) {
 		logs[i].Other = common.MapToJsonStr(otherMap)
 		logs[i].Id = startIdx + i + 1
 	}
+}
+
+func attachOpenWebUIAdminInfo(c *gin.Context, other map[string]interface{}) map[string]interface{} {
+	openWebUIInfo := extractOpenWebUIRequestInfo(c)
+	if len(openWebUIInfo) == 0 {
+		return other
+	}
+	if other == nil {
+		other = make(map[string]interface{})
+	}
+	adminInfo, _ := other["admin_info"].(map[string]interface{})
+	if adminInfo == nil {
+		adminInfo = make(map[string]interface{})
+	}
+	adminInfo["open_webui"] = openWebUIInfo
+	other["admin_info"] = adminInfo
+	return other
+}
+
+func extractOpenWebUIRequestInfo(c *gin.Context) map[string]interface{} {
+	if c == nil || c.Request == nil {
+		return nil
+	}
+	secret := strings.TrimSpace(common.GetEnvOrDefaultString(openWebUIJWTSecretEnv, ""))
+	if secret == "" {
+		return nil
+	}
+	headerName := strings.TrimSpace(common.GetEnvOrDefaultString(openWebUIJWTHeaderEnv, defaultOpenWebUIJWTHeader))
+	if headerName == "" {
+		headerName = defaultOpenWebUIJWTHeader
+	}
+	tokenString := strings.TrimSpace(c.GetHeader(headerName))
+	if tokenString == "" {
+		return nil
+	}
+
+	claims := jwt.MapClaims{}
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		if token.Method.Alg() != jwt.SigningMethodHS256.Alg() {
+			return nil, fmt.Errorf("unexpected Open WebUI JWT signing method: %s", token.Method.Alg())
+		}
+		return []byte(secret), nil
+	}, jwt.WithIssuer("open-webui"))
+	if err != nil || token == nil || !token.Valid {
+		return nil
+	}
+
+	info := map[string]interface{}{
+		"source":   "open-webui",
+		"verified": true,
+	}
+	if userID := safeLogValue(claimString(claims, "sub"), 128); userID != "" {
+		info["user_id"] = userID
+	}
+	if email := safeLogValue(claimString(claims, "email"), 254); email != "" {
+		info["email"] = email
+	}
+	if name := safeLogValue(claimString(claims, "name"), 128); name != "" {
+		info["name"] = name
+	}
+	if role := safeLogValue(claimString(claims, "role"), 64); role != "" {
+		info["role"] = role
+	}
+	if chatID := safeLogValue(c.GetHeader(openWebUIChatIDHeader), 128); chatID != "" {
+		info["chat_id"] = chatID
+	}
+	if messageID := safeLogValue(c.GetHeader(openWebUIMessageIDHeader), 128); messageID != "" {
+		info["message_id"] = messageID
+	}
+	return info
+}
+
+func claimString(claims jwt.MapClaims, key string) string {
+	value, ok := claims[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch v := value.(type) {
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	default:
+		return ""
+	}
+}
+
+func safeLogValue(value string, maxRunes int) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	filtered := strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 {
+			return -1
+		}
+		return r
+	}, value)
+	if maxRunes <= 0 {
+		return filtered
+	}
+	runes := []rune(filtered)
+	if len(runes) <= maxRunes {
+		return filtered
+	}
+	return string(runes[:maxRunes])
 }
 
 func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
@@ -147,6 +263,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	logger.LogInfo(c, fmt.Sprintf("record error log: userId=%d, channelId=%d, modelName=%s, tokenName=%s, content=%s", userId, channelId, modelName, tokenName, content))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
+	other = attachOpenWebUIAdminInfo(c, other)
 	otherStr := common.MapToJsonStr(other)
 	// 判断是否需要记录 IP
 	needRecordIp := false
@@ -208,7 +325,8 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
-	otherStr := common.MapToJsonStr(params.Other)
+	other := attachOpenWebUIAdminInfo(c, params.Other)
+	otherStr := common.MapToJsonStr(other)
 	// 判断是否需要记录 IP
 	needRecordIp := false
 	if settingMap, err := GetUserSetting(userId, false); err == nil {
