@@ -31,6 +31,7 @@ except Exception:  # pragma: no cover - Python 3.9+ has zoneinfo
 STATUS_ENABLED = 1
 STATUS_MANUALLY_DISABLED = 2
 STATUS_AUTO_DISABLED = 3
+OPS_DIR = Path(__file__).resolve().parent
 
 
 @dataclass
@@ -626,8 +627,8 @@ def run_guard(config_path: Path, state_path: Path, dry_run: bool, reset_now: boo
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="/home/wcy/new-api/ops/channel_budgets.json")
-    parser.add_argument("--state", default="/home/wcy/new-api/ops/channel_budget_state.json")
+    parser.add_argument("--config", default=str(OPS_DIR / "channel_budgets.json"))
+    parser.add_argument("--state", default=str(OPS_DIR / "channel_budget_state.json"))
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--init-state", action="store_true")
     parser.add_argument("--reset-now", action="store_true")

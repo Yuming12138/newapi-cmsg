@@ -28,6 +28,9 @@ except Exception:  # pragma: no cover
     ZoneInfo = None  # type: ignore
 
 
+OPS_DIR = Path(__file__).resolve().parent
+
+
 @dataclass
 class DB:
     docker: str
@@ -308,9 +311,9 @@ def run_guard(config_path: Path, state_path: Path, approvals_path: Path, dry_run
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="/home/wcy/new-api/ops/user_quotas.json")
-    parser.add_argument("--state", default="/home/wcy/new-api/ops/user_quota_state.json")
-    parser.add_argument("--approvals", default="/home/wcy/new-api/ops/user_quota_approvals.json")
+    parser.add_argument("--config", default=str(OPS_DIR / "user_quotas.json"))
+    parser.add_argument("--state", default=str(OPS_DIR / "user_quota_state.json"))
+    parser.add_argument("--approvals", default=str(OPS_DIR / "user_quota_approvals.json"))
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force-phase", choices=["restricted", "unlocked"])
     parser.add_argument("--approve-user-id", type=int)

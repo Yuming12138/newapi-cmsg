@@ -25,6 +25,9 @@ except Exception:  # pragma: no cover
     ZoneInfo = None  # type: ignore
 
 
+OPS_DIR = Path(__file__).resolve().parent
+
+
 @dataclass
 class DB:
     docker: str
@@ -259,8 +262,8 @@ def run(config_path: Path, state_path: Path, dry_run: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="/home/wcy/new-api/ops/mimo_credit_config.json")
-    parser.add_argument("--state", default="/home/wcy/new-api/ops/mimo_credit_state.json")
+    parser.add_argument("--config", default=str(OPS_DIR / "mimo_credit_config.json"))
+    parser.add_argument("--state", default=str(OPS_DIR / "mimo_credit_state.json"))
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     return run(Path(args.config), Path(args.state), args.dry_run)

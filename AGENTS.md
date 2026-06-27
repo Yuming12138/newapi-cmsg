@@ -105,7 +105,7 @@ Use `bun` as the preferred package manager and script runner for the frontend (`
 The `cmsg-root` host (`/opt/new-api`) is a low-resource production server. Treat it as runtime infrastructure, not a build machine:
 
 1. Do not run heavy build or dependency operations on `cmsg-root` during normal service hours, including `bun install`, `bun run build`, `vite build`, `rsbuild build`, broad `go build`, or similar CPU/memory-heavy tasks.
-2. Build frontend assets and backend binaries on a local machine, `wcy`, CI, or another dedicated build host whenever possible.
+2. Build frontend assets and backend binaries in the WSL source checkout, CI, or another dedicated build host whenever possible.
 3. Deploy only already-built artifacts to `cmsg-root`, such as the compiled `new-api` binary and completed `web/default/dist` or other frontend `dist` directories.
 4. Avoid rebuilding `web/classic` on `cmsg-root`; unless classic UI support is explicitly required, maintain and deploy only the default frontend.
 5. Before any operation that may restart services, disrupt streams, or cause high CPU/memory load, state the maintenance window and expected impact first.
