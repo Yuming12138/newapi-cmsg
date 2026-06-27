@@ -110,6 +110,20 @@ The `cmsg-root` host (`/opt/new-api`) is a low-resource production server. Treat
 4. Avoid rebuilding `web/classic` on `cmsg-root`; unless classic UI support is explicitly required, maintain and deploy only the default frontend.
 5. Before any operation that may restart services, disrupt streams, or cause high CPU/memory load, state the maintenance window and expected impact first.
 
+### cmsg Git Branch Workflow
+
+Use `dev/cmsg` as the only integration branch for this deployment family. The `main` branch is a server-baseline snapshot, not the daily development branch.
+
+1. Start all new work from `dev/cmsg` after updating it:
+   `git switch dev/cmsg && git pull --ff-only origin dev/cmsg`
+2. Put individual changes on short-lived `feature/*` or `fix/*` branches, then merge them back into `dev/cmsg` before considering them integrated.
+3. Do not treat an unmerged `feature/*` or `fix/*` branch as deployable source of truth. Production builds and release artifacts must come from `dev/cmsg`, unless the operator explicitly approves a named branch for an emergency hotfix.
+4. Before starting work or deploying, check for remote branches that are not yet merged into `dev/cmsg`:
+   `git fetch --all --prune && git branch -r --no-merged origin/dev/cmsg`
+5. If the command above reports branches, inspect them with:
+   `git log --oneline origin/dev/cmsg..origin/<branch-name>`
+   Confirm whether they should be merged before building or deploying.
+
 ### Rule 4: New Channel StreamOptions Support
 
 When implementing a new channel:
