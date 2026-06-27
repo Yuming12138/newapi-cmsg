@@ -115,6 +115,7 @@ type CliproxyCPAQuotaMeta = {
   fiveHour: CliproxyCPAQuotaWindow | null
   weekly: CliproxyCPAQuotaWindow | null
   nextResetAfterSeconds: number | null
+  nextResetAt: number | null
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -128,6 +129,37 @@ function numberValue(value: unknown): number | null {
   if (typeof value === 'string' && value.trim() !== '') {
     const parsed = Number(value)
     return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function timestampValue(value: unknown): number | null {
+  const numeric = numberValue(value)
+  if (numeric != null) {
+    if (numeric <= 0) return null
+    return numeric > 1_000_000_000_000
+      ? Math.round(numeric / 1000)
+      : Math.round(numeric)
+  }
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Date.parse(value)
+    return Number.isFinite(parsed) ? Math.round(parsed / 1000) : null
+  }
+  return null
+}
+
+function getCliproxyCPAResetAt(
+  window: CliproxyCPAQuotaWindow | null | undefined,
+  updatedAt: number | null | undefined
+): number | null {
+  if (!window) return null
+  if (window.resetAt != null) return window.resetAt
+  if (
+    window.resetAfterSeconds != null &&
+    updatedAt != null &&
+    Number.isFinite(updatedAt)
+  ) {
+    return Math.round(updatedAt + window.resetAfterSeconds)
   }
   return null
 }
@@ -150,7 +182,7 @@ function parseCliproxyCPAQuotaWindow(
     remainingPercent,
     usedPercent,
     resetAfterSeconds: numberValue(item.reset_after_seconds),
-    resetAt: numberValue(item.reset_at),
+    resetAt: timestampValue(item.reset_at),
   }
 }
 
@@ -173,20 +205,29 @@ function parseCliproxyCPAQuotaMeta(
     const weekly = parseCliproxyCPAQuotaWindow(windows['7d'], shareLimitPercent)
     if (!fiveHour && !weekly) return null
 
-    const resetCandidates = [
+    const updatedAt = timestampValue(guard.updated_at)
+    const resetAfterCandidates = [
       fiveHour?.resetAfterSeconds,
       weekly?.resetAfterSeconds,
     ].filter((value): value is number => value != null && value >= 0)
+    const resetAtCandidates = [
+      getCliproxyCPAResetAt(fiveHour, updatedAt),
+      getCliproxyCPAResetAt(weekly, updatedAt),
+    ].filter((value): value is number => value != null && value > 0)
 
     return {
       shareLimitPercent,
       remainingSharePercent: numberValue(health.remaining_share_percent),
       balanceUnits: numberValue(health.balance_units),
-      updatedAt: numberValue(guard.updated_at),
+      updatedAt,
       fiveHour,
       weekly,
       nextResetAfterSeconds:
-        resetCandidates.length > 0 ? Math.min(...resetCandidates) : null,
+        resetAfterCandidates.length > 0
+          ? Math.min(...resetAfterCandidates)
+          : null,
+      nextResetAt:
+        resetAtCandidates.length > 0 ? Math.min(...resetAtCandidates) : null,
     }
   } catch {
     return null
@@ -211,12 +252,38 @@ function formatShortDuration(seconds: number | null | undefined): string {
   return `${totalSeconds}s`
 }
 
+function formatCompactTimestamp(timestamp: number | null | undefined): string {
+  if (timestamp == null || !Number.isFinite(timestamp) || timestamp <= 0) {
+    return '-'
+  }
+  const date = new Date(timestamp * 1000)
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  return `${month}-${day} ${hours}:${minutes}`
+}
+
+function formatCliproxyCPAResetTime(
+  window: CliproxyCPAQuotaWindow | null | undefined,
+  updatedAt: number | null | undefined
+): string {
+  const resetAt = getCliproxyCPAResetAt(window, updatedAt)
+  if (resetAt == null) return '-'
+  const relative = formatShortDuration(window?.resetAfterSeconds)
+  return window?.resetAfterSeconds == null
+    ? formatTimestampToDate(resetAt)
+    : `${formatTimestampToDate(resetAt)} (${relative})`
+}
+
 function formatCliproxyCPASummary(meta: CliproxyCPAQuotaMeta): string {
   const parts = [
     `5h ${formatPercent(meta.fiveHour?.shareRemainingPercent)}`,
     `7d ${formatPercent(meta.weekly?.shareRemainingPercent)}`,
   ]
-  if (meta.nextResetAfterSeconds != null) {
+  if (meta.nextResetAt != null) {
+    parts.push(`next ${formatCompactTimestamp(meta.nextResetAt)}`)
+  } else if (meta.nextResetAfterSeconds != null) {
     parts.push(`reset ${formatShortDuration(meta.nextResetAfterSeconds)}`)
   }
   return parts.join(' · ')
@@ -554,8 +621,9 @@ function BalanceCell({ channel }: { channel: Channel }) {
                     , window:{' '}
                     {formatPercent(cliproxyCPAQuota.fiveHour?.remainingPercent)}
                     , reset:{' '}
-                    {formatShortDuration(
-                      cliproxyCPAQuota.fiveHour?.resetAfterSeconds
+                    {formatCliproxyCPAResetTime(
+                      cliproxyCPAQuota.fiveHour,
+                      cliproxyCPAQuota.updatedAt
                     )}
                   </p>
                   <p>
@@ -566,8 +634,9 @@ function BalanceCell({ channel }: { channel: Channel }) {
                     , window:{' '}
                     {formatPercent(cliproxyCPAQuota.weekly?.remainingPercent)},
                     reset:{' '}
-                    {formatShortDuration(
-                      cliproxyCPAQuota.weekly?.resetAfterSeconds
+                    {formatCliproxyCPAResetTime(
+                      cliproxyCPAQuota.weekly,
+                      cliproxyCPAQuota.updatedAt
                     )}
                   </p>
                   {cliproxyCPAQuota.updatedAt && (
@@ -599,13 +668,35 @@ function BalanceCell({ channel }: { channel: Channel }) {
                 )}
               </p>
               <p>
+                5h reset:{' '}
+                {formatCliproxyCPAResetTime(
+                  cliproxyCPAQuota.fiveHour,
+                  cliproxyCPAQuota.updatedAt
+                )}
+              </p>
+              <p>
                 7d available:{' '}
                 {formatPercent(cliproxyCPAQuota.weekly?.shareRemainingPercent)}
               </p>
               <p>
-                Next reset:{' '}
-                {formatShortDuration(cliproxyCPAQuota.nextResetAfterSeconds)}
+                7d reset:{' '}
+                {formatCliproxyCPAResetTime(
+                  cliproxyCPAQuota.weekly,
+                  cliproxyCPAQuota.updatedAt
+                )}
               </p>
+              <p>
+                Next reset:{' '}
+                {cliproxyCPAQuota.nextResetAt != null
+                  ? formatTimestampToDate(cliproxyCPAQuota.nextResetAt)
+                  : formatShortDuration(cliproxyCPAQuota.nextResetAfterSeconds)}
+              </p>
+              {cliproxyCPAQuota.updatedAt && (
+                <p>
+                  {t('Updated:')}{' '}
+                  {formatTimestampToDate(cliproxyCPAQuota.updatedAt)}
+                </p>
+              )}
             </TooltipContent>
           </Tooltip>
         )}
