@@ -2,6 +2,7 @@ package helps
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -111,22 +112,112 @@ func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 	addr := net.JoinHostPort(hostname, port)
 
+	resp, h2Conn, err := t.attempt(req, hostname, addr)
+	// HTTP/2 single-conn-per-host means a poisoned conn (e.g. ChatGPT-side
+	// abuse RST) will fail every subsequent stream on the same TCP+TLS
+	// session until evicted. attempt() already evicts on RoundTrip errors;
+	// here we retry once if the error looks stream-level and the body is
+	// resettable.
+	if err != nil && isStreamLevelError(err) && canResetBody(req) {
+		if resetErr := resetReqBody(req); resetErr == nil {
+			resp, h2Conn, err = t.attempt(req, hostname, addr)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	// Wrap Body so that stream-mid errors (the common ChatGPT RST pattern)
+	// also evict the conn — RoundTrip itself returns success in those cases.
+	return wrapBodyForEvict(resp, t, hostname, h2Conn), nil
+}
+
+// attempt issues one RoundTrip and evicts the cached conn on transport error.
+func (t *utlsRoundTripper) attempt(req *http.Request, hostname, addr string) (*http.Response, *http2.ClientConn, error) {
 	h2Conn, err := t.getOrCreateConnection(hostname, addr)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-
 	resp, err := h2Conn.RoundTrip(req)
 	if err != nil {
-		t.mu.Lock()
-		if cached, ok := t.connections[hostname]; ok && cached == h2Conn {
-			delete(t.connections, hostname)
-		}
-		t.mu.Unlock()
-		return nil, err
+		t.evictIfCurrent(hostname, h2Conn)
+		return nil, nil, err
 	}
+	return resp, h2Conn, nil
+}
 
-	return resp, nil
+// evictIfCurrent removes the cached conn for host iff it is still the given one.
+func (t *utlsRoundTripper) evictIfCurrent(hostname string, conn *http2.ClientConn) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if cached, ok := t.connections[hostname]; ok && cached == conn {
+		delete(t.connections, hostname)
+	}
+}
+
+// wrapBodyForEvict replaces resp.Body so that any non-EOF read error triggers
+// eviction of the underlying conn. Idempotent: the eviction fires at most once
+// per response body, even with many concurrent readers.
+func wrapBodyForEvict(resp *http.Response, t *utlsRoundTripper, hostname string, conn *http2.ClientConn) *http.Response {
+	if resp == nil || resp.Body == nil {
+		return resp
+	}
+	resp.Body = &evictOnReadErrBody{
+		ReadCloser: resp.Body,
+		onErr: func() {
+			t.evictIfCurrent(hostname, conn)
+		},
+	}
+	return resp
+}
+
+// evictOnReadErrBody wraps an HTTP response body. The first non-EOF Read error
+// triggers onErr exactly once (via sync.Once).
+type evictOnReadErrBody struct {
+	io.ReadCloser
+	once  sync.Once
+	onErr func()
+}
+
+func (b *evictOnReadErrBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err != nil && err != io.EOF {
+		b.once.Do(b.onErr)
+	}
+	return n, err
+}
+
+// isStreamLevelError matches HTTP/2 stream-level errors that suggest the
+// underlying conn is poisoned and a fresh dial would likely succeed.
+func isStreamLevelError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "PROTOCOL_ERROR") ||
+		strings.Contains(s, "INTERNAL_ERROR") ||
+		strings.Contains(s, "REFUSED_STREAM") ||
+		strings.Contains(s, "stream error") ||
+		strings.Contains(s, "stream closed")
+}
+
+// canResetBody reports whether the request body can be safely re-read for a retry.
+func canResetBody(req *http.Request) bool {
+	return req.Body == nil || req.GetBody != nil
+}
+
+// resetReqBody closes the current body and replaces it with a fresh copy from
+// GetBody. Caller must ensure canResetBody(req).
+func resetReqBody(req *http.Request) error {
+	if req.Body == nil {
+		return nil
+	}
+	_ = req.Body.Close()
+	newBody, err := req.GetBody()
+	if err != nil {
+		return err
+	}
+	req.Body = newBody
+	return nil
 }
 
 // utlsProtectedHosts contains the hosts that should use utls Chrome TLS fingerprint
