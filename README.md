@@ -1,5 +1,58 @@
 <div align="center">
 
+# new-api-cmsg
+
+面向 CMSG 生产环境的 new-api 定制分支。
+
+本仓库基于 QuantumNous/new-api 维护，保留上游项目说明与授权信息；CMSG 的生产开发、部署脚本和中转站适配以 `dev/cmsg` 为默认工作分支。
+
+</div>
+
+## CMSG 分支定位
+
+| 分支 | 定位 | 使用方式 |
+|------|------|----------|
+| `dev/cmsg` | 日常开发与生产集成分支 | 默认查看、拉取、开发和构建都使用这个分支 |
+| `main` | 服务器初始基线快照 | 仅用于历史对照和必要时追溯，不作为日常开发入口 |
+| `feature/*` / `fix/*` | 短期功能或修复分支 | 完成验证后合回 `dev/cmsg` |
+
+生产发布规则：在 WSL 或专用构建机中构建产物，服务器只接收已构建文件、配置更新和轻量重启；不要在 `cmsg-root` 上执行重型编译、前端构建或 Docker 重建。
+
+## CMSG 定制功能
+
+- **分组与余额策略**：面向 `asxs`、`cliproxy-codex`、`cliproxy-codex-pool` 等分组的差异化余额管理，支持“计量但不扣费”、夜间共享余额、订阅制每日额度与余额制上游的混合展示。
+- **上游渠道守卫**：为 asxs、LingDang、zz1、OneToken、CPA/CLIProxyAPI 等上游维护余额刷新、可用性检测、自动禁用与恢复策略，避免低价渠道可用时误打高价渠道。
+- **CLIProxyAPI 集成**：仓库内包含 `cliproxyapi/`，用于 Codex/Claude 等官方网页账号池中转；已加入 HTTP/2 per-host 连接池、坏连接驱逐、流式首包前重试等稳定性优化。
+- **Codex 使用体验**：内置面向桌面端 Codex 和终端版 Codex 的配置文档、示例 `config.toml`/`auth.json`、自定义文档入口和 Chat/Open WebUI 入口。
+- **渠道后台增强**：补充 CPA 5h/7d 配额、刷新时间、余额百分比、渠道 tooltip 等管理视图，方便管理员判断账号池剩余额度和下次刷新窗口。
+- **额度申请流程**：用户余额不足时可申请临时额度，支持第一次自动审批、后续进入管理员审核。
+- **部署约束**：`dev/cmsg` 是当前唯一集成源，生产服务器 `/opt/new-api` 与 `/opt/cliproxyapi` 只作为运行环境；所有代码修改应先进入 Git 分支并推送远端。
+
+## 快速约定
+
+```bash
+git clone git@github.com:Yuming12138/newapi-cmsg.git
+cd newapi-cmsg
+git switch dev/cmsg
+git pull --ff-only origin dev/cmsg
+```
+
+做新功能时：
+
+```bash
+git switch -c feature/your-change
+# 修改、测试、提交
+git switch dev/cmsg
+git merge --no-ff feature/your-change
+git push origin dev/cmsg
+```
+
+---
+
+下面保留 upstream new-api 的原始项目介绍，便于查阅通用能力、部署方式和官方文档。
+
+<div align="center">
+
 ![new-api](/web/default/public/logo.png)
 
 # New API
