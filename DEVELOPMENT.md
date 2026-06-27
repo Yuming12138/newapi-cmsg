@@ -1,0 +1,97 @@
+# CMSG 开发说明
+
+本文档记录 `new-api-cmsg` 的开发、分支、构建和部署约定。仓库首页 README 只展示项目定位和功能概览。
+
+## 分支定位
+
+| 分支 | 定位 | 规则 |
+|------|------|------|
+| `dev/cmsg` | 默认分支、日常开发与生产集成分支 | 所有新功能、修复、上线构建都以它为准 |
+| `main` | 服务器初始基线快照 | 只用于历史对照和回溯，不作为日常开发入口 |
+| `feature/*` / `fix/*` | 短期开发分支 | 完成验证后合回 `dev/cmsg` |
+
+推荐工作流：
+
+```bash
+git clone git@github.com:Yuming12138/newapi-cmsg.git
+cd newapi-cmsg
+git switch dev/cmsg
+git pull --ff-only origin dev/cmsg
+git switch -c feature/your-change
+```
+
+完成修改后：
+
+```bash
+git switch dev/cmsg
+git pull --ff-only origin dev/cmsg
+git merge --no-ff feature/your-change
+git push origin dev/cmsg
+```
+
+## 目录说明
+
+| 路径 | 说明 |
+|------|------|
+| `web/default/` | 当前主要前端，CMSG UI 修改优先放这里 |
+| `web/classic/` | 旧版前端，除非明确需要兼容，否则不作为主要修改目标 |
+| `ops/` | 余额刷新、渠道守卫、额度管理等生产辅助脚本 |
+| `cliproxyapi/` | CMSG 使用的 CLIProxyAPI/CPA 中转站源码 |
+| `docs/proposals/` | 重要架构调整和上线方案记录 |
+| `AGENTS.md` | 本仓库开发、分支、构建和生产安全规则 |
+
+## 构建与部署规则
+
+`cmsg-root` 是低资源生产服务器，不能当构建机使用。
+
+允许在服务器上做：
+
+- 接收 WSL 构建好的 `new-api` 或 `cli-proxy-api` 二进制；
+- 更新 `/opt/new-api`、`/opt/cliproxyapi` 下的配置；
+- 切换 release、重启容器、查看日志和健康检查；
+- 做轻量数据库或运行态排查。
+
+不要在服务器上做：
+
+- `bun install`、`bun run build`、`vite build`、`rsbuild build`；
+- 大范围 `go build`、Docker build/buildx、镜像重建；
+- 把服务器当 Git 源码开发目录直接改代码。
+
+默认开发和构建位置：
+
+```bash
+/home/gmchen/work/new-api-cmsg
+```
+
+Windows 访问路径：
+
+```text
+\\wsl.localhost\Ubuntu-24.04\home\gmchen\work\new-api-cmsg
+```
+
+## 上线前检查
+
+常用检查：
+
+```bash
+git switch dev/cmsg
+git pull --ff-only origin dev/cmsg
+git branch -r --no-merged origin/dev/cmsg
+git status --short
+```
+
+如果有未合并分支，先查看：
+
+```bash
+git log --oneline origin/dev/cmsg..origin/<branch-name>
+```
+
+确认不需要合并后再构建或上线。
+
+## 生产发布原则
+
+- `dev/cmsg` 是唯一日常集成源。
+- 生产构建从 WSL 或专用构建机产出。
+- `cmsg-root:/opt/new-api` 和 `cmsg-root:/opt/cliproxyapi` 只作为运行环境。
+- 服务器上的 Git 历史、源码目录和临时文件不能作为后续开发基线。
+- 上线后需要验证容器状态、健康检查和相关功能页面或 API。
