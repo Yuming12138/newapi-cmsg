@@ -9,6 +9,10 @@ type SDKConfig struct {
 	// ProxyURL is the URL of an optional proxy server to use for outbound requests.
 	ProxyURL string `yaml:"proxy-url" json:"proxy-url"`
 
+	// UtlsPoolSize controls max selectable utls HTTP/2 connections per protected host.
+	// Values <= 0 use the default of 1 for request-visible parity.
+	UtlsPoolSize int `yaml:"utls-pool-size,omitempty" json:"utls-pool-size,omitempty"`
+
 	// DisableImageGeneration controls whether the built-in image_generation tool is injected/allowed.
 	//
 	// Supported values:
