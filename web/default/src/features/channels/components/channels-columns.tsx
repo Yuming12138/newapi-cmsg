@@ -109,13 +109,8 @@ type CliproxyCPAQuotaWindow = {
 
 type CliproxyCPAQuotaMeta = {
   guardMode: string | null
-  enabled: boolean | null
   shareLimitPercent: number | null
-  minRemainingPercent5h: number | null
-  minRemainingPercent7d: number | null
   remainingSharePercent: number | null
-  remainingHeadroomPercent: number | null
-  balanceUnits: number | null
   updatedAt: number | null
   fiveHour: CliproxyCPAQuotaWindow | null
   weekly: CliproxyCPAQuotaWindow | null
@@ -223,7 +218,6 @@ function parseCliproxyCPAQuotaMeta(
     return {
       shareLimitPercent,
       remainingSharePercent: numberValue(health.remaining_share_percent),
-      balanceUnits: numberValue(health.balance_units),
       updatedAt,
       fiveHour,
       weekly,
@@ -235,17 +229,6 @@ function parseCliproxyCPAQuotaMeta(
         resetAtCandidates.length > 0 ? Math.min(...resetAtCandidates) : null,
       guardMode:
         typeof health.guard_mode === 'string' ? health.guard_mode : null,
-      enabled:
-        typeof health.low_watermark_enabled === 'boolean'
-          ? health.low_watermark_enabled
-          : typeof health.enabled === 'boolean'
-            ? health.enabled
-            : null,
-      minRemainingPercent5h: numberValue(health.min_remaining_percent_5h),
-      minRemainingPercent7d: numberValue(health.min_remaining_percent_7d),
-      remainingHeadroomPercent: numberValue(
-        health.remaining_headroom_percent
-      ),
     }
   } catch {
     return null
@@ -634,22 +617,7 @@ function BalanceCell({ channel }: { channel: Channel }) {
               </p>
               {cliproxyCPAQuota && (
                 <>
-                  <p>
-                    CPA guard:{' '}
-                    {cliproxyCPAQuota.enabled === false ? 'off' : 'on'}
-                    {cliproxyCPAQuota.guardMode === 'low_watermark'
-                      ? ', low watermark'
-                      : ''}
-                  </p>
-                  {cliproxyCPAQuota.guardMode === 'low_watermark' ? (
-                    <p>
-                      Low watermark: 5h{' '}
-                      {formatPercent(
-                        cliproxyCPAQuota.minRemainingPercent5h
-                      )}, 7d{' '}
-                      {formatPercent(cliproxyCPAQuota.minRemainingPercent7d)}
-                    </p>
-                  ) : (
+                  {cliproxyCPAQuota.guardMode !== 'low_watermark' && (
                     <p>
                       CPA share:{' '}
                       {formatPercent(cliproxyCPAQuota.remainingSharePercent)} /{' '}
@@ -696,20 +664,6 @@ function BalanceCell({ channel }: { channel: Channel }) {
               {formatCliproxyCPASummary(cliproxyCPAQuota)}
             </TooltipTrigger>
             <TooltipContent>
-              <p>
-                Guard:{' '}
-                {cliproxyCPAQuota.enabled === false ? 'off' : 'on'}
-                {cliproxyCPAQuota.guardMode === 'low_watermark'
-                  ? ', low watermark'
-                  : ''}
-              </p>
-              {cliproxyCPAQuota.guardMode === 'low_watermark' && (
-                <p>
-                  Low watermark: 5h{' '}
-                  {formatPercent(cliproxyCPAQuota.minRemainingPercent5h)}, 7d{' '}
-                  {formatPercent(cliproxyCPAQuota.minRemainingPercent7d)}
-                </p>
-              )}
               <p>
                 5h remaining:{' '}
                 {formatPercent(cliproxyCPAQuota.fiveHour?.remainingPercent)}
