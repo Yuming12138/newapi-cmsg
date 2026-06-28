@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -25,12 +27,17 @@ import (
 )
 
 type playgroundImageTaskRequest struct {
-	Model        string `json:"model"`
-	Prompt       string `json:"prompt"`
-	Size         string `json:"size,omitempty"`
-	Quality      string `json:"quality,omitempty"`
-	OutputFormat string `json:"output_format,omitempty"`
-	N            uint   `json:"n,omitempty"`
+	Mode            string   `json:"mode,omitempty"`
+	Model           string   `json:"model"`
+	Prompt          string   `json:"prompt"`
+	Size            string   `json:"size,omitempty"`
+	Quality         string   `json:"quality,omitempty"`
+	OutputFormat    string   `json:"output_format,omitempty"`
+	N               uint     `json:"n,omitempty"`
+	InputImageCount int      `json:"input_image_count,omitempty"`
+	InputImageNames []string `json:"input_image_names,omitempty"`
+	HasMask         bool     `json:"has_mask,omitempty"`
+	MaskFileName    string   `json:"mask_file_name,omitempty"`
 }
 
 type playgroundImageTaskData struct {
@@ -39,24 +46,40 @@ type playgroundImageTaskData struct {
 }
 
 type playgroundImageTaskResponse struct {
-	TaskID       string          `json:"task_id"`
-	Status       string          `json:"status"`
-	Progress     string          `json:"progress"`
-	FailReason   string          `json:"fail_reason,omitempty"`
-	Model        string          `json:"model"`
-	Group        string          `json:"group"`
-	Prompt       string          `json:"prompt"`
-	Size         string          `json:"size,omitempty"`
-	Quality      string          `json:"quality,omitempty"`
-	OutputFormat string          `json:"output_format,omitempty"`
-	N            uint            `json:"n,omitempty"`
-	SubmitTime   int64           `json:"submit_time"`
-	StartTime    int64           `json:"start_time,omitempty"`
-	FinishTime   int64           `json:"finish_time,omitempty"`
-	Response     json.RawMessage `json:"response,omitempty"`
+	TaskID          string          `json:"task_id"`
+	Status          string          `json:"status"`
+	Progress        string          `json:"progress"`
+	FailReason      string          `json:"fail_reason,omitempty"`
+	Action          string          `json:"action,omitempty"`
+	Mode            string          `json:"mode,omitempty"`
+	Model           string          `json:"model"`
+	Group           string          `json:"group"`
+	Prompt          string          `json:"prompt"`
+	Size            string          `json:"size,omitempty"`
+	Quality         string          `json:"quality,omitempty"`
+	OutputFormat    string          `json:"output_format,omitempty"`
+	N               uint            `json:"n,omitempty"`
+	InputImageCount int             `json:"input_image_count,omitempty"`
+	InputImageNames []string        `json:"input_image_names,omitempty"`
+	HasMask         bool            `json:"has_mask,omitempty"`
+	MaskFileName    string          `json:"mask_file_name,omitempty"`
+	SubmitTime      int64           `json:"submit_time"`
+	StartTime       int64           `json:"start_time,omitempty"`
+	FinishTime      int64           `json:"finish_time,omitempty"`
+	Response        json.RawMessage `json:"response,omitempty"`
 }
 
 var playgroundImageTaskCancels sync.Map
+
+const (
+	playgroundImageActionGenerate = "generate"
+	playgroundImageActionEdit     = "edit"
+	playgroundImageModeGenerate   = "generation"
+	playgroundImageModeEdit       = "edit"
+	playgroundImagesGenerations   = "/pg/images/generations"
+	playgroundImagesEdits         = "/pg/images/edits"
+	playgroundMaxEditImages       = 4
+)
 
 func registerPlaygroundImageTaskCancel(taskID string, cancel context.CancelFunc) {
 	if taskID == "" || cancel == nil {
@@ -90,6 +113,79 @@ func isPlaygroundImageTaskTerminal(status model.TaskStatus) bool {
 	return status == model.TaskStatusSuccess ||
 		status == model.TaskStatusFailure ||
 		status == model.TaskStatusCancelled
+}
+
+func validatePlaygroundImageInput(c *gin.Context, mode string) ([]string, bool, string, error) {
+	if mode != playgroundImageModeEdit {
+		return nil, false, "", nil
+	}
+
+	contentType := c.Request.Header.Get("Content-Type")
+	if !strings.Contains(strings.ToLower(contentType), gin.MIMEMultipartPOSTForm) {
+		return nil, false, "", errors.New("multipart/form-data is required for image edit")
+	}
+
+	form, err := common.ParseMultipartFormReusable(c)
+	if err != nil {
+		return nil, false, "", fmt.Errorf("failed to parse image edit form request: %w", err)
+	}
+	defer form.RemoveAll()
+
+	imageFiles := collectPlaygroundImageFiles(form)
+	if len(imageFiles) == 0 {
+		return nil, false, "", errors.New("image is required")
+	}
+	if len(imageFiles) > playgroundMaxEditImages {
+		return nil, false, "", fmt.Errorf("at most %d reference images are allowed", playgroundMaxEditImages)
+	}
+
+	imageNames := make([]string, 0, len(imageFiles))
+	for i, file := range imageFiles {
+		name := strings.TrimSpace(file.Filename)
+		if name == "" {
+			name = fmt.Sprintf("image-%d", i+1)
+		}
+		imageNames = append(imageNames, name)
+	}
+
+	maskFiles := form.File["mask"]
+	if len(maskFiles) > 1 {
+		return nil, false, "", errors.New("only one mask file is allowed")
+	}
+	if len(maskFiles) == 0 || maskFiles[0] == nil {
+		return imageNames, false, "", nil
+	}
+	maskName := strings.TrimSpace(maskFiles[0].Filename)
+	if maskName == "" {
+		maskName = "mask"
+	}
+	return imageNames, true, maskName, nil
+}
+
+func collectPlaygroundImageFiles(form *multipart.Form) []*multipart.FileHeader {
+	if form == nil || form.File == nil {
+		return nil
+	}
+	if files := form.File["image"]; len(files) > 0 {
+		return files
+	}
+	if files := form.File["image[]"]; len(files) > 0 {
+		return files
+	}
+
+	keys := make([]string, 0, len(form.File))
+	for key := range form.File {
+		if strings.HasPrefix(key, "image[") {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+
+	files := make([]*multipart.FileHeader, 0)
+	for _, key := range keys {
+		files = append(files, form.File[key]...)
+	}
+	return files
 }
 
 func preparePlaygroundRelayContext(c *gin.Context, relayFormat types.RelayFormat) *types.NewAPIError {
@@ -138,6 +234,14 @@ func Playground(c *gin.Context) {
 }
 
 func PlaygroundImage(c *gin.Context) {
+	playgroundImage(c, playgroundImageActionGenerate, playgroundImageModeGenerate, playgroundImagesGenerations)
+}
+
+func PlaygroundImageEdit(c *gin.Context) {
+	playgroundImage(c, playgroundImageActionEdit, playgroundImageModeEdit, playgroundImagesEdits)
+}
+
+func playgroundImage(c *gin.Context, action string, mode string, requestPath string) {
 	c.Set("skip_channel_affinity", true)
 
 	if newAPIError := preparePlaygroundRelayContext(c, types.RelayFormatOpenAIImage); newAPIError != nil {
@@ -154,9 +258,17 @@ func PlaygroundImage(c *gin.Context) {
 		})
 		return
 	}
-	if strings.TrimSpace(imageRequest.Model) == "" || strings.TrimSpace(imageRequest.Prompt) == "" {
+	if err := validatePlaygroundImageRequest(imageRequest); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": gin.H{"message": "model and prompt are required"},
+			"error": gin.H{"message": err.Error()},
+		})
+		return
+	}
+
+	inputImageNames, hasMask, maskFileName, err := validatePlaygroundImageInput(c, mode)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{"message": err.Error()},
 		})
 		return
 	}
@@ -182,12 +294,17 @@ func PlaygroundImage(c *gin.Context) {
 	}
 	taskData := playgroundImageTaskData{
 		Request: playgroundImageTaskRequest{
-			Model:        imageRequest.Model,
-			Prompt:       imageRequest.Prompt,
-			Size:         imageRequest.Size,
-			Quality:      imageRequest.Quality,
-			OutputFormat: strings.Trim(string(imageRequest.OutputFormat), `"`),
-			N:            n,
+			Mode:            mode,
+			Model:           imageRequest.Model,
+			Prompt:          imageRequest.Prompt,
+			Size:            imageRequest.Size,
+			Quality:         imageRequest.Quality,
+			OutputFormat:    strings.Trim(string(imageRequest.OutputFormat), `"`),
+			N:               n,
+			InputImageCount: len(inputImageNames),
+			InputImageNames: inputImageNames,
+			HasMask:         hasMask,
+			MaskFileName:    maskFileName,
 		},
 	}
 
@@ -200,7 +317,7 @@ func PlaygroundImage(c *gin.Context) {
 		UserId:     c.GetInt("id"),
 		Group:      common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
 		ChannelId:  common.GetContextKeyInt(c, constant.ContextKeyChannelId),
-		Action:     "generate",
+		Action:     action,
 		Status:     model.TaskStatusQueued,
 		SubmitTime: now,
 		Progress:   "0%",
@@ -221,9 +338,16 @@ func PlaygroundImage(c *gin.Context) {
 	keys := clonePlaygroundTaskKeys(c)
 	headers := c.Request.Header.Clone()
 	remoteAddr := c.Request.RemoteAddr
-	go runPlaygroundImageTask(task.TaskID, requestBody, keys, headers, remoteAddr)
+	go runPlaygroundImageTask(task.TaskID, requestPath, requestBody, keys, headers, remoteAddr)
 
 	c.JSON(http.StatusAccepted, playgroundImageTaskToResponse(task))
+}
+
+func validatePlaygroundImageRequest(imageRequest dto.ImageRequest) error {
+	if strings.TrimSpace(imageRequest.Model) == "" || strings.TrimSpace(imageRequest.Prompt) == "" {
+		return errors.New("model and prompt are required")
+	}
+	return nil
 }
 
 func GetPlaygroundImageTask(c *gin.Context) {
@@ -315,7 +439,7 @@ func loadPlaygroundImageTask(c *gin.Context, taskID string) (*model.Task, bool) 
 	return task, true
 }
 
-func runPlaygroundImageTask(taskID string, requestBody []byte, keys map[string]any, headers http.Header, remoteAddr string) {
+func runPlaygroundImageTask(taskID string, requestPath string, requestBody []byte, keys map[string]any, headers http.Header, remoteAddr string) {
 	requestCtx, cancel := context.WithCancel(context.Background())
 	registerPlaygroundImageTaskCancel(taskID, cancel)
 	defer func() {
@@ -343,7 +467,7 @@ func runPlaygroundImageTask(taskID string, requestBody []byte, keys map[string]a
 
 	recorder := httptest.NewRecorder()
 	taskCtx, _ := gin.CreateTestContext(recorder)
-	taskCtx.Request = httptest.NewRequest(http.MethodPost, "/pg/images/generations", bytes.NewReader(requestBody)).WithContext(requestCtx)
+	taskCtx.Request = httptest.NewRequest(http.MethodPost, requestPath, bytes.NewReader(requestBody)).WithContext(requestCtx)
 	taskCtx.Request.Header = headers.Clone()
 	if taskCtx.Request.Header.Get("Content-Type") == "" {
 		taskCtx.Request.Header.Set("Content-Type", "application/json")
@@ -415,21 +539,27 @@ func playgroundImageTaskToResponse(task *model.Task) playgroundImageTaskResponse
 		modelName = task.Properties.OriginModelName
 	}
 	return playgroundImageTaskResponse{
-		TaskID:       task.TaskID,
-		Status:       string(task.Status),
-		Progress:     task.Progress,
-		FailReason:   task.FailReason,
-		Model:        modelName,
-		Group:        task.Group,
-		Prompt:       common.GetStringIfEmpty(data.Request.Prompt, task.Properties.Input),
-		Size:         data.Request.Size,
-		Quality:      data.Request.Quality,
-		OutputFormat: data.Request.OutputFormat,
-		N:            data.Request.N,
-		SubmitTime:   task.SubmitTime,
-		StartTime:    task.StartTime,
-		FinishTime:   task.FinishTime,
-		Response:     data.Response,
+		TaskID:          task.TaskID,
+		Status:          string(task.Status),
+		Progress:        task.Progress,
+		FailReason:      task.FailReason,
+		Action:          task.Action,
+		Mode:            data.Request.Mode,
+		Model:           modelName,
+		Group:           task.Group,
+		Prompt:          common.GetStringIfEmpty(data.Request.Prompt, task.Properties.Input),
+		Size:            data.Request.Size,
+		Quality:         data.Request.Quality,
+		OutputFormat:    data.Request.OutputFormat,
+		N:               data.Request.N,
+		InputImageCount: data.Request.InputImageCount,
+		InputImageNames: data.Request.InputImageNames,
+		HasMask:         data.Request.HasMask,
+		MaskFileName:    data.Request.MaskFileName,
+		SubmitTime:      task.SubmitTime,
+		StartTime:       task.StartTime,
+		FinishTime:      task.FinishTime,
+		Response:        data.Response,
 	}
 }
 
