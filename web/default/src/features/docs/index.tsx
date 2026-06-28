@@ -141,6 +141,17 @@ const imageApiExample = `curl ${API_BASE_URL}/images/generations \\
     "n": 1
   }'`
 
+const imageEditApiExample = `curl ${API_BASE_URL}/images/edits \\
+  -H "Authorization: Bearer 自己的密钥" \\
+  -F "model=gpt-image-2" \\
+  -F "prompt=把参考图改成干净的产品宣传照，保留主体" \\
+  -F "image[]=@reference.png" \\
+  -F "mask=@mask.png" \\
+  -F "size=1024x1024" \\
+  -F "quality=auto" \\
+  -F "output_format=png" \\
+  -F "n=1"`
+
 const codexPaths = [
   {
     system: 'Windows',
@@ -232,7 +243,7 @@ const imageSteps: Array<{
   {
     title: '进入图片生成',
     description:
-      '登录本站后点左侧“图片生成”。页面会显示提示词、分组、尺寸、质量、数量和格式。',
+      '登录本站后点左侧“图片生成”。页面可切换文生图和图生图/编辑，按需填写提示词、分组、尺寸、质量、数量和格式。',
     icon: ImageIcon,
   },
   {
@@ -655,7 +666,7 @@ export function Docs() {
             id='image-generation'
             eyebrow='Images'
             title='图片生成怎么用'
-            description='图片生成走本站的图片生成页面或 /v1/images/generations 接口。网页页面适合直接试提示词；脚本批量生成时再用 API。'
+            description='图片页面支持文生图和图生图/编辑；API 可分别调用 /v1/images/generations 和 /v1/images/edits。网页页面适合直接试提示词和参考图；脚本批量生成时再用 API。'
           >
             <div className='grid gap-6'>
               <div className='grid gap-4 md:grid-cols-2 lg:grid-cols-4'>
@@ -664,15 +675,23 @@ export function Docs() {
                 ))}
               </div>
               <div className='grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]'>
-                <CodeBlock
-                  title='图片生成 API 示例'
-                  language='curl'
-                  code={imageApiExample}
-                />
+                <div className='grid gap-4'>
+                  <CodeBlock
+                    title='文生图 API 示例'
+                    language='curl'
+                    code={imageApiExample}
+                  />
+                  <CodeBlock
+                    title='图片编辑 API 示例'
+                    language='curl'
+                    code={imageEditApiExample}
+                  />
+                </div>
                 <div className='grid gap-4'>
                   <InfoBox icon={ImageIcon} title='页面参数'>
-                    尺寸常用 1024x1024；质量不确定就选“自动”；输出格式常用 PNG。
-                    数量越多，等待时间和消耗都会增加。
+                    文生图只需要提示词；图生图/编辑需要上传 1-4
+                    张参考图，可选上传 mask。尺寸常用
+                    1024x1024；质量不确定就选“自动”；输出格式常用 PNG。
                   </InfoBox>
                   <InfoBox tone='warning' icon={ShieldAlert} title='分组报错时'>
                     如果看到“分组下模型无可用渠道”，先确认分组是

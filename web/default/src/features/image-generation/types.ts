@@ -22,6 +22,8 @@ export type ImageSize = 'auto' | '1024x1024' | '1536x1024' | '1024x1536'
 
 export type ImageOutputFormat = 'png' | 'jpeg' | 'webp'
 
+export type ImageMode = 'generation' | 'edit'
+
 export interface ImageGenerationRequest {
   model: 'gpt-image-2'
   group?: string
@@ -30,6 +32,11 @@ export interface ImageGenerationRequest {
   size: ImageSize
   quality: ImageQuality
   output_format: ImageOutputFormat
+}
+
+export interface ImageEditRequest extends ImageGenerationRequest {
+  images: File[]
+  mask?: File | null
 }
 
 export interface GeneratedImage {
@@ -61,6 +68,8 @@ export interface ImageGenerationTask {
   status: ImageTaskStatus
   progress: string
   fail_reason?: string
+  action?: 'generate' | 'edit' | string
+  mode?: ImageMode
   model: 'gpt-image-2'
   group: string
   prompt: string
@@ -68,6 +77,10 @@ export interface ImageGenerationTask {
   quality?: ImageQuality | string
   output_format?: ImageOutputFormat
   n?: number
+  input_image_count?: number
+  input_image_names?: string[]
+  has_mask?: boolean
+  mask_file_name?: string
   submit_time: number
   start_time?: number
   finish_time?: number

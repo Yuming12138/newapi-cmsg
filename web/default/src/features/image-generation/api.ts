@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 import type {
+  ImageEditRequest,
   ImageGenerationRequest,
   ImageGenerationTask,
   ImageGenerationTaskListResponse,
@@ -27,6 +28,30 @@ export async function generateImage(
   payload: ImageGenerationRequest
 ): Promise<ImageGenerationTask> {
   const res = await api.post('/pg/images/generations', payload, {
+    skipErrorHandler: true,
+  } as Record<string, unknown>)
+  return res.data
+}
+
+export async function editImage(
+  payload: ImageEditRequest
+): Promise<ImageGenerationTask> {
+  const formData = new FormData()
+  formData.append('model', payload.model)
+  if (payload.group) formData.append('group', payload.group)
+  formData.append('prompt', payload.prompt)
+  formData.append('n', String(payload.n))
+  formData.append('size', payload.size)
+  formData.append('quality', payload.quality)
+  formData.append('output_format', payload.output_format)
+  payload.images.forEach((file) => {
+    formData.append('image[]', file)
+  })
+  if (payload.mask) {
+    formData.append('mask', payload.mask)
+  }
+
+  const res = await api.post('/pg/images/edits', formData, {
     skipErrorHandler: true,
   } as Record<string, unknown>)
   return res.data
