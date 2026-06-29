@@ -69,7 +69,7 @@ func TestGetChannelQuotaDatesAggregatesConsumeLogs(t *testing.T) {
 		},
 	}).Error)
 
-	rows, err := GetChannelQuotaDates(1782709000, 1782714000, "")
+	rows, err := GetChannelQuotaDates(1782709000, 1782714000, "", 3600)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 
@@ -88,9 +88,17 @@ func TestGetChannelQuotaDatesAggregatesConsumeLogs(t *testing.T) {
 	require.EqualValues(t, 30, rows[1].Quota)
 	require.EqualValues(t, 5, rows[1].TokenUsed)
 
-	rows, err = GetChannelQuotaDates(1782709000, 1782714000, "alice")
+	rows, err = GetChannelQuotaDates(1782709000, 1782714000, "alice", 3600)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, 1, rows[0].ChannelID)
 	require.EqualValues(t, 150, rows[0].Quota)
+
+	rows, err = GetChannelQuotaDates(1782709000, 1782799000, "", 86400)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.EqualValues(t, 1782691200, rows[0].CreatedAt)
+	require.EqualValues(t, 150, rows[0].Quota)
+	require.EqualValues(t, 1782691200, rows[1].CreatedAt)
+	require.EqualValues(t, 30, rows[1].Quota)
 }

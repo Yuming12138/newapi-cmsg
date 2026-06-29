@@ -46,7 +46,14 @@ func GetQuotaDatesByChannel(c *gin.Context) {
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 	username := c.Query("username")
-	dates, err := model.GetChannelQuotaDates(startTimestamp, endTimestamp, username)
+	bucketSeconds := int64(3600)
+	switch c.Query("default_time") {
+	case "day":
+		bucketSeconds = 86400
+	case "week":
+		bucketSeconds = 604800
+	}
+	dates, err := model.GetChannelQuotaDates(startTimestamp, endTimestamp, username, bucketSeconds)
 	if err != nil {
 		common.ApiError(c, err)
 		return
