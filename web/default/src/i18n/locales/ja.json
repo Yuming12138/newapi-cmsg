@@ -3262,6 +3262,7 @@
     "Require login to view rankings": "ランキングを表示するにはログインを要求する",
     "required": "必須",
     "Required": "必須",
+    "Optional": "任意",
     "Required events:": "必須イベント:",
     "Required provider, authentication, model, and group settings": "必須のプロバイダー、認証、モデル、グループ設定",
     "Required to expose Midjourney-style image generation to end users.": "エンドユーザーに Midjourney スタイルの画像生成を公開するために必要です。",

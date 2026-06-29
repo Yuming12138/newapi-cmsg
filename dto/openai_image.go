@@ -2,7 +2,9 @@ package dto
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -49,6 +51,18 @@ func (i *ImageRequest) UnmarshalJSON(data []byte) error {
 	// 用 struct tag 获取所有已定义字段名
 	knownFields := GetJSONFieldNames(reflect.TypeOf(*i))
 
+	if rawN, ok := rawMap["n"]; ok {
+		normalizedN, err := normalizeImageRequestN(rawN)
+		if err != nil {
+			return err
+		}
+		rawMap["n"] = normalizedN
+		data, err = common.Marshal(rawMap)
+		if err != nil {
+			return err
+		}
+	}
+
 	// 再正常解析已定义字段
 	type Alias ImageRequest
 	var known Alias
@@ -65,6 +79,30 @@ func (i *ImageRequest) UnmarshalJSON(data []byte) error {
 		}
 	}
 	return nil
+}
+
+func normalizeImageRequestN(raw json.RawMessage) (json.RawMessage, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return raw, nil
+	}
+	if !strings.HasPrefix(trimmed, `"`) {
+		return raw, nil
+	}
+
+	var value string
+	if err := common.Unmarshal(raw, &value); err != nil {
+		return nil, err
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return json.RawMessage("0"), nil
+	}
+	n, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid image n value %q", value)
+	}
+	return json.RawMessage(strconv.FormatUint(n, 10)), nil
 }
 
 // 序列化时需要重新把字段平铺

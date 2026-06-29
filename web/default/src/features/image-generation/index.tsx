@@ -440,7 +440,7 @@ export function ImageGeneration() {
                     <div className='space-y-2'>
                       <div className='flex items-center justify-between gap-2'>
                         <Label htmlFor='image-reference-files'>
-                          {t('Reference images')}
+                          {t('Reference images')} ({t('Required')})
                         </Label>
                         <Badge variant='outline'>
                           {referenceImages.length} / {MAX_REFERENCE_IMAGES}
@@ -492,7 +492,9 @@ export function ImageGeneration() {
                     </div>
 
                     <div className='space-y-2'>
-                      <Label htmlFor='image-mask-file'>{t('Mask')}</Label>
+                      <Label htmlFor='image-mask-file'>
+                        {t('Mask')} ({t('Optional')})
+                      </Label>
                       <Input
                         id='image-mask-file'
                         type='file'

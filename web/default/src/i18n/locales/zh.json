@@ -3290,6 +3290,7 @@
     "Require login to view rankings": "要求登录才能查看排行榜",
     "required": "必填",
     "Required": "必需",
+    "Optional": "可选",
     "Required events:": "必需事件：",
     "Required provider, authentication, model, and group settings": "必填的供应商、鉴权、模型和分组设置",
     "Required to expose Midjourney-style image generation to end users.": "需要向终端用户开放 Midjourney 风格的图像生成。",

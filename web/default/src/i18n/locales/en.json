@@ -3290,6 +3290,7 @@
     "Require login to view rankings": "Require login to view rankings",
     "required": "required",
     "Required": "Required",
+    "Optional": "Optional",
     "Required events:": "Required events:",
     "Required provider, authentication, model, and group settings": "Required provider, authentication, model, and group settings",
     "Required to expose Midjourney-style image generation to end users.": "Required to expose Midjourney-style image generation to end users.",

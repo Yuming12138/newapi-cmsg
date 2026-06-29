@@ -49,12 +49,15 @@ func TestValidatePlaygroundImageEditMultipartInput(t *testing.T) {
 	c := newPlaygroundImageMultipartContext(t, map[string]string{
 		"model":         "gpt-image-2",
 		"prompt":        "replace the background",
+		"n":             "1",
 		"output_format": "png",
 	}, 2, 1)
 
 	var imageRequest dto.ImageRequest
 	require.NoError(t, common.UnmarshalBodyReusable(c, &imageRequest))
 	require.NoError(t, validatePlaygroundImageRequest(imageRequest))
+	require.NotNil(t, imageRequest.N)
+	require.Equal(t, uint(1), *imageRequest.N)
 
 	names, hasMask, maskName, err := validatePlaygroundImageInput(c, playgroundImageModeEdit)
 	require.NoError(t, err)
