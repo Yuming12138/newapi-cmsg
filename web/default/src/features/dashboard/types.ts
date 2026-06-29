@@ -33,6 +33,16 @@ export interface QuotaDataItem {
   quota?: number
 }
 
+export interface ChannelQuotaDataItem {
+  channel_id: number
+  channel_name?: string
+  group?: string
+  created_at: number
+  token_used?: number
+  count?: number
+  quota?: number
+}
+
 // ============================================================================
 // Uptime Monitoring Types
 // ============================================================================

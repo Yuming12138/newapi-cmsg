@@ -21,6 +21,16 @@ type QuotaData struct {
 	Quota     int    `json:"quota" gorm:"default:0"`
 }
 
+type ChannelQuotaData struct {
+	ChannelID   int    `json:"channel_id"`
+	ChannelName string `json:"channel_name"`
+	Group       string `json:"group"`
+	CreatedAt   int64  `json:"created_at"`
+	TokenUsed   int64  `json:"token_used"`
+	Count       int64  `json:"count"`
+	Quota       int64  `json:"quota"`
+}
+
 func UpdateQuotaData() {
 	for {
 		if common.DataExportEnabled {
@@ -135,4 +145,69 @@ func GetAllQuotaDates(startTime int64, endTime int64, username string) (quotaDat
 	//err = DB.Table("quota_data").Where("created_at >= ? and created_at <= ?", startTime, endTime).Find(&quotaDatas).Error
 	err = DB.Table("quota_data").Select("model_name, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, created_at").Where("created_at >= ? and created_at <= ?", startTime, endTime).Group("model_name, created_at").Find(&quotaDatas).Error
 	return quotaDatas, err
+}
+
+func GetChannelQuotaDates(startTime int64, endTime int64, username string) (quotaData []*ChannelQuotaData, err error) {
+	var rows []*ChannelQuotaData
+	bucketExpr := "created_at - (created_at % 3600)"
+	query := LOG_DB.Table("logs").
+		Select(bucketExpr+" as created_at, channel_id, count(*) as count, coalesce(sum(quota), 0) as quota, coalesce(sum(prompt_tokens), 0) + coalesce(sum(completion_tokens), 0) as token_used").
+		Where("type = ? and channel_id > 0", LogTypeConsume).
+		Group("channel_id, " + bucketExpr).
+		Order("created_at asc")
+	if startTime > 0 {
+		query = query.Where("created_at >= ?", startTime)
+	}
+	if endTime > 0 {
+		query = query.Where("created_at <= ?", endTime)
+	}
+	if username != "" {
+		query = query.Where("username = ?", username)
+	}
+	if err = query.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	channelIDs := make([]int, 0)
+	seen := make(map[int]struct{})
+	for _, row := range rows {
+		if row.ChannelID <= 0 {
+			continue
+		}
+		if _, ok := seen[row.ChannelID]; ok {
+			continue
+		}
+		seen[row.ChannelID] = struct{}{}
+		channelIDs = append(channelIDs, row.ChannelID)
+	}
+
+	channelNames := make(map[int]string, len(channelIDs))
+	channelGroups := make(map[int]string, len(channelIDs))
+	if len(channelIDs) > 0 {
+		groupCol := commonGroupCol
+		if groupCol == "" {
+			groupCol = "`group`"
+		}
+		var channels []struct {
+			Id    int    `gorm:"column:id"`
+			Name  string `gorm:"column:name"`
+			Group string `gorm:"column:group"`
+		}
+		if err = DB.Table("channels").Select("id, name, "+groupCol).Where("id IN ?", channelIDs).Find(&channels).Error; err != nil {
+			return nil, err
+		}
+		for _, channel := range channels {
+			channelNames[channel.Id] = channel.Name
+			channelGroups[channel.Id] = channel.Group
+		}
+	}
+
+	for _, row := range rows {
+		row.ChannelName = channelNames[row.ChannelID]
+		if row.ChannelName == "" {
+			row.ChannelName = fmt.Sprintf("#%d", row.ChannelID)
+		}
+		row.Group = channelGroups[row.ChannelID]
+	}
+	return rows, nil
 }
