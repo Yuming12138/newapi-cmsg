@@ -147,14 +147,17 @@ func GetAllQuotaDates(startTime int64, endTime int64, username string) (quotaDat
 	return quotaDatas, err
 }
 
-func GetChannelQuotaDates(startTime int64, endTime int64, username string) (quotaData []*ChannelQuotaData, err error) {
+func GetChannelQuotaDates(startTime int64, endTime int64, username string, bucketSeconds int64) (quotaData []*ChannelQuotaData, err error) {
 	var rows []*ChannelQuotaData
-	bucketExpr := "created_at - (created_at % 3600)"
+	if bucketSeconds <= 0 {
+		bucketSeconds = 3600
+	}
+	bucketExpr := fmt.Sprintf("created_at - (created_at %% %d)", bucketSeconds)
 	query := LOG_DB.Table("logs").
 		Select(bucketExpr+" as created_at, channel_id, count(*) as count, coalesce(sum(quota), 0) as quota, coalesce(sum(prompt_tokens), 0) + coalesce(sum(completion_tokens), 0) as token_used").
 		Where("type = ? and channel_id > 0", LogTypeConsume).
 		Group("channel_id, " + bucketExpr).
-		Order("created_at asc")
+		Order("created_at asc, channel_id asc")
 	if startTime > 0 {
 		query = query.Where("created_at >= ?", startTime)
 	}
