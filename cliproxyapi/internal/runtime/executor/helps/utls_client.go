@@ -36,6 +36,25 @@ type connPool struct {
 	drainWG  sync.WaitGroup
 }
 
+type cachedUtlsRoundTrippers struct {
+	utls     http.RoundTripper
+	fallback http.RoundTripper
+}
+
+type utlsRoundTripperCacheKey struct {
+	proxyURL string
+	poolSize int
+}
+
+const maxCachedUtlsRoundTrippers = 128
+
+var utlsRoundTripperCache = struct {
+	mu    sync.RWMutex
+	items map[utlsRoundTripperCacheKey]cachedUtlsRoundTrippers
+}{
+	items: make(map[utlsRoundTripperCacheKey]cachedUtlsRoundTrippers),
+}
+
 // utlsRoundTripper implements http.RoundTripper using utls with Chrome fingerprint
 // to bypass Cloudflare's TLS fingerprinting on Anthropic domains.
 type utlsRoundTripper struct {
@@ -375,6 +394,39 @@ func (f *fallbackRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	return f.fallback.RoundTrip(req)
 }
 
+func cachedRoundTrippers(proxyURL string, poolSize int) cachedUtlsRoundTrippers {
+	normalizedPoolSize := normalizeUtlsPoolSize(poolSize)
+	key := utlsRoundTripperCacheKey{proxyURL: proxyURL, poolSize: normalizedPoolSize}
+
+	utlsRoundTripperCache.mu.RLock()
+	cached, ok := utlsRoundTripperCache.items[key]
+	utlsRoundTripperCache.mu.RUnlock()
+	if ok {
+		return cached
+	}
+
+	cached = cachedUtlsRoundTrippers{
+		utls:     newUtlsRoundTripper(proxyURL, normalizedPoolSize),
+		fallback: http.DefaultTransport,
+	}
+	if proxyURL != "" {
+		if transport := buildProxyTransport(proxyURL); transport != nil {
+			cached.fallback = transport
+		}
+	}
+
+	utlsRoundTripperCache.mu.Lock()
+	defer utlsRoundTripperCache.mu.Unlock()
+	if existing, ok := utlsRoundTripperCache.items[key]; ok {
+		return existing
+	}
+	if len(utlsRoundTripperCache.items) >= maxCachedUtlsRoundTrippers {
+		return cached
+	}
+	utlsRoundTripperCache.items[key] = cached
+	return cached
+}
+
 // NewUtlsHTTPClient creates an HTTP client using utls Chrome TLS fingerprint.
 // Use this for provider requests that need a Chrome-like TLS fingerprint.
 // Falls back to standard transport for non-HTTPS requests.
@@ -392,21 +444,20 @@ func NewUtlsHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyau
 		ctxRoundTripper, _ = ctx.Value("cliproxy.roundtripper").(http.RoundTripper)
 	}
 
-	var utlsRT http.RoundTripper = newUtlsRoundTripper(proxyURL, effectiveUtlsPoolSize(cfg))
-	var standardTransport http.RoundTripper = http.DefaultTransport
-	if proxyURL != "" {
-		if transport := buildProxyTransport(proxyURL); transport != nil {
-			standardTransport = transport
+	var roundTrippers cachedUtlsRoundTrippers
+	if proxyURL == "" && ctxRoundTripper != nil {
+		roundTrippers = cachedUtlsRoundTrippers{
+			utls:     ctxRoundTripper,
+			fallback: ctxRoundTripper,
 		}
-	} else if ctxRoundTripper != nil {
-		utlsRT = ctxRoundTripper
-		standardTransport = ctxRoundTripper
+	} else {
+		roundTrippers = cachedRoundTrippers(proxyURL, effectiveUtlsPoolSize(cfg))
 	}
 
 	client := &http.Client{
 		Transport: &fallbackRoundTripper{
-			utls:     utlsRT,
-			fallback: standardTransport,
+			utls:     roundTrippers.utls,
+			fallback: roundTrippers.fallback,
 		},
 	}
 	if timeout > 0 {

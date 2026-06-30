@@ -66,6 +66,60 @@ func TestEffectiveUtlsPoolSize(t *testing.T) {
 	}
 }
 
+func TestNewUtlsHTTPClientReusesCachedRoundTrippers(t *testing.T) {
+	resetUtlsRoundTripperCache(t)
+
+	first := NewUtlsHTTPClient(context.Background(), nil, nil, 0)
+	second := NewUtlsHTTPClient(context.Background(), nil, nil, 0)
+
+	firstUtls, firstFallback := utlsClientRoundTrippers(t, first)
+	secondUtls, secondFallback := utlsClientRoundTrippers(t, second)
+	if firstUtls != secondUtls {
+		t.Fatal("expected default uTLS RoundTripper to be cached")
+	}
+	if firstFallback != secondFallback {
+		t.Fatal("expected default fallback RoundTripper to be cached")
+	}
+}
+
+func TestNewUtlsHTTPClientCacheSeparatesPoolSize(t *testing.T) {
+	resetUtlsRoundTripperCache(t)
+
+	cfgOne := &config.Config{SDKConfig: config.SDKConfig{UtlsPoolSize: 1}}
+	cfgTwo := &config.Config{SDKConfig: config.SDKConfig{UtlsPoolSize: 2}}
+
+	first := NewUtlsHTTPClient(context.Background(), cfgOne, nil, 0)
+	second := NewUtlsHTTPClient(context.Background(), cfgTwo, nil, 0)
+	third := NewUtlsHTTPClient(context.Background(), cfgOne, nil, 0)
+
+	firstUtls, _ := utlsClientRoundTrippers(t, first)
+	secondUtls, _ := utlsClientRoundTrippers(t, second)
+	thirdUtls, _ := utlsClientRoundTrippers(t, third)
+	if firstUtls == secondUtls {
+		t.Fatal("expected different pool sizes to use separate uTLS RoundTrippers")
+	}
+	if firstUtls != thirdUtls {
+		t.Fatal("expected same pool size to reuse cached uTLS RoundTripper")
+	}
+}
+
+func TestNewUtlsHTTPClientReusesCachedRoundTrippersForProxyKey(t *testing.T) {
+	resetUtlsRoundTripperCache(t)
+
+	cfg := &config.Config{SDKConfig: config.SDKConfig{ProxyURL: "direct", UtlsPoolSize: 2}}
+	first := NewUtlsHTTPClient(context.Background(), cfg, nil, 0)
+	second := NewUtlsHTTPClient(context.Background(), cfg, nil, 0)
+
+	firstUtls, firstFallback := utlsClientRoundTrippers(t, first)
+	secondUtls, secondFallback := utlsClientRoundTrippers(t, second)
+	if firstUtls != secondUtls {
+		t.Fatal("expected proxy-keyed uTLS RoundTripper to be cached")
+	}
+	if firstFallback != secondFallback {
+		t.Fatal("expected proxy-keyed fallback RoundTripper to be cached")
+	}
+}
+
 func TestUtlsRoundTripperSaturatedReplacementDrainsDisplacedConn(t *testing.T) {
 	t.Parallel()
 
@@ -327,4 +381,29 @@ func waitForFakeClose(t *testing.T, conn *fakeH2Conn) {
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for %s to close", conn.name)
 	}
+}
+
+func resetUtlsRoundTripperCache(t *testing.T) {
+	t.Helper()
+
+	utlsRoundTripperCache.mu.Lock()
+	oldItems := utlsRoundTripperCache.items
+	utlsRoundTripperCache.items = make(map[utlsRoundTripperCacheKey]cachedUtlsRoundTrippers)
+	utlsRoundTripperCache.mu.Unlock()
+
+	t.Cleanup(func() {
+		utlsRoundTripperCache.mu.Lock()
+		utlsRoundTripperCache.items = oldItems
+		utlsRoundTripperCache.mu.Unlock()
+	})
+}
+
+func utlsClientRoundTrippers(t *testing.T, client *http.Client) (http.RoundTripper, http.RoundTripper) {
+	t.Helper()
+
+	transport, ok := client.Transport.(*fallbackRoundTripper)
+	if !ok {
+		t.Fatalf("client.Transport type = %T, want *fallbackRoundTripper", client.Transport)
+	}
+	return transport.utls, transport.fallback
 }
