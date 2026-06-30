@@ -12,6 +12,7 @@ import (
 const (
 	BillingSourceWallet       = "wallet"
 	BillingSourceSubscription = "subscription"
+	BillingSourceMeteredOnly  = "metered_only"
 )
 
 // PreConsumeBilling 根据用户计费偏好创建 BillingSession 并执行预扣费。
@@ -36,7 +37,12 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 		preConsumed := relayInfo.Billing.GetPreConsumedQuota()
 		delta := actualQuota - preConsumed
 
-		if delta > 0 {
+		if relayInfo.BillingSource == BillingSourceMeteredOnly {
+			logger.LogInfo(ctx, fmt.Sprintf("仅计量不扣费：%s（分组：%s）",
+				logger.FormatQuota(actualQuota),
+				relayInfo.UsingGroup,
+			))
+		} else if delta > 0 {
 			logger.LogInfo(ctx, fmt.Sprintf("预扣费后补扣费：%s（实际消耗：%s，预扣费：%s）",
 				logger.FormatQuota(delta),
 				logger.FormatQuota(actualQuota),
