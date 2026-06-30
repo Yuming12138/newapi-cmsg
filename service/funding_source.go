@@ -12,7 +12,7 @@ import (
 
 // FundingSource 抽象了预扣费的资金来源。
 type FundingSource interface {
-	// Source 返回资金来源标识："wallet" 或 "subscription"
+	// Source 返回资金来源标识："wallet"、"subscription" 或 "metered_only"
 	Source() string
 	// PreConsume 从该资金来源预扣 amount 额度
 	PreConsume(amount int) error
@@ -21,6 +21,20 @@ type FundingSource interface {
 	// Refund 退还所有预扣费
 	Refund() error
 }
+
+// ---------------------------------------------------------------------------
+// MeteredOnlyFunding — 只计量不扣费的资金来源实现
+// ---------------------------------------------------------------------------
+
+type MeteredOnlyFunding struct{}
+
+func (m *MeteredOnlyFunding) Source() string { return BillingSourceMeteredOnly }
+
+func (m *MeteredOnlyFunding) PreConsume(_ int) error { return nil }
+
+func (m *MeteredOnlyFunding) Settle(_ int) error { return nil }
+
+func (m *MeteredOnlyFunding) Refund() error { return nil }
 
 // ---------------------------------------------------------------------------
 // WalletFunding — 钱包资金来源实现
