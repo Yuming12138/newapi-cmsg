@@ -6,6 +6,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
+	log "github.com/sirupsen/logrus"
 )
 
 type StreamForwardOptions struct {
@@ -37,6 +39,7 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 		return
 	}
 
+	metrics := streamForwardMetrics{startedAt: time.Now()}
 	writeChunk := opts.WriteChunk
 	if writeChunk == nil {
 		writeChunk = func([]byte) {}
@@ -65,6 +68,7 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 	for {
 		select {
 		case <-c.Request.Context().Done():
+			logStreamForwardEvent(c, metrics, "client_canceled", nil, log.InfoLevel)
 			cancel(c.Request.Context().Err())
 			return
 		case chunk, ok := <-data:
@@ -84,6 +88,7 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 						opts.WriteTerminalError(terminalErr)
 					}
 					flusher.Flush()
+					logStreamForwardEvent(c, metrics, "terminal_error", terminalErr, log.WarnLevel)
 					cancel(terminalErr.Error)
 					return
 				}
@@ -91,8 +96,13 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 					opts.WriteDone()
 				}
 				flusher.Flush()
+				logStreamForwardEvent(c, metrics, "completed", nil, log.InfoLevel)
 				cancel(nil)
 				return
+			}
+			metrics.recordPayload(chunk)
+			if metrics.payloadChunks == 1 {
+				logStreamForwardFirstPayload(c, metrics, len(chunk))
 			}
 			writeChunk(chunk)
 			flusher.Flush()
@@ -111,11 +121,94 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 			if errMsg != nil {
 				execErr = errMsg.Error
 			}
+			logStreamForwardEvent(c, metrics, "terminal_error", errMsg, log.WarnLevel)
 			cancel(execErr)
 			return
 		case <-keepAliveC:
+			metrics.keepAliveChunks++
 			writeKeepAlive()
 			flusher.Flush()
 		}
 	}
+}
+
+type streamForwardMetrics struct {
+	startedAt       time.Time
+	firstPayloadAt  time.Time
+	payloadChunks   int64
+	payloadBytes    int64
+	keepAliveChunks int64
+}
+
+func (m *streamForwardMetrics) recordPayload(chunk []byte) {
+	if m == nil {
+		return
+	}
+	now := time.Now()
+	if m.firstPayloadAt.IsZero() {
+		m.firstPayloadAt = now
+	}
+	m.payloadChunks++
+	m.payloadBytes += int64(len(chunk))
+}
+
+func logStreamForwardFirstPayload(c *gin.Context, metrics streamForwardMetrics, chunkBytes int) {
+	fields := streamForwardFields(c, metrics)
+	fields["chunk_bytes"] = chunkBytes
+	streamForwardLogEntry(c).WithFields(fields).Info("stream forward: first downstream payload")
+}
+
+func logStreamForwardEvent(c *gin.Context, metrics streamForwardMetrics, reason string, errMsg *interfaces.ErrorMessage, level log.Level) {
+	fields := streamForwardFields(c, metrics)
+	fields["reason"] = reason
+	if errMsg != nil {
+		fields["status_code"] = errMsg.StatusCode
+	}
+	entry := streamForwardLogEntry(c).WithFields(fields)
+	switch level {
+	case log.WarnLevel:
+		entry.Warn("stream forward: finished")
+	case log.ErrorLevel:
+		entry.Error("stream forward: finished")
+	default:
+		entry.Info("stream forward: finished")
+	}
+}
+
+func streamForwardFields(c *gin.Context, metrics streamForwardMetrics) log.Fields {
+	fields := log.Fields{
+		"duration_ms":      durationMilliseconds(time.Since(metrics.startedAt)),
+		"payload_chunks":   metrics.payloadChunks,
+		"payload_bytes":    metrics.payloadBytes,
+		"keepalive_chunks": metrics.keepAliveChunks,
+	}
+	if metrics.firstPayloadAt.IsZero() {
+		fields["first_payload_ms"] = -1
+	} else {
+		fields["first_payload_ms"] = durationMilliseconds(metrics.firstPayloadAt.Sub(metrics.startedAt))
+	}
+	if c != nil && c.Request != nil {
+		fields["method"] = c.Request.Method
+		if c.Request.URL != nil {
+			fields["path"] = c.Request.URL.Path
+		}
+	}
+	return fields
+}
+
+func durationMilliseconds(d time.Duration) int64 {
+	if d < 0 {
+		return 0
+	}
+	return d.Milliseconds()
+}
+
+func streamForwardLogEntry(c *gin.Context) *log.Entry {
+	if c == nil || c.Request == nil {
+		return log.NewEntry(log.StandardLogger())
+	}
+	if requestID := logging.GetRequestID(c.Request.Context()); requestID != "" {
+		return log.WithField("request_id", requestID)
+	}
+	return log.NewEntry(log.StandardLogger())
 }

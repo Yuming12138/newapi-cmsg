@@ -17,6 +17,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -241,7 +242,72 @@ func (r *UsageReporter) EnsurePublished(ctx context.Context) {
 
 func (r *UsageReporter) publishRecord(ctx context.Context, record usage.Record) {
 	record.ResponseHeaders = internallogging.GetResponseHeaders(ctx)
+	logUsageRecord(ctx, record)
 	usage.PublishRecord(ctx, record)
+}
+
+func logUsageRecord(ctx context.Context, record usage.Record) {
+	fields := log.Fields{
+		"provider":          valueOrUnknown(record.Provider),
+		"executor_type":     valueOrUnknown(record.ExecutorType),
+		"model":             valueOrUnknown(record.Model),
+		"alias":             valueOrUnknown(record.Alias),
+		"auth_id":           valueOrUnknown(record.AuthID),
+		"auth_index":        valueOrUnknown(record.AuthIndex),
+		"auth_type":         valueOrUnknown(record.AuthType),
+		"latency_ms":        durationMs(record.Latency),
+		"ttft_ms":           durationMs(record.TTFT),
+		"failed":            record.Failed,
+		"input_tokens":      record.Detail.InputTokens,
+		"output_tokens":     record.Detail.OutputTokens,
+		"reasoning_tokens":  record.Detail.ReasoningTokens,
+		"cached_tokens":     record.Detail.CachedTokens,
+		"total_tokens":      record.Detail.TotalTokens,
+		"reasoning_effort":  valueOrDefault(record.ReasoningEffort, "unknown"),
+		"service_tier":      valueOrDefault(record.ServiceTier, usage.DefaultServiceTier),
+		"request_endpoint":  valueOrUnknown(internallogging.GetEndpoint(ctx)),
+		"response_status":   responseStatusForUsage(ctx, record),
+		"response_headers":  len(record.ResponseHeaders),
+		"requested_at_unix": record.RequestedAt.Unix(),
+	}
+	entry := LogWithRequestID(ctx).WithFields(fields)
+	if record.Failed {
+		entry.Warn("usage: request completed")
+		return
+	}
+	entry.Info("usage: request completed")
+}
+
+func responseStatusForUsage(ctx context.Context, record usage.Record) int {
+	if record.Failed && record.Fail.StatusCode > 0 {
+		return record.Fail.StatusCode
+	}
+	if status := internallogging.GetResponseStatus(ctx); status > 0 {
+		return status
+	}
+	if record.Failed {
+		return http.StatusInternalServerError
+	}
+	return http.StatusOK
+}
+
+func durationMs(d time.Duration) int64 {
+	if d < 0 {
+		return 0
+	}
+	return d.Milliseconds()
+}
+
+func valueOrUnknown(value string) string {
+	return valueOrDefault(value, "unknown")
+}
+
+func valueOrDefault(value string, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func (r *UsageReporter) buildRecord(detail usage.Detail, failed bool, failures ...usage.Failure) usage.Record {

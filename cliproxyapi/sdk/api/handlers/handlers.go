@@ -26,6 +26,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"golang.org/x/net/context"
 )
@@ -1306,8 +1307,10 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 					if !sentPayload {
 						if bootstrapRetries < maxBootstrapRetries && bootstrapEligible(streamErr) {
 							bootstrapRetries++
+							logStreamBootstrapRetry(ctx, providers, normalizedModel, originalRequestedModel, responseProtocol, bootstrapRetries, maxBootstrapRetries, streamErr, opts.Metadata)
 							retryResult, retryErr := h.AuthManager.ExecuteStream(ctx, providers, req, opts)
 							if retryErr == nil {
+								logStreamBootstrapRetryResult(ctx, providers, normalizedModel, originalRequestedModel, responseProtocol, bootstrapRetries, maxBootstrapRetries, nil, opts.Metadata)
 								rawStreamHeaders = cloneHeader(retryResult.Headers)
 								baseStreamHeaders = cloneHeader(retryResult.Headers)
 								replaceHeader(upstreamHeaders, downstreamHeadersFromExecutor(rawStreamHeaders, passthroughHeadersEnabled))
@@ -1318,6 +1321,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 								chunks = retryResult.Chunks
 								continue outer
 							}
+							logStreamBootstrapRetryResult(ctx, providers, normalizedModel, originalRequestedModel, responseProtocol, bootstrapRetries, maxBootstrapRetries, retryErr, opts.Metadata)
 							streamErr = enrichAuthSelectionError(retryErr, providers, normalizedModel)
 						}
 					}
@@ -1428,6 +1432,60 @@ func statusFromError(err error) int {
 		}
 	}
 	return 0
+}
+
+func logStreamBootstrapRetry(ctx context.Context, providers []string, model string, requestedModel string, responseProtocol string, retryAttempt int, maxRetries int, err error, metadata map[string]any) {
+	fields := streamBootstrapFields(providers, model, requestedModel, responseProtocol, retryAttempt, maxRetries, err, metadata)
+	handlerLogEntry(ctx).WithFields(fields).Warn("stream bootstrap: retry before first payload")
+}
+
+func logStreamBootstrapRetryResult(ctx context.Context, providers []string, model string, requestedModel string, responseProtocol string, retryAttempt int, maxRetries int, err error, metadata map[string]any) {
+	fields := streamBootstrapFields(providers, model, requestedModel, responseProtocol, retryAttempt, maxRetries, err, metadata)
+	if err != nil {
+		handlerLogEntry(ctx).WithFields(fields).Warn("stream bootstrap: retry failed")
+		return
+	}
+	handlerLogEntry(ctx).WithFields(fields).Info("stream bootstrap: retry succeeded")
+}
+
+func streamBootstrapFields(providers []string, model string, requestedModel string, responseProtocol string, retryAttempt int, maxRetries int, err error, metadata map[string]any) log.Fields {
+	fields := log.Fields{
+		"providers":             strings.Join(providers, ","),
+		"model":                 model,
+		"requested_model":       requestedModel,
+		"response_protocol":     responseProtocol,
+		"bootstrap_retry":       retryAttempt,
+		"max_bootstrap_retries": maxRetries,
+	}
+	if status := statusFromError(err); status > 0 {
+		fields["status_code"] = status
+	}
+	if selectedAuthID := stringMetadata(metadata, coreexecutor.SelectedAuthMetadataKey); selectedAuthID != "" {
+		fields["selected_auth_id"] = selectedAuthID
+	}
+	return fields
+}
+
+func stringMetadata(metadata map[string]any, key string) string {
+	if len(metadata) == 0 {
+		return ""
+	}
+	raw := metadata[key]
+	switch value := raw.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case []byte:
+		return strings.TrimSpace(string(value))
+	default:
+		return ""
+	}
+}
+
+func handlerLogEntry(ctx context.Context) *log.Entry {
+	if requestID := logging.GetRequestID(ctx); requestID != "" {
+		return log.WithField("request_id", requestID)
+	}
+	return log.NewEntry(log.StandardLogger())
 }
 
 func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string, normalizedModel string, err *interfaces.ErrorMessage) {
