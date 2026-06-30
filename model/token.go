@@ -185,15 +185,32 @@ func SearchUserTokens(userId int, keyword string, token string, offset int, limi
 	return tokens, total, nil
 }
 
+func isTokenQuotaCharged(token *Token) bool {
+	if token == nil {
+		return true
+	}
+	group := strings.TrimSpace(token.Group)
+	if group == "" {
+		userGroup, err := GetUserGroup(token.UserId, false)
+		if err != nil {
+			common.SysLog("failed to resolve token user group for quota policy: " + err.Error())
+			return true
+		}
+		group = userGroup
+	}
+	return operation_setting.IsQuotaChargedGroup(group)
+}
+
 func ValidateUserToken(key string) (token *Token, err error) {
 	if key == "" {
 		return nil, ErrTokenNotProvided
 	}
 	token, err = GetTokenByKey(key, false)
 	if err == nil {
-		if token.Status == common.TokenStatusExhausted ||
-			token.Status == common.TokenStatusExpired ||
-			token.Status != common.TokenStatusEnabled {
+		quotaCharged := isTokenQuotaCharged(token)
+		if token.Status == common.TokenStatusExpired ||
+			(token.Status == common.TokenStatusExhausted && quotaCharged) ||
+			(token.Status != common.TokenStatusEnabled && token.Status != common.TokenStatusExhausted) {
 			return token, ErrTokenInvalid
 		}
 		if token.ExpiredTime != -1 && token.ExpiredTime < common.GetTimestamp() {
@@ -206,7 +223,7 @@ func ValidateUserToken(key string) (token *Token, err error) {
 			}
 			return token, ErrTokenInvalid
 		}
-		if !token.UnlimitedQuota && token.RemainQuota <= 0 {
+		if !token.UnlimitedQuota && token.RemainQuota <= 0 && quotaCharged {
 			if !common.RedisEnabled {
 				token.Status = common.TokenStatusExhausted
 				err := token.SelectUpdate()
