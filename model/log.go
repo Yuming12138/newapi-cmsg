@@ -517,6 +517,36 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 
 const logSearchCountLimit = 10000
 
+func isClickHouseLogDatabase() bool {
+	return common.UsingClickHouse || common.LogSqlType == common.DatabaseTypeClickHouse
+}
+
+func buildLogLikeCondition(column string, value string) (string, string, error) {
+	if isClickHouseLogDatabase() {
+		pattern, err := sanitizeClickHouseLikePattern(value)
+		if err != nil {
+			return "", "", err
+		}
+		return column + " LIKE ?", pattern, nil
+	}
+
+	pattern, err := sanitizeLikePattern(value)
+	if err != nil {
+		return "", "", err
+	}
+	return column + " LIKE ? ESCAPE '!'", pattern, nil
+}
+
+func sanitizeClickHouseLikePattern(input string) (string, error) {
+	input = strings.ReplaceAll(input, `\`, `\\`)
+	input = strings.ReplaceAll(input, `_`, `\_`)
+
+	if err := validateLikePattern(input); err != nil {
+		return "", err
+	}
+	return input, nil
+}
+
 func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
@@ -526,11 +556,11 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	}
 
 	if modelName != "" {
-		modelNamePattern, err := sanitizeLikePattern(modelName)
+		modelNameCondition, modelNamePattern, err := buildLogLikeCondition("logs.model_name", modelName)
 		if err != nil {
 			return nil, 0, err
 		}
-		tx = tx.Where("logs.model_name LIKE ? ESCAPE '!'", modelNamePattern)
+		tx = tx.Where(modelNameCondition, modelNamePattern)
 	}
 	if tokenName != "" {
 		tx = tx.Where("logs.token_name = ?", tokenName)
@@ -589,12 +619,12 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 		tx = tx.Where("created_at <= ?", endTimestamp)
 	}
 	if modelName != "" {
-		modelNamePattern, err := sanitizeLikePattern(modelName)
+		modelNameCondition, modelNamePattern, err := buildLogLikeCondition("model_name", modelName)
 		if err != nil {
 			return stat, err
 		}
-		tx = tx.Where("model_name LIKE ? ESCAPE '!'", modelNamePattern)
-		rpmTpmQuery = rpmTpmQuery.Where("model_name LIKE ? ESCAPE '!'", modelNamePattern)
+		tx = tx.Where(modelNameCondition, modelNamePattern)
+		rpmTpmQuery = rpmTpmQuery.Where(modelNameCondition, modelNamePattern)
 	}
 	if channel != 0 {
 		tx = tx.Where("channel_id = ?", channel)
