@@ -84,6 +84,7 @@ const SECURITY_SECTIONS = [
   {
     id: 'token-limits',
     titleKey: 'Token Limits',
+    descriptionKey: 'Configure maximum token limits',
     build: (settings: SecuritySettings) => (
       <TokenLimitSection
         defaultValues={{
