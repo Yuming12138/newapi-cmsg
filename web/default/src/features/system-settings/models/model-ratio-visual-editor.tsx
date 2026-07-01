@@ -831,11 +831,6 @@ export const ModelRatioVisualEditor = memo(
           JSON.stringify(billingExprMap, null, 2)
         )
 
-        if (editData?.name === name) {
-          setEditData(null)
-          setEditorOpen(false)
-          setSheetOpen(false)
-        }
       },
       [
         modelPrice,
@@ -849,7 +844,6 @@ export const ModelRatioVisualEditor = memo(
         billingMode,
         billingExpr,
         onChange,
-        editData,
       ]
     )
 
