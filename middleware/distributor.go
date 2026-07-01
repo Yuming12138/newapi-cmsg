@@ -108,7 +108,6 @@ func Distribute() func(c *gin.Context) {
 							service.ExcludeChannelForRequest(c, preferred.Id, "preferred affinity channel disabled")
 							service.ClearChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d is disabled", preferred.Id))
 						} else if blocked, state := model.IsChannelTemporarilyUnschedulable(preferred.Id); blocked {
-							service.ExcludeChannelForRequest(c, preferred.Id, "preferred affinity channel temporarily unschedulable")
 							reason := "temporarily unschedulable"
 							if state != nil && strings.TrimSpace(state.Reason) != "" {
 								reason = state.Reason
