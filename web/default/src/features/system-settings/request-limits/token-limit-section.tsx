@@ -30,9 +30,8 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { SettingsForm } from '../components/settings-form-layout'
-import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
@@ -92,12 +91,7 @@ export function TokenLimitSection({ defaultValues }: TokenLimitSectionProps) {
   return (
     <SettingsSection title={t('Token Limits')}>
       <Form {...form}>
-        <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
-          <SettingsPageFormActions
-            onSave={form.handleSubmit(onSubmit)}
-            isSaving={updateOption.isPending}
-            saveLabel='Save token limits'
-          />
+        <form onSubmit={form.handleSubmit(onSubmit)} className='space-y-6'>
           <FormField
             control={form.control}
             name='token_setting.max_user_tokens'
@@ -124,7 +118,11 @@ export function TokenLimitSection({ defaultValues }: TokenLimitSectionProps) {
               </FormItem>
             )}
           />
-        </SettingsForm>
+
+          <Button type='submit' disabled={updateOption.isPending}>
+            {updateOption.isPending ? t('Saving...') : t('Save token limits')}
+          </Button>
+        </form>
       </Form>
     </SettingsSection>
   )
