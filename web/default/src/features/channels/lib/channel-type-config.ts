@@ -131,6 +131,16 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
       models: 'mimo-v2.5-pro,mimo-v2.5,mimo-v2-pro,mimo-v2-omni,mimo-v2-flash',
     },
   },
+  59: {
+    id: 59,
+    name: CHANNEL_TYPES[59],
+    icon: 'newapi',
+    hints: {
+      baseUrl: 'Fallback base URL',
+      key: 'Used by route auth templates',
+      models: 'Models exposed by this channel',
+    },
+  },
   20: {
     id: 20,
     name: CHANNEL_TYPES[20],

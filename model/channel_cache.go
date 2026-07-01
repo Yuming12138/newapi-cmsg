@@ -10,11 +10,13 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
 var group2model2channels map[string]map[string][]int // enabled channel
 var channelsIDM map[int]*Channel                     // all channels include disabled
+var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
 var channelSyncLock sync.RWMutex
 
 func InitChannelCache() {
@@ -22,10 +24,16 @@ func InitChannelCache() {
 		return
 	}
 	newChannelId2channel := make(map[int]*Channel)
+	newChannel2advancedCustomConfig := make(map[int]*dto.AdvancedCustomConfig)
 	var channels []*Channel
 	DB.Find(&channels)
 	for _, channel := range channels {
 		newChannelId2channel[channel.Id] = channel
+		if channel.Type == constant.ChannelTypeAdvancedCustom {
+			if config := channel.GetOtherSettings().AdvancedCustom; config != nil {
+				newChannel2advancedCustomConfig[channel.Id] = config
+			}
+		}
 	}
 	var abilities []*Ability
 	DB.Find(&abilities)
@@ -80,6 +88,7 @@ func InitChannelCache() {
 		}
 	}
 	channelsIDM = newChannelId2channel
+	channel2advancedCustomConfig = newChannel2advancedCustomConfig
 	channelSyncLock.Unlock()
 	common.SysLog("channels synced from database")
 }
@@ -93,21 +102,25 @@ func SyncChannelCache(frequency int) {
 }
 
 func GetRandomSatisfiedChannel(group string, model string, retry int, excludedIDs ...map[int]struct{}) (*Channel, error) {
+	return GetRandomSatisfiedChannelForRequestPath(group, model, retry, "", excludedIDs...)
+}
+
+func GetRandomSatisfiedChannelForRequestPath(group string, model string, retry int, requestPath string, excludedIDs ...map[int]struct{}) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry, excludedIDs...)
+		return GetChannelForRequestPath(group, model, retry, requestPath, excludedIDs...)
 	}
 
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
 
 	// First, try to find channels with the exact model name.
-	channels := group2model2channels[group][model]
+	channels := filterChannelIDsByRequestPath(group2model2channels[group][model], requestPath)
 
 	// If no channels found, try to find channels with the normalized model name.
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
-		channels = group2model2channels[group][normalizedModel]
+		channels = filterChannelIDsByRequestPath(group2model2channels[group][normalizedModel], requestPath)
 	}
 
 	if len(channels) == 0 {
@@ -163,6 +176,32 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, excludedID
 	}
 
 	return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s", group, model))
+}
+
+func filterChannelIDsByRequestPath(channels []int, requestPath string) []int {
+	if requestPath == "" || len(channels) == 0 {
+		return channels
+	}
+	filtered := make([]int, 0, len(channels))
+	for _, channelId := range channels {
+		channel, ok := channelsIDM[channelId]
+		if !ok {
+			filtered = append(filtered, channelId)
+			continue
+		}
+		if channel.Type != constant.ChannelTypeAdvancedCustom {
+			filtered = append(filtered, channelId)
+			continue
+		}
+		config := channel2advancedCustomConfig[channelId]
+		if config == nil {
+			config = channel.GetOtherSettings().AdvancedCustom
+		}
+		if config != nil && config.SupportsPath(requestPath) {
+			filtered = append(filtered, channelId)
+		}
+	}
+	return filtered
 }
 
 func CacheGetChannel(id int) (*Channel, error) {
@@ -236,5 +275,17 @@ func CacheUpdateChannel(channel *Channel) {
 
 	println("before:", channelsIDM[channel.Id].ChannelInfo.MultiKeyPollingIndex)
 	channelsIDM[channel.Id] = channel
+	if channel.Type == constant.ChannelTypeAdvancedCustom {
+		if channel2advancedCustomConfig == nil {
+			channel2advancedCustomConfig = make(map[int]*dto.AdvancedCustomConfig)
+		}
+		if config := channel.GetOtherSettings().AdvancedCustom; config != nil {
+			channel2advancedCustomConfig[channel.Id] = config
+		} else {
+			delete(channel2advancedCustomConfig, channel.Id)
+		}
+	} else if channel2advancedCustomConfig != nil {
+		delete(channel2advancedCustomConfig, channel.Id)
+	}
 	println("after :", channelsIDM[channel.Id].ChannelInfo.MultiKeyPollingIndex)
 }

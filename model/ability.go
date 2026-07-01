@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -76,6 +77,10 @@ func getPriorities(group string, model string) ([]int, error) {
 }
 
 func GetChannel(group string, model string, retry int, excludedIDs ...map[int]struct{}) (*Channel, error) {
+	return GetChannelForRequestPath(group, model, retry, "", excludedIDs...)
+}
+
+func GetChannelForRequestPath(group string, model string, retry int, requestPath string, excludedIDs ...map[int]struct{}) (*Channel, error) {
 	priorities, err := getPriorities(group, model)
 	if err != nil {
 		return nil, err
@@ -117,6 +122,9 @@ func GetChannel(group string, model string, retry int, excludedIDs ...map[int]st
 				}
 				return nil, err
 			}
+			if !channelSupportsRequestPath(&channel, requestPath) {
+				continue
+			}
 			candidates = append(candidates, &channel)
 		}
 
@@ -127,6 +135,20 @@ func GetChannel(group string, model string, retry int, excludedIDs ...map[int]st
 	}
 
 	return nil, nil
+}
+
+func channelSupportsRequestPath(channel *Channel, requestPath string) bool {
+	if requestPath == "" {
+		return true
+	}
+	if channel == nil {
+		return false
+	}
+	if channel.Type != constant.ChannelTypeAdvancedCustom {
+		return true
+	}
+	config := channel.GetOtherSettings().AdvancedCustom
+	return config != nil && config.SupportsPath(requestPath)
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {
