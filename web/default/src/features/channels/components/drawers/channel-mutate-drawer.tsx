@@ -57,6 +57,7 @@ import { cn } from '@/lib/utils'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Collapsible,
@@ -128,6 +129,7 @@ import {
 } from '../../constants'
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
+  CHANNEL_TYPE_ADVANCED_CUSTOM,
   channelFormSchema,
   channelsQueryKeys,
   transformChannelToFormDefaults,
@@ -144,6 +146,7 @@ import {
   hasModelConfigChanged,
   findMissingModelsInMapping,
   validateModelMappingJson,
+  getAdvancedCustomStats,
 } from '../../lib'
 import {
   collectInvalidStatusCodeEntries,
@@ -151,6 +154,7 @@ import {
 } from '../../lib/status-code-risk-guard'
 import type { Channel } from '../../types'
 import { useChannels } from '../channels-provider'
+import { AdvancedCustomEditorDialog } from '../dialogs/advanced-custom-editor-dialog'
 import { CodexOAuthDialog } from '../dialogs/codex-oauth-dialog'
 import { FetchModelsDialog } from '../dialogs/fetch-models-dialog'
 import {
@@ -217,6 +221,7 @@ const MODEL_MAPPING_PREVIEW_FALLBACK: Array<{
 
 const ADVANCED_SETTINGS_EXPANDED_KEY = 'channel-advanced-settings-expanded'
 const UPSTREAM_DETECTED_MODEL_PREVIEW_LIMIT = 8
+const ADVANCED_CUSTOM_ROUTE_TYPE_PREVIEW_LIMIT = 3
 
 function readAdvancedSettingsPreference(): boolean {
   if (typeof window === 'undefined') return false
@@ -228,6 +233,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.model_mapping?.trim() ||
     values.param_override?.trim() ||
     values.header_override?.trim() ||
+    values.advanced_custom?.trim() ||
     values.status_code_mapping?.trim() ||
     values.tag?.trim() ||
     values.remark?.trim() ||
@@ -325,6 +331,8 @@ export function ChannelMutateDrawer({
   >(null)
   const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false)
   const [paramOverrideEditorOpen, setParamOverrideEditorOpen] = useState(false)
+  const [advancedCustomEditorOpen, setAdvancedCustomEditorOpen] =
+    useState(false)
 
   const isEditing = Boolean(currentRow)
   const channelId = currentRow?.id ?? null
@@ -400,6 +408,7 @@ export function ChannelMutateDrawer({
     'upstream_model_update_check_enabled'
   )
   const currentSettings = form.watch('settings')
+  const currentAdvancedCustom = form.watch('advanced_custom')
   const {
     unlocked: doubaoApiEditUnlocked,
     handleClick: handleApiConfigSecretClick,
@@ -598,6 +607,23 @@ export function ChannelMutateDrawer({
   const upstreamDetectedModelsOmittedCount =
     upstreamUpdateMeta.detectedModels.length -
     upstreamDetectedModelsPreview.length
+
+  const advancedCustomStats = useMemo(
+    () => getAdvancedCustomStats(currentAdvancedCustom),
+    [currentAdvancedCustom]
+  )
+  const advancedCustomRouteTypeLabels =
+    advancedCustomStats.routeTypeLabels.slice(
+      0,
+      ADVANCED_CUSTOM_ROUTE_TYPE_PREVIEW_LIMIT
+    )
+  const hiddenAdvancedCustomRouteTypeCount =
+    advancedCustomStats.routeTypeLabels.length -
+    advancedCustomRouteTypeLabels.length
+  const advancedCustomRouteTypeTitle =
+    hiddenAdvancedCustomRouteTypeCount > 0
+      ? advancedCustomStats.routeTypeLabels.join(', ')
+      : undefined
 
   // Load channel data into form when editing
   useEffect(() => {
@@ -1824,6 +1850,58 @@ export function ChannelMutateDrawer({
                             'Custom API base URL. For official channels, New API has built-in addresses. Only fill this for third-party proxy sites or special endpoints. Do not add /v1 or trailing slash.'
                           )}
                         </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
+
+                {currentType === CHANNEL_TYPE_ADVANCED_CUSTOM && (
+                  <FormField
+                    control={form.control}
+                    name='advanced_custom'
+                    render={({ field }) => (
+                      <FormItem className='space-y-3 border-y py-4'>
+                        <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
+                          <div className='space-y-2'>
+                            <FormLabel>{t('Advanced Custom Routes')}</FormLabel>
+                            <div className='flex flex-wrap gap-2'>
+                              <Badge variant='secondary'>
+                                {t('Routes')}: {advancedCustomStats.routeCount}
+                              </Badge>
+                              {advancedCustomRouteTypeLabels.map((label) => (
+                                <Badge key={label} variant='outline'>
+                                  {t(label)}
+                                </Badge>
+                              ))}
+                              {hiddenAdvancedCustomRouteTypeCount > 0 && (
+                                <Badge
+                                  variant='outline'
+                                  title={advancedCustomRouteTypeTitle}
+                                >
+                                  +{hiddenAdvancedCustomRouteTypeCount}
+                                </Badge>
+                              )}
+                              {!advancedCustomStats.valid && (
+                                <Badge variant='destructive'>
+                                  {t('Incomplete')}
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                          <Button
+                            type='button'
+                            variant='outline'
+                            size='sm'
+                            onClick={() => setAdvancedCustomEditorOpen(true)}
+                          >
+                            <Route className='mr-2 h-4 w-4' />
+                            {t('Configure routes')}
+                          </Button>
+                        </div>
+                        <FormControl>
+                          <input type='hidden' {...field} />
+                        </FormControl>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -3383,6 +3461,20 @@ export function ChannelMutateDrawer({
           onOpenChange={setParamOverrideEditorOpen}
           onSave={(nextValue) => {
             form.setValue('param_override', nextValue, {
+              shouldDirty: true,
+              shouldValidate: true,
+            })
+          }}
+        />
+      )}
+
+      {advancedCustomEditorOpen && (
+        <AdvancedCustomEditorDialog
+          open={advancedCustomEditorOpen}
+          value={form.watch('advanced_custom') || ''}
+          onOpenChange={setAdvancedCustomEditorOpen}
+          onSave={(nextValue) => {
+            form.setValue('advanced_custom', nextValue, {
               shouldDirty: true,
               shouldValidate: true,
             })

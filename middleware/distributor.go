@@ -81,6 +81,7 @@ func Distribute() func(c *gin.Context) {
 				}
 				var selectGroup string
 				usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+				requestPath := c.Request.URL.Path
 				// Playground requests are authenticated with the web session and may choose a group.
 				if strings.HasPrefix(c.Request.URL.Path, "/pg/") {
 					playgroundRequest := &dto.PlayGroundRequest{}
@@ -113,6 +114,8 @@ func Distribute() func(c *gin.Context) {
 								reason = state.Reason
 							}
 							service.ClearChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d is %s", preferred.Id, reason))
+						} else if !channelSupportsRequestPath(preferred, requestPath) {
+							service.ClearChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer satisfies request path", preferred.Id))
 						} else if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroup(userGroup)
@@ -142,10 +145,11 @@ func Distribute() func(c *gin.Context) {
 
 				if channel == nil {
 					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
-						Ctx:        c,
-						ModelName:  modelRequest.Model,
-						TokenGroup: usingGroup,
-						Retry:      common.GetPointer(0),
+						Ctx:         c,
+						ModelName:   modelRequest.Model,
+						RequestPath: requestPath,
+						TokenGroup:  usingGroup,
+						Retry:       common.GetPointer(0),
 					})
 					if err != nil {
 						showGroup := usingGroup
@@ -175,6 +179,19 @@ func Distribute() func(c *gin.Context) {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
+}
+
+// channelSupportsRequestPath reports whether a channel can serve the request path.
+// Only Advanced Custom channels are path-checked; all other channel types pass.
+func channelSupportsRequestPath(channel *model.Channel, requestPath string) bool {
+	if channel == nil {
+		return false
+	}
+	if channel.Type != constant.ChannelTypeAdvancedCustom {
+		return true
+	}
+	config := channel.GetOtherSettings().AdvancedCustom
+	return config != nil && config.SupportsPath(requestPath)
 }
 
 // getModelFromRequest 从请求中读取模型信息

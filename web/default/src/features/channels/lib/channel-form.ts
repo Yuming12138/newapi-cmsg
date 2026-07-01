@@ -19,66 +19,103 @@ For commercial licensing, please contact support@quantumnous.com
 import { z } from 'zod'
 import { CHANNEL_STATUS, MODEL_FETCHABLE_TYPES } from '../constants'
 import type { Channel } from '../types'
+import {
+  CHANNEL_TYPE_ADVANCED_CUSTOM,
+  advancedCustomConfigUsesRelativeUpstreamPath,
+  parseAdvancedCustomConfig,
+  stringifyAdvancedCustomConfig,
+  validateAdvancedCustomConfig,
+} from './advanced-custom'
 
 // ============================================================================
 // Form Validation Schema
 // ============================================================================
 
-export const channelFormSchema = z.object({
-  name: z.string().min(1, 'Channel name is required'),
-  type: z.number().min(0, 'Channel type is required'),
-  base_url: z.string().optional(),
-  key: z.string(),
-  openai_organization: z.string().optional(),
-  models: z.string().min(1, 'At least one model is required'),
-  group: z.array(z.string()).min(1, 'At least one group is required'),
-  model_mapping: z.string().optional(),
-  priority: z.number().optional(),
-  weight: z.number().optional(),
-  test_model: z.string().optional(),
-  auto_ban: z.number().optional(),
-  status: z.number(),
-  status_code_mapping: z.string().optional(),
-  tag: z.string().optional(),
-  remark: z
-    .string()
-    .max(255, 'Remark must be less than 255 characters')
-    .optional(),
-  setting: z.string().optional(),
-  param_override: z.string().optional(),
-  header_override: z.string().optional(),
-  settings: z.string().optional(),
-  other: z.string().optional(),
-  // Multi-key options (not sent to backend directly)
-  multi_key_mode: z.enum(['single', 'batch', 'multi_to_single']).optional(),
-  multi_key_type: z.enum(['random', 'polling']).optional(),
-  batch_add_set_key_prefix_2_name: z.boolean().optional(),
-  key_mode: z.enum(['append', 'replace']).optional(), // For editing multi-key channels
-  // Channel extra settings (stored in setting JSON, not sent directly)
-  force_format: z.boolean().optional(),
-  thinking_to_content: z.boolean().optional(),
-  proxy: z.string().optional(),
-  pass_through_body_enabled: z.boolean().optional(),
-  system_prompt: z.string().optional(),
-  system_prompt_override: z.boolean().optional(),
-  // Type-specific settings (stored in settings JSON)
-  is_enterprise_account: z.boolean().optional(), // OpenRouter specific
-  vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
-  aws_key_type: z.enum(['ak_sk', 'api_key']).optional(), // AWS specific
-  azure_responses_version: z.string().optional(), // Azure specific
-  // Field passthrough controls (stored in settings JSON)
-  allow_service_tier: z.boolean().optional(), // OpenAI/Anthropic
-  disable_store: z.boolean().optional(), // OpenAI only
-  allow_safety_identifier: z.boolean().optional(), // OpenAI only
-  allow_include_obfuscation: z.boolean().optional(), // OpenAI: include usage obfuscation
-  allow_inference_geo: z.boolean().optional(), // OpenAI/Anthropic: inference geography
-  allow_speed: z.boolean().optional(), // Anthropic: speed mode control
-  claude_beta_query: z.boolean().optional(), // Anthropic: beta query passthrough
-  // Upstream model update settings (stored in settings JSON)
-  upstream_model_update_check_enabled: z.boolean().optional(),
-  upstream_model_update_auto_sync_enabled: z.boolean().optional(),
-  upstream_model_update_ignored_models: z.string().optional(),
-})
+export const channelFormSchema = z
+  .object({
+    name: z.string().min(1, 'Channel name is required'),
+    type: z.number().min(0, 'Channel type is required'),
+    base_url: z.string().optional(),
+    key: z.string(),
+    openai_organization: z.string().optional(),
+    models: z.string().min(1, 'At least one model is required'),
+    group: z.array(z.string()).min(1, 'At least one group is required'),
+    model_mapping: z.string().optional(),
+    priority: z.number().optional(),
+    weight: z.number().optional(),
+    test_model: z.string().optional(),
+    auto_ban: z.number().optional(),
+    status: z.number(),
+    status_code_mapping: z.string().optional(),
+    tag: z.string().optional(),
+    remark: z
+      .string()
+      .max(255, 'Remark must be less than 255 characters')
+      .optional(),
+    setting: z.string().optional(),
+    param_override: z.string().optional(),
+    header_override: z.string().optional(),
+    settings: z.string().optional(),
+    other: z.string().optional(),
+    // Multi-key options (not sent to backend directly)
+    multi_key_mode: z.enum(['single', 'batch', 'multi_to_single']).optional(),
+    multi_key_type: z.enum(['random', 'polling']).optional(),
+    batch_add_set_key_prefix_2_name: z.boolean().optional(),
+    key_mode: z.enum(['append', 'replace']).optional(), // For editing multi-key channels
+    // Channel extra settings (stored in setting JSON, not sent directly)
+    force_format: z.boolean().optional(),
+    thinking_to_content: z.boolean().optional(),
+    proxy: z.string().optional(),
+    pass_through_body_enabled: z.boolean().optional(),
+    system_prompt: z.string().optional(),
+    system_prompt_override: z.boolean().optional(),
+    // Type-specific settings (stored in settings JSON)
+    is_enterprise_account: z.boolean().optional(), // OpenRouter specific
+    vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
+    aws_key_type: z.enum(['ak_sk', 'api_key']).optional(), // AWS specific
+    azure_responses_version: z.string().optional(), // Azure specific
+    advanced_custom: z.string().optional(), // Advanced Custom route config
+    // Field passthrough controls (stored in settings JSON)
+    allow_service_tier: z.boolean().optional(), // OpenAI/Anthropic
+    disable_store: z.boolean().optional(), // OpenAI only
+    allow_safety_identifier: z.boolean().optional(), // OpenAI only
+    allow_include_obfuscation: z.boolean().optional(), // OpenAI: include usage obfuscation
+    allow_inference_geo: z.boolean().optional(), // OpenAI/Anthropic: inference geography
+    allow_speed: z.boolean().optional(), // Anthropic: speed mode control
+    claude_beta_query: z.boolean().optional(), // Anthropic: beta query passthrough
+    // Upstream model update settings (stored in settings JSON)
+    upstream_model_update_check_enabled: z.boolean().optional(),
+    upstream_model_update_auto_sync_enabled: z.boolean().optional(),
+    upstream_model_update_ignored_models: z.string().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.type !== CHANNEL_TYPE_ADVANCED_CUSTOM) return
+
+    const config = parseAdvancedCustomConfig(data.advanced_custom)
+    const validationError = validateAdvancedCustomConfig(config)
+    if (validationError) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['advanced_custom'],
+        message:
+          validationError.routeIndex !== undefined
+            ? `Route ${validationError.routeIndex + 1}: ${validationError.message}`
+            : validationError.message,
+      })
+    }
+
+    if (
+      advancedCustomConfigUsesRelativeUpstreamPath(config) &&
+      !data.base_url?.trim()
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['base_url'],
+        message:
+          'Base URL is required when Advanced Custom routes use relative upstream paths',
+      })
+    }
+  })
 
 export type ChannelFormValues = z.infer<typeof channelFormSchema>
 
@@ -124,6 +161,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   vertex_key_type: 'json',
   aws_key_type: 'ak_sk',
   azure_responses_version: '',
+  advanced_custom: '',
   // Field passthrough controls
   allow_service_tier: false,
   disable_store: false,
@@ -186,6 +224,7 @@ export function transformChannelToFormDefaults(
   let allowInferenceGeo = false
   let allowSpeed = false
   let claudeBetaQuery = false
+  let advancedCustom = ''
   let upstreamModelUpdateCheckEnabled = false
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
@@ -204,6 +243,9 @@ export function transformChannelToFormDefaults(
       allowInferenceGeo = parsed.allow_inference_geo === true
       allowSpeed = parsed.allow_speed === true
       claudeBetaQuery = parsed.claude_beta_query === true
+      if (parsed.advanced_custom) {
+        advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
+      }
       upstreamModelUpdateCheckEnabled =
         parsed.upstream_model_update_check_enabled === true
       upstreamModelUpdateAutoSyncEnabled =
@@ -252,6 +294,7 @@ export function transformChannelToFormDefaults(
     vertex_key_type: vertexKeyType,
     azure_responses_version: azureResponsesVersion,
     aws_key_type: awsKeyType,
+    advanced_custom: advancedCustom,
     allow_service_tier: allowServiceTier,
     disable_store: disableStore,
     allow_include_obfuscation: allowIncludeObfuscation,
@@ -384,6 +427,17 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     if (typeof settingsObj.upstream_model_update_last_check_time !== 'number') {
       settingsObj.upstream_model_update_last_check_time = 0
     }
+  }
+
+  if (formData.type === CHANNEL_TYPE_ADVANCED_CUSTOM) {
+    const advancedCustomConfig = parseAdvancedCustomConfig(
+      formData.advanced_custom
+    )
+    if (advancedCustomConfig) {
+      settingsObj.advanced_custom = advancedCustomConfig
+    }
+  } else if ('advanced_custom' in settingsObj) {
+    delete settingsObj.advanced_custom
   }
 
   return JSON.stringify(settingsObj)
