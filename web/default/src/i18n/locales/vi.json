@@ -638,6 +638,7 @@
     "Channel models": "Channel model",
     "Channel name is required": "Tên kênh là bắt buộc",
     "Channel test completed": "Kiểm tra kênh hoàn tất",
+    "Channel test mode": "Chế độ kiểm tra kênh",
     "Channel type is required": "Loại kênh là bắt buộc",
     "Channel updated successfully": "Kênh đã được cập nhật thành công",
     "Channel-specific settings (JSON format)": "Cài đặt dành riêng cho kênh (định dạng JSON)",
@@ -1759,7 +1760,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Các Dự Án Liên Quan",
     "footer.defaultCopyright": "Bản quyền được bảo lưu.",
-    "footer.new\u0061pi.projectAttributionSuffix": "Bản quyền được bảo lưu. Được thiết kế và phát triển bởi các cộng tác viên dự án.",
+    "footer.newapi.projectAttributionSuffix": "Bản quyền được bảo lưu. Được thiết kế và phát triển bởi các cộng tác viên dự án.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Đối với các kênh được thêm sau ngày 10 tháng 5 năm 2025, không cần loại bỏ \".\" khỏi tên mô hình trong quá trình triển khai",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Đối với các triển khai riêng tư, định dạng: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Buộc phản hồi JSON hợp lệ về cú pháp",
@@ -1933,6 +1934,7 @@
     "Hourly token usage by model over the past 24 hours": "Sử dụng token theo mô hình theo giờ trong 24 giờ qua",
     "hours": "giờ",
     "How client credentials are sent to the token endpoint": "Cách thông tin xác thực client được gửi đến endpoint token",
+    "How frequently the system checks auto-disabled channels for recovery": "Tần suất hệ thống kiểm tra các kênh bị tự động vô hiệu hóa để khôi phục",
     "How frequently the system tests all channels": "Tần suất hệ thống kiểm tra tất cả các kênh là bao nhiêu?",
     "How It Works": "Cách hoạt động",
     "How model mapping works": "Cách ánh xạ mô hình hoạt động",
@@ -2802,6 +2804,7 @@
     "Pass when key is missing": "Cho qua khi thiếu khóa",
     "Pass-Through": "Chuyển tiếp",
     "Pass-through Headers (comma-separated or JSON array)": "Header chuyển tiếp (phân cách bằng dấu phẩy hoặc mảng JSON)",
+    "Passive recovery only": "Chỉ khôi phục thụ động",
     "Passkey": "Khóa truy cập",
     "Passkey Authentication": "Xác thực khóa truy cập",
     "Passkey is not available in this browser": "Passkey không khả dụng trong trình duyệt này",
@@ -3436,6 +3439,8 @@
     "Scan this QR code with your authenticator app (Google Authenticator, Microsoft Authenticator, etc.)": "Quét mã QR này bằng ứng dụng xác thực của bạn (Google Authenticator, Microsoft Authenticator, v.v.)",
     "Scenario Templates": "Mẫu kịch bản",
     "Scheduled channel tests": "Kiểm tra kênh theo lịch trình",
+    "Scheduled full test": "Kiểm tra toàn bộ theo lịch",
+    "Scheduled full test probes non-manually-disabled channels; passive recovery only checks auto-disabled channels after real request failures.": "Kiểm tra toàn bộ theo lịch sẽ dò các kênh không bị vô hiệu hóa thủ công; khôi phục thụ động chỉ kiểm tra các kênh bị tự động vô hiệu hóa sau lỗi từ yêu cầu thực tế.",
     "scheduling controls": "điều khiển điều phối",
     "Science": "Khoa học",
     "Scope": "Phạm vi",
@@ -4444,5 +4449,8 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom"
-  }
+  },
+  "Test all available channels": "Kiểm tra tất cả kênh khả dụng",
+  "Only recover auto-disabled channels": "Chỉ khôi phục các kênh tự động bị tắt",
+  "Passive recovery mode skips healthy channels and only checks whether automatically disabled channels can be re-enabled": "Chế độ khôi phục thụ động bỏ qua các kênh khỏe mạnh và chỉ kiểm tra liệu các kênh tự động bị tắt có thể được bật lại hay không"
 }

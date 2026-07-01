@@ -274,6 +274,7 @@ export type OperationsSettings = {
   'cliproxy_cpa_quota_guard.min_remaining_percent_7d': number
   'monitor_setting.auto_test_channel_enabled': boolean
   'monitor_setting.auto_test_channel_minutes': number
+  'monitor_setting.channel_test_mode': 'scheduled_all' | 'passive_recovery'
   SMTPServer: string
   SMTPPort: string
   SMTPAccount: string
