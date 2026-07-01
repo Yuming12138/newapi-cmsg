@@ -119,3 +119,57 @@ func TestRankChannelsForSchedulingPrefersHealthierCandidate(t *testing.T) {
 	require.Equal(t, 1, ranked[0].Channel.Id)
 	require.Greater(t, ranked[0].Score, ranked[1].Score)
 }
+
+func TestChannelRuntimeStatsSnapshotTracksPassiveAttempts(t *testing.T) {
+	resetChannelSchedulerRuntimeStateForTest()
+	defer resetChannelSchedulerRuntimeStateForTest()
+
+	priority := int64(10)
+	weight := uint(50)
+	channel := &Channel{Id: 11, Status: common.ChannelStatusEnabled, Priority: &priority, Weight: &weight}
+
+	BeginChannelAttempt(channel.Id)
+	FinishChannelAttempt(channel.Id, true, 200*time.Millisecond, 0)
+	BeginChannelAttempt(channel.Id)
+	FinishChannelAttempt(channel.Id, false, 900*time.Millisecond, http.StatusBadGateway)
+
+	snapshot := GetChannelRuntimeStatsSnapshot(channel)
+	require.Equal(t, 11, snapshot.ChannelID)
+	require.Equal(t, int64(1), snapshot.SuccessCount)
+	require.Equal(t, int64(1), snapshot.FailureCount)
+	require.Equal(t, int64(2), snapshot.AttemptCount)
+	require.Equal(t, http.StatusBadGateway, snapshot.LastStatusCode)
+	require.True(t, snapshot.HasLatencyEWMA)
+	require.True(t, snapshot.HasErrorEWMA)
+	require.InDelta(t, 0.5, snapshot.FailureRate, 0.001)
+	require.Greater(t, snapshot.LatencyEWMAMs, 0.0)
+	require.Greater(t, snapshot.Score, 0.0)
+}
+
+func TestChannelRuntimeStatsSnapshotsFiltersIdleButKeepsTemporaryUnschedulable(t *testing.T) {
+	resetChannelSchedulerRuntimeStateForTest()
+	defer func() {
+		clearChannelTemporaryUnschedulableCacheForTest(21, 22)
+		resetChannelSchedulerRuntimeStateForTest()
+	}()
+
+	priority := int64(10)
+	weight := uint(50)
+	active := &Channel{Id: 21, Status: common.ChannelStatusEnabled, Priority: &priority, Weight: &weight}
+	blocked := &Channel{Id: 22, Status: common.ChannelStatusEnabled, Priority: &priority, Weight: &weight}
+
+	BeginChannelAttempt(active.Id)
+	FinishChannelAttempt(active.Id, true, 100*time.Millisecond, 0)
+	require.NoError(t, MarkChannelTemporarilyUnschedulable(blocked.Id, time.Minute, ChannelTemporaryUnschedulable{
+		UntilUnix:  time.Now().Add(time.Minute).Unix(),
+		Reason:     "rate_limit",
+		StatusCode: http.StatusTooManyRequests,
+	}))
+
+	snapshots := GetChannelRuntimeStatsSnapshots([]*Channel{active, blocked}, false)
+	require.Len(t, snapshots, 2)
+	require.Equal(t, 21, snapshots[0].ChannelID)
+	require.Equal(t, 22, snapshots[1].ChannelID)
+	require.True(t, snapshots[1].TemporaryUnschedulableNow)
+	require.Equal(t, "rate_limit", snapshots[1].TemporaryUnschedulable.Reason)
+}

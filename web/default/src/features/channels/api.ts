@@ -25,6 +25,7 @@ import type {
   BatchSetTagParams,
   Channel,
   ChannelBalanceResponse,
+  ChannelSchedulerRuntimeResponse,
   ChannelTestResponse,
   CopyChannelParams,
   CopyChannelResponse,
@@ -202,6 +203,18 @@ export async function fetchUpstreamModels(
   id: number
 ): Promise<FetchModelsResponse> {
   const res = await api.get(`/api/channel/fetch_models/${id}`)
+  return res.data
+}
+
+export async function getChannelSchedulerRuntime(params?: {
+  include_idle?: boolean
+  only_unhealthy?: boolean
+  channel_id?: number
+}): Promise<ChannelSchedulerRuntimeResponse> {
+  const res = await api.get('/api/channel/scheduler/runtime', {
+    params,
+    disableDuplicate: true,
+  } as ExtendedApiConfig)
   return res.data
 }
 

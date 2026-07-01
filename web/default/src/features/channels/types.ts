@@ -162,6 +162,49 @@ export interface FetchModelsResponse {
   data?: string[]
 }
 
+export interface ChannelTemporaryUnschedulable {
+  until_unix: number
+  reason?: string
+  status_code?: number
+  error_code?: string
+}
+
+export interface ChannelSchedulerRuntimeItem {
+  channel_id: number
+  channel_name: string
+  channel_type: number
+  channel_status: number
+  group: string
+  tag?: string
+  priority: number
+  weight: number
+  response_time: number
+  in_flight: number
+  latency_ewma_ms: number
+  error_ewma: number
+  has_latency_ewma: boolean
+  has_error_ewma: boolean
+  last_status_code: number
+  last_failure_unix: number
+  last_success_unix: number
+  success_count: number
+  failure_count: number
+  attempt_count: number
+  failure_rate: number
+  score: number
+  temporary_unschedulable?: ChannelTemporaryUnschedulable
+  temporary_unschedulable_now: boolean
+}
+
+export interface ChannelSchedulerRuntimeResponse {
+  success: boolean
+  message?: string
+  data?: {
+    items: ChannelSchedulerRuntimeItem[]
+    total: number
+  }
+}
+
 export interface CopyChannelResponse {
   success: boolean
   message?: string
@@ -213,12 +256,7 @@ export interface MultiKeyStatusResponse {
 // ============================================================================
 
 export type ChannelSortBy =
-  | 'id'
-  | 'name'
-  | 'priority'
-  | 'balance'
-  | 'response_time'
-  | 'test_time'
+  'id' | 'name' | 'priority' | 'balance' | 'response_time' | 'test_time'
 
 export type ChannelSortOrder = 'asc' | 'desc'
 

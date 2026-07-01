@@ -61,6 +61,25 @@ type channelRuntimeStats struct {
 	FailureCount    int64
 }
 
+type ChannelRuntimeStatsSnapshot struct {
+	ChannelID                 int                            `json:"channel_id"`
+	InFlight                  int                            `json:"in_flight"`
+	LatencyEWMAMs             float64                        `json:"latency_ewma_ms"`
+	ErrorEWMA                 float64                        `json:"error_ewma"`
+	HasLatencyEWMA            bool                           `json:"has_latency_ewma"`
+	HasErrorEWMA              bool                           `json:"has_error_ewma"`
+	LastStatusCode            int                            `json:"last_status_code"`
+	LastFailureUnix           int64                          `json:"last_failure_unix"`
+	LastSuccessUnix           int64                          `json:"last_success_unix"`
+	SuccessCount              int64                          `json:"success_count"`
+	FailureCount              int64                          `json:"failure_count"`
+	AttemptCount              int64                          `json:"attempt_count"`
+	FailureRate               float64                        `json:"failure_rate"`
+	Score                     float64                        `json:"score,omitempty"`
+	TemporaryUnschedulable    *ChannelTemporaryUnschedulable `json:"temporary_unschedulable,omitempty"`
+	TemporaryUnschedulableNow bool                           `json:"temporary_unschedulable_now"`
+}
+
 type scoredChannelCandidate struct {
 	Channel *Channel
 	Score   float64
@@ -186,6 +205,44 @@ func FinishChannelAttempt(channelID int, success bool, latency time.Duration, st
 	stats.LastStatusCode = statusCode
 	stats.LastFailureUnix = time.Now().Unix()
 	stats.FailureCount++
+}
+
+func GetChannelRuntimeStatsSnapshot(channel *Channel) ChannelRuntimeStatsSnapshot {
+	channelID := 0
+	if channel != nil {
+		channelID = channel.Id
+	}
+	stats := snapshotChannelRuntimeStats(channelID)
+	snapshot := buildChannelRuntimeStatsSnapshot(channelID, stats)
+	if channel != nil {
+		score := channelSelectionScore(channel)
+		if !math.IsNaN(score) && !math.IsInf(score, 0) && score > 0 {
+			snapshot.Score = score
+		}
+	}
+	if blocked, state := IsChannelTemporarilyUnschedulable(channelID); blocked && state != nil {
+		snapshot.TemporaryUnschedulable = state
+		snapshot.TemporaryUnschedulableNow = true
+	}
+	return snapshot
+}
+
+func GetChannelRuntimeStatsSnapshots(channels []*Channel, includeIdle bool) []ChannelRuntimeStatsSnapshot {
+	if len(channels) == 0 {
+		return nil
+	}
+	snapshots := make([]ChannelRuntimeStatsSnapshot, 0, len(channels))
+	for _, channel := range channels {
+		if channel == nil {
+			continue
+		}
+		snapshot := GetChannelRuntimeStatsSnapshot(channel)
+		if !includeIdle && snapshot.AttemptCount == 0 && snapshot.InFlight == 0 && !snapshot.TemporaryUnschedulableNow {
+			continue
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	return snapshots
 }
 
 func channelSelectionScore(channel *Channel) float64 {
@@ -332,6 +389,29 @@ func snapshotChannelRuntimeStats(channelID int) channelRuntimeStats {
 		return *stats
 	}
 	return channelRuntimeStats{}
+}
+
+func buildChannelRuntimeStatsSnapshot(channelID int, stats channelRuntimeStats) ChannelRuntimeStatsSnapshot {
+	attempts := stats.SuccessCount + stats.FailureCount
+	failureRate := 0.0
+	if attempts > 0 {
+		failureRate = float64(stats.FailureCount) / float64(attempts)
+	}
+	return ChannelRuntimeStatsSnapshot{
+		ChannelID:       channelID,
+		InFlight:        stats.InFlight,
+		LatencyEWMAMs:   stats.LatencyEWMA,
+		ErrorEWMA:       stats.ErrorEWMA,
+		HasLatencyEWMA:  stats.HasLatencyEWMA,
+		HasErrorEWMA:    stats.HasErrorEWMA,
+		LastStatusCode:  stats.LastStatusCode,
+		LastFailureUnix: stats.LastFailureUnix,
+		LastSuccessUnix: stats.LastSuccessUnix,
+		SuccessCount:    stats.SuccessCount,
+		FailureCount:    stats.FailureCount,
+		AttemptCount:    attempts,
+		FailureRate:     failureRate,
+	}
 }
 
 func nextEWMA(current float64, sample float64, alpha float64, initialized bool) float64 {

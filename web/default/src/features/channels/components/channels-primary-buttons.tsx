@@ -29,6 +29,7 @@ import {
   SortAsc,
   RefreshCw,
   ArrowUpFromLine,
+  Activity,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
@@ -178,6 +179,15 @@ export function ChannelsPrimaryButtons() {
               {t('Apply All Upstream Updates')}
               <DropdownMenuShortcut>
                 <ArrowUpFromLine className='h-4 w-4' />
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+
+            <DropdownMenuSeparator />
+
+            <DropdownMenuItem onClick={() => setOpen('routing-runtime')}>
+              {t('Routing Monitor')}
+              <DropdownMenuShortcut>
+                <Activity className='h-4 w-4' />
               </DropdownMenuShortcut>
             </DropdownMenuItem>
 
