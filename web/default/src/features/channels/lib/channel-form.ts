@@ -31,6 +31,57 @@ import {
 // Form Validation Schema
 // ============================================================================
 
+function parseOptionalJson(value: string | undefined): unknown {
+  if (!value?.trim()) return undefined
+  return JSON.parse(value)
+}
+
+function isJsonObjectValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isOptionalJsonObject(value: string | undefined): boolean {
+  try {
+    const parsed = parseOptionalJson(value)
+    return parsed === undefined || isJsonObjectValue(parsed)
+  } catch {
+    return false
+  }
+}
+
+function isOptionalModelMapping(value: string | undefined): boolean {
+  try {
+    const parsed = parseOptionalJson(value)
+    if (parsed === undefined) return true
+    if (!isJsonObjectValue(parsed)) return false
+    return Object.values(parsed).every((item) => typeof item === 'string')
+  } catch {
+    return false
+  }
+}
+
+function isOptionalStatusCodeMapping(value: string | undefined): boolean {
+  try {
+    const parsed = parseOptionalJson(value)
+    if (parsed === undefined) return true
+    if (!isJsonObjectValue(parsed)) return false
+    return Object.entries(parsed).every(([from, to]) => {
+      const fromCode = Number(from)
+      const toCode = Number(to)
+      return (
+        Number.isInteger(fromCode) &&
+        Number.isInteger(toCode) &&
+        fromCode >= 100 &&
+        fromCode <= 599 &&
+        toCode >= 100 &&
+        toCode <= 599
+      )
+    })
+  } catch {
+    return false
+  }
+}
+
 export const channelFormSchema = z
   .object({
     name: z.string().min(1, 'Channel name is required'),
@@ -40,22 +91,46 @@ export const channelFormSchema = z
     openai_organization: z.string().optional(),
     models: z.string().min(1, 'At least one model is required'),
     group: z.array(z.string()).min(1, 'At least one group is required'),
-    model_mapping: z.string().optional(),
+    model_mapping: z
+      .string()
+      .optional()
+      .refine(
+        isOptionalModelMapping,
+        'Model mapping must be a JSON object with string values'
+      ),
     priority: z.number().optional(),
     weight: z.number().optional(),
     test_model: z.string().optional(),
     auto_ban: z.number().optional(),
     status: z.number(),
-    status_code_mapping: z.string().optional(),
+    status_code_mapping: z
+      .string()
+      .optional()
+      .refine(
+        isOptionalStatusCodeMapping,
+        'Status code mapping must use valid HTTP status codes'
+      ),
     tag: z.string().optional(),
     remark: z
       .string()
       .max(255, 'Remark must be less than 255 characters')
       .optional(),
-    setting: z.string().optional(),
-    param_override: z.string().optional(),
-    header_override: z.string().optional(),
-    settings: z.string().optional(),
+    setting: z
+      .string()
+      .optional()
+      .refine(isOptionalJsonObject, 'Invalid JSON format'),
+    param_override: z
+      .string()
+      .optional()
+      .refine(isOptionalJsonObject, 'Invalid JSON format'),
+    header_override: z
+      .string()
+      .optional()
+      .refine(isOptionalJsonObject, 'Invalid JSON format'),
+    settings: z
+      .string()
+      .optional()
+      .refine(isOptionalJsonObject, 'Invalid JSON format'),
     other: z.string().optional(),
     // Multi-key options (not sent to backend directly)
     multi_key_mode: z.enum(['single', 'batch', 'multi_to_single']).optional(),

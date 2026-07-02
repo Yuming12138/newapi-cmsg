@@ -24,7 +24,7 @@ import {
   useCallback,
   useRef,
 } from 'react'
-import { useForm } from 'react-hook-form'
+import { type SubmitErrorHandler, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -147,6 +147,7 @@ import {
   findMissingModelsInMapping,
   validateModelMappingJson,
   getAdvancedCustomStats,
+  hasAdvancedSettingsErrors,
 } from '../../lib'
 import {
   collectInvalidStatusCodeEntries,
@@ -230,7 +231,6 @@ function readAdvancedSettingsPreference(): boolean {
 
 function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
   return Boolean(
-    values.model_mapping?.trim() ||
     values.param_override?.trim() ||
     values.header_override?.trim() ||
     values.advanced_custom?.trim() ||
@@ -1124,6 +1124,16 @@ export function ChannelMutateDrawer({
     }
   }, [])
 
+  const onInvalid: SubmitErrorHandler<ChannelFormValues> = useCallback(
+    (errors) => {
+      if (hasAdvancedSettingsErrors(errors)) {
+        handleAdvancedSettingsOpenChange(true)
+      }
+      toast.error(t('Please fix the highlighted fields before saving'))
+    },
+    [handleAdvancedSettingsOpenChange, t]
+  )
+
   return (
     <>
       <Sheet open={open} onOpenChange={handleOpenChange}>
@@ -1154,7 +1164,7 @@ export function ChannelMutateDrawer({
           <Form {...form}>
             <form
               id='channel-form'
-              onSubmit={form.handleSubmit(onSubmit)}
+              onSubmit={form.handleSubmit(onSubmit, onInvalid)}
               className='flex-1 space-y-4 overflow-y-auto px-3 py-3 pb-4 sm:space-y-5 sm:px-4'
             >
               {/* ── Basic Information ── */}
@@ -3347,30 +3357,30 @@ export function ChannelMutateDrawer({
                               </FormItem>
                             )}
                           />
-                        <FormField
-                          control={form.control}
-                          name='disable_task_polling_sleep'
-                          render={({ field }) => (
-                            <FormItem className='flex items-center justify-between px-4 py-3'>
-                              <div className='space-y-0.5'>
-                                <FormLabel>
-                                  {t('Skip async task polling delay')}
-                                </FormLabel>
-                                <FormDescription>
-                                  {t(
-                                    'Do not wait one second between polling async tasks for this channel'
-                                  )}
-                                </FormDescription>
-                              </div>
-                              <FormControl>
-                                <Switch
-                                  checked={field.value}
-                                  onCheckedChange={field.onChange}
-                                />
-                              </FormControl>
-                            </FormItem>
-                          )}
-                        />
+                          <FormField
+                            control={form.control}
+                            name='disable_task_polling_sleep'
+                            render={({ field }) => (
+                              <FormItem className='flex items-center justify-between px-4 py-3'>
+                                <div className='space-y-0.5'>
+                                  <FormLabel>
+                                    {t('Skip async task polling delay')}
+                                  </FormLabel>
+                                  <FormDescription>
+                                    {t(
+                                      'Do not wait one second between polling async tasks for this channel'
+                                    )}
+                                  </FormDescription>
+                                </div>
+                                <FormControl>
+                                  <Switch
+                                    checked={field.value}
+                                    onCheckedChange={field.onChange}
+                                  />
+                                </FormControl>
+                              </FormItem>
+                            )}
+                          />
 
                           <FormField
                             control={form.control}
