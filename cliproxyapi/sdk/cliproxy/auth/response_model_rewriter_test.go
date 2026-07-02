@@ -1,8 +1,11 @@
 package auth
 
 import (
+	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/tidwall/gjson"
 
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
@@ -202,5 +205,69 @@ func TestRewriteForceMappedStreamChunk_NoRewriteWhenRewriterNil(t *testing.T) {
 	got := rewriteForceMappedStreamChunk(nil, chunk)
 	if string(got) != string(chunk) {
 		t.Fatalf("chunk = %q, want unchanged upstream payload", got)
+	}
+}
+
+func TestNormalizeGluedSSEEvents_SplitsValidGlueOnly(t *testing.T) {
+	glued := []byte("event: response.created\ndata: {\"type\":\"response.created\"}event: response.completed\ndata: {\"type\":\"response.completed\"}")
+	got := normalizeGluedSSEEvents(glued)
+	if !bytes.Contains(got, []byte("}\n\nevent:")) {
+		t.Fatalf("expected glued frame split, got %q", got)
+	}
+
+	inside := []byte("event: response.output_text.delta\ndata: {\"type\":\"delta\",\"text\":\"literal }event: inside string\"}")
+	gotInside := string(normalizeGluedSSEEvents(inside))
+	if strings.Contains(gotInside, "}\n\nevent:") {
+		t.Fatalf("should not split inside JSON string, got %q", gotInside)
+	}
+	for _, line := range bytes.Split([]byte(gotInside), []byte("\n")) {
+		if bytes.HasPrefix(line, []byte("data:")) {
+			_, jd, ok := extractSSEDataLine(line)
+			if !ok || !gjson.ValidBytes(jd) {
+				t.Fatalf("corrupted JSON after normalize: %q", gotInside)
+			}
+		}
+	}
+}
+
+func TestNormalizeGluedSSEEvents_SplitsCodexDataGlueOnly(t *testing.T) {
+	glued := []byte(`data: {"type":"response.created"}data: {"type":"response.completed"}`)
+	got := normalizeGluedSSEEvents(glued)
+	if !bytes.Contains(got, []byte("}\ndata:")) {
+		t.Fatalf("expected codex glued split, got %q", got)
+	}
+
+	inside := []byte(`data: {"type":"response.output_text.delta","delta":"literal }data: inside"}`)
+	gotInside := string(normalizeGluedSSEEvents(inside))
+	if strings.Contains(gotInside, "}\ndata:") {
+		t.Fatalf("should not split inside JSON string, got %q", gotInside)
+	}
+	_, jd, ok := extractSSEDataLine(bytes.TrimSpace([]byte(gotInside)))
+	if !ok || !gjson.ValidBytes(jd) {
+		t.Fatalf("corrupted JSON after normalize: %q", gotInside)
+	}
+}
+
+func TestRewriteForceMappedStreamChunk_CodexDataLinesWithoutNewlines_FinishParsesCompleted(t *testing.T) {
+	rewriter := NewStreamRewriter(StreamRewriteOptions{RewriteModel: "gpt-5.4-fast"})
+	lines := [][]byte{
+		[]byte(`data: {"type":"response.created","response":{"model":"gpt-5.4"}}`),
+		[]byte(`data: {"type":"response.in_progress","response":{"model":"gpt-5.4"}}`),
+		[]byte(`data: {"type":"response.completed","response":{"model":"gpt-5.4","output":[]}}`),
+	}
+	var out []byte
+	for _, line := range lines {
+		if rewritten := rewriteForceMappedStreamChunk(rewriter, line); len(rewritten) > 0 {
+			out = append(out, rewritten...)
+		}
+	}
+	if tail := finishForceMappedStreamChunks(rewriter); len(tail) > 0 {
+		out = append(out, tail...)
+	}
+	if !bytes.Contains(out, []byte("response.completed")) {
+		t.Fatalf("missing response.completed; out=%q", out)
+	}
+	if !bytes.Contains(out, []byte("gpt-5.4-fast")) {
+		t.Fatalf("missing rewritten alias; out=%q", out)
 	}
 }
