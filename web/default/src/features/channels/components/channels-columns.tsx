@@ -472,6 +472,8 @@ function formatCliproxyCPASummary(meta: CliproxyCPAQuotaMeta): string {
  * Render limited items with "and X more" indicator
  */
 const SENSITIVE_MASK = '••••'
+const CPA_TOOLTIP_CONTENT_CLASS =
+  'max-w-none border border-border bg-background p-3 text-foreground shadow-xl'
 
 function renderLimitedItems(
   items: React.ReactNode[],
@@ -572,17 +574,22 @@ function CliproxyCPAQuotaProgress({
   return (
     <div className='space-y-1'>
       <div className='flex items-center justify-between gap-2 text-[11px] leading-none'>
-        <span className='text-muted-foreground font-medium'>{label}</span>
+        <span className='text-foreground/75 font-medium'>{label}</span>
         <span className='flex shrink-0 items-center gap-1 tabular-nums'>
-          <span className='font-semibold'>{formatPercent(percent)}</span>
-          <span className='text-muted-foreground'>
+          <span className='text-foreground font-semibold'>
+            {formatPercent(percent)}
+          </span>
+          <span className='text-foreground/70'>
             {resetAt != null ? formatCompactTimestamp(resetAt) : '-'}
           </span>
         </span>
       </div>
       <Progress
         value={clampPercent(percent)}
-        className={cn('h-1.5', getCliproxyCPAProgressColor(percent))}
+        className={cn(
+          'h-1.5 [&_[data-slot=progress-track]]:bg-foreground/20',
+          getCliproxyCPAProgressColor(percent)
+        )}
       />
     </div>
   )
@@ -602,7 +609,7 @@ function CliproxyCPABucketDetails({
     Math.abs(bucket.balanceUnits - bucket.usableBalanceUnits) > 0.000001
 
   return (
-    <div className='bg-muted/30 min-w-[260px] space-y-2 rounded-md border p-2'>
+    <div className='bg-background text-foreground border-border min-w-[280px] space-y-2 rounded-md border p-2 shadow-sm'>
       <div className='flex items-start justify-between gap-3'>
         <div className='min-w-0'>
           <p className='truncate text-xs font-semibold'>
@@ -610,7 +617,7 @@ function CliproxyCPABucketDetails({
             {count ? ` (${count})` : ''}
           </p>
           {bucket.canExhaust === false && (
-            <p className='text-muted-foreground text-[11px]'>
+            <p className='text-foreground/70 text-[11px]'>
               reserve 5h {formatPercent(bucket.reserveFiveHourPercent)} / 7d{' '}
               {formatPercent(bucket.reserveWeeklyPercent)}
             </p>
@@ -620,11 +627,11 @@ function CliproxyCPABucketDetails({
           <p className='text-xs font-semibold'>
             {formatCliproxyCPAUnits(bucket.usableBalanceUnits)}
           </p>
-          <p className='text-muted-foreground text-[11px]'>usable</p>
+          <p className='text-foreground/70 text-[11px]'>usable</p>
         </div>
       </div>
       {rawBalanceVisible && (
-        <div className='text-muted-foreground flex justify-between gap-2 text-[11px]'>
+        <div className='text-foreground/70 flex justify-between gap-2 text-[11px]'>
           <span>raw remaining</span>
           <span className='tabular-nums'>
             {formatCliproxyCPAUnits(bucket.balanceUnits)}
@@ -647,22 +654,22 @@ function CliproxyCPABucketDetails({
 
 function CliproxyCPAQuotaDetails({ meta }: { meta: CliproxyCPAQuotaMeta }) {
   return (
-    <div className='w-[320px] max-w-[calc(100vw-2rem)] space-y-2'>
+    <div className='text-foreground w-[360px] max-w-[calc(100vw-2rem)] space-y-2'>
       <div className='grid grid-cols-3 gap-2'>
-        <div className='bg-muted/30 rounded-md border p-2'>
-          <p className='text-muted-foreground text-[11px]'>CPA usable</p>
+        <div className='bg-background border-border rounded-md border p-2 shadow-sm'>
+          <p className='text-foreground/70 text-[11px]'>CPA usable</p>
           <p className='text-sm font-semibold tabular-nums'>
             {formatCliproxyCPAUnits(meta.usableBalanceUnits)}
           </p>
         </div>
-        <div className='bg-muted/30 rounded-md border p-2'>
-          <p className='text-muted-foreground text-[11px]'>Total</p>
+        <div className='bg-background border-border rounded-md border p-2 shadow-sm'>
+          <p className='text-foreground/70 text-[11px]'>Total</p>
           <p className='text-sm font-semibold tabular-nums'>
             {formatCliproxyCPAUnits(meta.totalBalanceUnits)}
           </p>
         </div>
-        <div className='bg-muted/30 rounded-md border p-2'>
-          <p className='text-muted-foreground text-[11px]'>Accounts</p>
+        <div className='bg-background border-border rounded-md border p-2 shadow-sm'>
+          <p className='text-foreground/70 text-[11px]'>Accounts</p>
           <p className='text-sm font-semibold tabular-nums'>
             {meta.accountCount == null
               ? '-'
@@ -683,9 +690,9 @@ function CliproxyCPAQuotaDetails({ meta }: { meta: CliproxyCPAQuotaMeta }) {
           ))}
         </div>
       ) : (
-        <div className='bg-muted/30 space-y-2 rounded-md border p-2'>
+        <div className='bg-background border-border space-y-2 rounded-md border p-2 shadow-sm'>
           {meta.guardMode !== 'low_watermark' && (
-            <div className='text-muted-foreground flex justify-between gap-2 text-[11px]'>
+            <div className='text-foreground/70 flex justify-between gap-2 text-[11px]'>
               <span>CPA share</span>
               <span className='tabular-nums'>
                 {formatPercent(meta.remainingSharePercent)} /{' '}
@@ -705,7 +712,7 @@ function CliproxyCPAQuotaDetails({ meta }: { meta: CliproxyCPAQuotaMeta }) {
           />
         </div>
       )}
-      <div className='text-muted-foreground flex justify-between gap-2 text-[11px]'>
+      <div className='text-foreground/70 flex justify-between gap-2 text-[11px]'>
         <span>Next reset</span>
         <span className='tabular-nums'>
           {meta.nextResetAt != null
@@ -714,7 +721,7 @@ function CliproxyCPAQuotaDetails({ meta }: { meta: CliproxyCPAQuotaMeta }) {
         </span>
       </div>
       {meta.updatedAt && (
-        <div className='text-muted-foreground flex justify-between gap-2 text-[11px]'>
+        <div className='text-foreground/70 flex justify-between gap-2 text-[11px]'>
           <span>Updated</span>
           <span className='tabular-nums'>
             {formatCompactTimestamp(meta.updatedAt)}
@@ -956,7 +963,11 @@ function BalanceCell({ channel }: { channel: Channel }) {
                     : remainingDisplay
                 : SENSITIVE_MASK}
             </TooltipTrigger>
-            <TooltipContent>
+            <TooltipContent
+              className={
+                cliproxyCPAQuota ? CPA_TOOLTIP_CONTENT_CLASS : undefined
+              }
+            >
               <p>
                 {sensitiveVisible
                   ? channel.type === 57
@@ -982,7 +993,7 @@ function BalanceCell({ channel }: { channel: Channel }) {
             >
               {formatCliproxyCPASummary(cliproxyCPAQuota)}
             </TooltipTrigger>
-            <TooltipContent>
+            <TooltipContent className={CPA_TOOLTIP_CONTENT_CLASS}>
               <CliproxyCPAQuotaDetails meta={cliproxyCPAQuota} />
             </TooltipContent>
           </Tooltip>
