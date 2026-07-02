@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
@@ -461,6 +462,51 @@ func TestInstallPluginFromStoreUsesRequestedThirdPartySource(t *testing.T) {
 	}
 }
 
+func TestInstallPluginFromStoreTimesOutStalledDownload(t *testing.T) {
+	t.Parallel()
+
+	archiveName := "sample-provider_0.1.0_" + runtime.GOOS + "_" + runtime.GOARCH + ".zip"
+	downloadURL := "https://downloads.example/" + archiveName
+	h := &Handler{
+		cfg: &config.Config{
+			Plugins: config.PluginsConfig{
+				Enabled: false,
+				Dir:     t.TempDir(),
+			},
+		},
+		configFilePath:         writeTestConfigFile(t),
+		pluginStoreRegistryURL: "https://registry.example/registry.json",
+		pluginStoreHTTPClient: blockingPluginStoreHTTPClient{
+			responses: fakePluginStoreHTTPClient{
+				"https://registry.example/registry.json": registryJSON(t),
+				"https://api.github.com/repos/author-name/cliproxy-sample-provider-plugin/releases/latest": []byte(`{
+					"tag_name": "v0.1.0",
+					"assets": [
+						{"name": "` + archiveName + `", "browser_download_url": "` + downloadURL + `"},
+						{"name": "checksums.txt", "browser_download_url": "https://downloads.example/checksums.txt"}
+					]
+				}`),
+				"https://downloads.example/checksums.txt": []byte("deadbeef  " + archiveName + "\n"),
+			},
+			blockURL: downloadURL,
+		},
+	}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Params = gin.Params{{Key: "id", Value: "sample-provider"}}
+	c.Request = httptest.NewRequest(http.MethodPost, "/v0/management/plugin-store/sample-provider/install", nil)
+
+	h.installPluginFromStoreWithTimeout(c, runtime.GOOS, runtime.GOARCH, time.Nanosecond)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusGatewayTimeout, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "plugin_install_timeout") {
+		t.Fatalf("body = %s, want plugin_install_timeout", rec.Body.String())
+	}
+}
+
 func TestInstallPluginFromStoreRequiresSourceForDuplicateIDs(t *testing.T) {
 	t.Parallel()
 
@@ -644,6 +690,19 @@ func (c fakePluginStoreHTTPClient) Do(req *http.Request) (*http.Response, error)
 		Header:     make(http.Header),
 		Request:    req,
 	}, nil
+}
+
+type blockingPluginStoreHTTPClient struct {
+	responses fakePluginStoreHTTPClient
+	blockURL  string
+}
+
+func (c blockingPluginStoreHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	if req.URL.String() == c.blockURL {
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	}
+	return c.responses.Do(req)
 }
 
 type countingPluginStoreHTTPClient struct {

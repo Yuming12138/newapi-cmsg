@@ -23,6 +23,10 @@ import (
 )
 
 const (
+	// defaultPluginStoreInstallTimeout bounds plugin store install downloads so
+	// a stalled registry, release, or asset request does not hold the management
+	// request forever.
+	defaultPluginStoreInstallTimeout = 5 * time.Minute
 	// pluginReleaseCacheTTL bounds how long a resolved latest release version is
 	// reused before the GitHub API is queried again.
 	pluginReleaseCacheTTL = 10 * time.Minute
@@ -184,11 +188,20 @@ func (h *Handler) InstallPluginFromStore(c *gin.Context) {
 }
 
 func (h *Handler) installPluginFromStore(c *gin.Context, goos, goarch string) {
+	h.installPluginFromStoreWithTimeout(c, goos, goarch, defaultPluginStoreInstallTimeout)
+}
+
+func (h *Handler) installPluginFromStoreWithTimeout(c *gin.Context, goos, goarch string, timeout time.Duration) {
 	id, okID := pluginIDFromRequest(c)
 	if !okID {
 		return
 	}
 	installCtx := c.Request.Context()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		installCtx, cancel = context.WithTimeout(installCtx, timeout)
+		defer cancel()
+	}
 	pluginsEnabled, pluginsDir, proxyURL, sourceConfigs, _, host := h.pluginStoreSnapshot()
 	sources, errSources := h.pluginStoreSources(sourceConfigs)
 	if errSources != nil {
@@ -214,6 +227,10 @@ func (h *Handler) installPluginFromStore(c *gin.Context, goos, goarch string) {
 				"message":          "loaded plugin cannot be overwritten while the server is running",
 				"restart_required": true,
 			})
+			return
+		}
+		if pluginStoreRequestTimedOut(installCtx, errInstall) {
+			c.JSON(http.StatusGatewayTimeout, gin.H{"error": "plugin_install_timeout", "message": "plugin install timed out"})
 			return
 		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": "plugin_install_failed", "message": errInstall.Error()})
@@ -282,6 +299,13 @@ func (h *Handler) installPluginFromStore(c *gin.Context, goos, goarch string) {
 		PluginsEnabled:  pluginsEnabled,
 		RestartRequired: restartRequired,
 	})
+}
+
+func pluginStoreRequestTimedOut(ctx context.Context, err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	return ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)
 }
 
 // enablePluginConfigLocked sets plugins.configs.<id>.enabled to true while preserving
