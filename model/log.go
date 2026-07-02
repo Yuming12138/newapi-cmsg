@@ -364,7 +364,15 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
 	if common.DataExportEnabled {
-		LogQuotaData(userId, username, params.ModelName, params.Quota, createdAt, params.PromptTokens+params.CompletionTokens)
+		LogQuotaData(QuotaDataLogParams{
+			UserID:    userId,
+			Username:  username,
+			ModelName: params.ModelName,
+			Quota:     params.Quota,
+			CreatedAt: createdAt,
+			TokenUsed: params.PromptTokens + params.CompletionTokens,
+			NodeName:  common.NodeName,
+		})
 	}
 }
 
@@ -423,7 +431,14 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		common.SysLog("failed to record task billing log: " + err.Error())
 	}
 	if params.LogType == LogTypeConsume && common.DataExportEnabled {
-		LogQuotaData(params.UserId, username, params.ModelName, params.Quota, log.CreatedAt, 0)
+		LogQuotaData(QuotaDataLogParams{
+			UserID:    params.UserId,
+			Username:  username,
+			ModelName: params.ModelName,
+			Quota:     params.Quota,
+			CreatedAt: log.CreatedAt,
+			NodeName:  nodeName,
+		})
 	}
 }
 
