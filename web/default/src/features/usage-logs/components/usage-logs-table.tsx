@@ -35,6 +35,7 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { useIsAdmin } from '@/hooks/use-admin'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
+import { useColumnVisibilityStorage } from '@/hooks/use-column-visibility-storage'
 import { TableCell, TableRow } from '@/components/ui/table'
 import { DataTablePage } from '@/components/data-table'
 import { DEFAULT_LOGS_DATA, LOG_TYPE_ENUM } from '../constants'
@@ -49,6 +50,13 @@ const route = getRouteApi('/_authenticated/usage-logs/$section')
 const logTypeRowTint: Record<number, string> = {
   [LOG_TYPE_ENUM.ERROR]: 'bg-rose-50/40 dark:bg-rose-950/20',
   [LOG_TYPE_ENUM.REFUND]: 'bg-blue-50/30 dark:bg-blue-950/15',
+}
+
+function getColumnVisibilityStorageKey(
+  logCategory: LogCategory,
+  isAdmin: boolean
+): string {
+  return `usage-logs:${logCategory}:${isAdmin ? 'admin' : 'user'}:column-visibility`
 }
 
 interface UsageLogsTableProps {
@@ -93,6 +101,10 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
         : []),
     ],
   })
+
+  const [columnVisibility, setColumnVisibility] = useColumnVisibilityStorage(
+    getColumnVisibilityStorageKey(logCategory, isAdmin)
+  )
 
   const { data, isLoading, isFetching } = useQuery({
     queryKey: [
@@ -139,11 +151,13 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     columns: columns as ColumnDef<Record<string, unknown>>[],
     state: {
       columnFilters,
+      columnVisibility,
       pagination,
     },
     enableRowSelection: false,
     onPaginationChange,
     onColumnFiltersChange,
+    onColumnVisibilityChange: setColumnVisibility,
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),

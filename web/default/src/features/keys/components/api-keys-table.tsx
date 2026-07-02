@@ -21,7 +21,6 @@ import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import {
   type SortingState,
-  type VisibilityState,
   getCoreRowModel,
   getFacetedRowModel,
   getFacetedUniqueValues,
@@ -36,6 +35,7 @@ import { toast } from 'sonner'
 import { formatQuota } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
+import { useColumnVisibilityStorage } from '@/hooks/use-column-visibility-storage'
 import {
   Empty,
   EmptyDescription,
@@ -65,6 +65,8 @@ import { DataTableBulkActions } from './data-table-bulk-actions'
 import { DataTableRowActions } from './data-table-row-actions'
 
 const route = getRouteApi('/_authenticated/keys/')
+const API_KEYS_COLUMN_VISIBILITY_STORAGE_KEY =
+  'api-keys:column-visibility'
 
 function isDisabledApiKeyRow(apiKey: ApiKey) {
   return apiKey.status !== API_KEY_STATUS.ENABLED
@@ -193,7 +195,8 @@ export function ApiKeysTable() {
   const columns = useApiKeysColumns()
   const [rowSelection, setRowSelection] = useState({})
   const [sorting, setSorting] = useState<SortingState>([])
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+  const [columnVisibility, setColumnVisibility] =
+    useColumnVisibilityStorage(API_KEYS_COLUMN_VISIBILITY_STORAGE_KEY)
 
   const {
     globalFilter,

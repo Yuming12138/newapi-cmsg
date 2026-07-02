@@ -34,6 +34,7 @@ import { useDebounce, useMediaQuery } from '@/hooks'
 import { useTranslation } from 'react-i18next'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
+import { useColumnVisibilityStorage } from '@/hooks/use-column-visibility-storage'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -65,6 +66,12 @@ import { useChannels } from './channels-provider'
 import { DataTableBulkActions } from './data-table-bulk-actions'
 
 const route = getRouteApi('/_authenticated/channels/')
+const CHANNELS_COLUMN_VISIBILITY_STORAGE_KEY =
+  'channels:column-visibility'
+const CHANNELS_INITIAL_COLUMN_VISIBILITY: VisibilityState = {
+  models: false,
+  tag: false,
+}
 
 const CHANNEL_SORTABLE_COLUMNS = new Set<ChannelSortBy>([
   'id',
@@ -93,10 +100,11 @@ export function ChannelsTable() {
 
   // Table state
   const [sorting, setSorting] = useState<SortingState>([])
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({
-    models: false,
-    tag: false,
-  })
+  const [columnVisibility, setColumnVisibility] =
+    useColumnVisibilityStorage(
+      CHANNELS_COLUMN_VISIBILITY_STORAGE_KEY,
+      CHANNELS_INITIAL_COLUMN_VISIBILITY
+    )
   const [rowSelection, setRowSelection] = useState({})
   const [expanded, setExpanded] = useState<ExpandedState>({})
 
