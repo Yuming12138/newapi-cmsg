@@ -5,6 +5,29 @@ import (
 	"testing"
 )
 
+func TestNormalizeAuthConfigsAndAuthConfigured(t *testing.T) {
+	t.Setenv("SDK_STORE_TOKEN", "sdk-token")
+
+	auth := NormalizeAuthConfigs([]AuthConfig{{
+		Match:    " https://private.example/store/ ",
+		ApplyTo:  []string{" Artifact ", "artifact"},
+		Type:     " Bearer ",
+		TokenEnv: " SDK_STORE_TOKEN ",
+	}})
+	if len(auth) != 1 {
+		t.Fatalf("NormalizeAuthConfigs() len = %d, want 1", len(auth))
+	}
+	if auth[0].Match != "https://private.example/store/" || auth[0].Type != AuthTypeBearer || auth[0].TokenEnv != "SDK_STORE_TOKEN" {
+		t.Fatalf("normalized auth = %#v", auth[0])
+	}
+	if !AuthConfigured(auth, "https://private.example/store/plugin.zip", RequestKindArtifact) {
+		t.Fatal("AuthConfigured() = false, want true for matching artifact")
+	}
+	if AuthConfigured(auth, "https://private.example/store/registry.json", RequestKindRegistry) {
+		t.Fatal("AuthConfigured() = true, want false for non-matching request kind")
+	}
+}
+
 func TestManifestValidateRequiresPinnedReleaseTag(t *testing.T) {
 	manifest := validTestManifest()
 	manifest.ReleaseTag = ""

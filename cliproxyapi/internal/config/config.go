@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginstore"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/crypto/bcrypt"
@@ -174,6 +175,8 @@ type PluginsConfig struct {
 	Dir string `yaml:"dir" json:"dir"`
 	// StoreSources appends third-party plugin store registries to the built-in official source.
 	StoreSources []string `yaml:"store-sources,omitempty" json:"store-sources,omitempty"`
+	// StoreAuth contains optional auth rules for private plugin store registries and artifacts.
+	StoreAuth []pluginstore.AuthConfig `yaml:"store-auth,omitempty" json:"store-auth,omitempty"`
 	// Configs stores per-plugin instance configuration by plugin ID.
 	Configs map[string]PluginInstanceConfig `yaml:"configs" json:"configs"`
 }
@@ -829,6 +832,7 @@ func (cfg *Config) NormalizePluginsConfig() {
 		}
 		cfg.Plugins.StoreSources = sources
 	}
+	cfg.Plugins.StoreAuth = pluginstore.NormalizeAuthConfigs(cfg.Plugins.StoreAuth)
 	if cfg.Plugins.Configs == nil {
 		cfg.Plugins.Configs = map[string]PluginInstanceConfig{}
 	}

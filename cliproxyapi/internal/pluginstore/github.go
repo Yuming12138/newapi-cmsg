@@ -21,6 +21,7 @@ type Client struct {
 	HTTPClient  HTTPDoer
 	RegistryURL string
 	UserAgent   string
+	Auth        []AuthConfig
 }
 
 type Release struct {
@@ -39,7 +40,7 @@ func (c Client) FetchRegistry(ctx context.Context) (Registry, error) {
 	if registryURL == "" {
 		registryURL = DefaultRegistryURL
 	}
-	data, errDownload := c.get(ctx, registryURL, "application/json")
+	data, errDownload := c.get(ctx, registryURL, "application/json", RequestKindRegistry)
 	if errDownload != nil {
 		return Registry{}, errDownload
 	}
@@ -62,7 +63,7 @@ func (c Client) FetchLatestRelease(ctx context.Context, plugin Plugin) (Release,
 		url.PathEscape(owner),
 		url.PathEscape(repo),
 	)
-	data, errDownload := c.get(ctx, releaseURL, "application/vnd.github+json")
+	data, errDownload := c.get(ctx, releaseURL, "application/vnd.github+json", RequestKindMetadata)
 	if errDownload != nil {
 		return Release{}, errDownload
 	}
@@ -89,7 +90,7 @@ func (c Client) FetchReleaseByTag(ctx context.Context, plugin Plugin, tag string
 		url.PathEscape(repo),
 		url.PathEscape(tag),
 	)
-	data, errDownload := c.get(ctx, releaseURL, "application/vnd.github+json")
+	data, errDownload := c.get(ctx, releaseURL, "application/vnd.github+json", RequestKindMetadata)
 	if errDownload != nil {
 		return Release{}, errDownload
 	}
@@ -112,24 +113,54 @@ func ReleaseVersion(release Release) (string, error) {
 
 func (c Client) DownloadAsset(ctx context.Context, asset ReleaseAsset) ([]byte, error) {
 	downloadURL := strings.TrimSpace(asset.BrowserDownloadURL)
-	if downloadURL == "" {
-		downloadURL = strings.TrimSpace(asset.APIURL)
+	apiURL := strings.TrimSpace(asset.APIURL)
+	if downloadURL == "" || c.releaseAssetAPIAuthenticated(apiURL) {
+		if apiURL != "" {
+			downloadURL = apiURL
+		}
 	}
 	if downloadURL == "" {
 		return nil, fmt.Errorf("asset %q missing download url", asset.Name)
 	}
-	return c.get(ctx, downloadURL, "application/octet-stream")
+	return c.get(ctx, downloadURL, "application/octet-stream", RequestKindArtifact)
 }
 
-func (c Client) get(ctx context.Context, requestURL string, accept string) ([]byte, error) {
-	headers := map[string]string{
-		"Accept":     accept,
-		"User-Agent": c.userAgent(),
+func (c Client) releaseAssetAPIAuthenticated(apiURL string) bool {
+	apiURL = strings.TrimSpace(apiURL)
+	if apiURL == "" {
+		return false
 	}
-	if token := gitHubAPIToken(requestURL); token != "" {
-		headers["Authorization"] = "Bearer " + token
+	return AuthConfigured(c.Auth, apiURL, RequestKindArtifact)
+}
+
+func (c Client) get(ctx context.Context, requestURL string, accept string, kind string) ([]byte, error) {
+	if errURL := validatePluginStoreRequestURL(c.Auth, requestURL, kind); errURL != nil {
+		return nil, errURL
 	}
-	return httpfetch.GetBytes(ctx, c.httpClient(), requestURL, headers, 0)
+	headers := http.Header{
+		"Accept":     []string{accept},
+		"User-Agent": []string{c.userAgent()},
+	}
+	if errAuth := applyPluginStoreAuth(headers, c.Auth, requestURL, kind); errAuth != nil {
+		return nil, errAuth
+	}
+	if headers.Get("Authorization") == "" {
+		if token := gitHubAPIToken(requestURL); token != "" {
+			headers.Set("Authorization", "Bearer "+token)
+		}
+	}
+	return httpfetch.GetBytes(ctx, c.httpClient(), requestURL, headerValues(headers), 0)
+}
+
+func headerValues(headers http.Header) map[string]string {
+	out := make(map[string]string, len(headers))
+	for key, values := range headers {
+		if len(values) == 0 {
+			continue
+		}
+		out[key] = values[0]
+	}
+	return out
 }
 
 // gitHubAPIToken returns the optional GitHub token for GitHub API requests to

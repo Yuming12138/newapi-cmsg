@@ -297,6 +297,44 @@ func TestListPluginStoreIncludesThirdPartySources(t *testing.T) {
 	}
 }
 
+func TestListPluginStoreSendsConfiguredAuth(t *testing.T) {
+	t.Setenv("STORE_REGISTRY_TOKEN", "private-token")
+	registryURL := "https://private.example/registry.json"
+	httpClient := &authRecordingPluginStoreHTTPClient{responses: fakePluginStoreHTTPClient{
+		registryURL: registryJSON(t),
+	}}
+	h := &Handler{
+		cfg: &config.Config{
+			Plugins: config.PluginsConfig{
+				Enabled: true,
+				Dir:     t.TempDir(),
+				StoreAuth: []pluginstore.AuthConfig{{
+					Match:    "https://private.example/",
+					ApplyTo:  []string{pluginstore.RequestKindRegistry},
+					Type:     pluginstore.AuthTypeBearer,
+					TokenEnv: "STORE_REGISTRY_TOKEN",
+				}},
+			},
+		},
+		configFilePath:         writeTestConfigFile(t),
+		pluginStoreRegistryURL: registryURL,
+		pluginStoreHTTPClient:  httpClient,
+	}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v0/management/plugin-store", nil)
+
+	h.ListPluginStore(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := httpClient.header(registryURL, "Authorization"); got != "Bearer private-token" {
+		t.Fatalf("registry Authorization = %q, want bearer token", got)
+	}
+}
+
 func TestInstallPluginFromStoreWritesFileAndEnablesConfig(t *testing.T) {
 	t.Parallel()
 
@@ -670,6 +708,28 @@ func TestEnablePluginConfigLockedCreatesMissingConfig(t *testing.T) {
 	if item.Enabled == nil || !*item.Enabled {
 		t.Fatalf("plugin enabled = %#v, want true", item.Enabled)
 	}
+}
+
+type authRecordingPluginStoreHTTPClient struct {
+	responses fakePluginStoreHTTPClient
+	mu        sync.Mutex
+	headers   map[string]http.Header
+}
+
+func (c *authRecordingPluginStoreHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	c.mu.Lock()
+	if c.headers == nil {
+		c.headers = make(map[string]http.Header)
+	}
+	c.headers[req.URL.String()] = req.Header.Clone()
+	c.mu.Unlock()
+	return c.responses.Do(req)
+}
+
+func (c *authRecordingPluginStoreHTTPClient) header(url string, name string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.headers[url].Get(name)
 }
 
 type fakePluginStoreHTTPClient map[string][]byte

@@ -16,6 +16,16 @@ const (
 	DefaultSourceID    = internalpluginstore.DefaultSourceID
 	DefaultSourceName  = internalpluginstore.DefaultSourceName
 	SchemaVersion      = internalpluginstore.SchemaVersion
+
+	RequestKindRegistry = internalpluginstore.RequestKindRegistry
+	RequestKindMetadata = internalpluginstore.RequestKindMetadata
+	RequestKindArtifact = internalpluginstore.RequestKindArtifact
+
+	AuthTypeNone        = internalpluginstore.AuthTypeNone
+	AuthTypeBearer      = internalpluginstore.AuthTypeBearer
+	AuthTypeBasic       = internalpluginstore.AuthTypeBasic
+	AuthTypeHeader      = internalpluginstore.AuthTypeHeader
+	AuthTypeGitHubToken = internalpluginstore.AuthTypeGitHubToken
 )
 
 type Source = internalpluginstore.Source
@@ -25,6 +35,7 @@ type Release = internalpluginstore.Release
 type ReleaseAsset = internalpluginstore.ReleaseAsset
 type InstallOptions = internalpluginstore.InstallOptions
 type InstallResult = internalpluginstore.InstallResult
+type AuthConfig = internalpluginstore.AuthConfig
 
 type HTTPDoer interface {
 	Do(*http.Request) (*http.Response, error)
@@ -60,6 +71,14 @@ func NewClient(httpClient HTTPDoer, registryURL string) Client {
 	}}
 }
 
+func NewClientWithAuth(httpClient HTTPDoer, registryURL string, auth []AuthConfig) Client {
+	return Client{inner: internalpluginstore.Client{
+		HTTPClient:  httpClient,
+		RegistryURL: strings.TrimSpace(registryURL),
+		Auth:        internalpluginstore.NormalizeAuthConfigs(auth),
+	}}
+}
+
 func DefaultSource() Source {
 	return internalpluginstore.DefaultSource()
 }
@@ -74,6 +93,14 @@ func SourceID(registryURL string) string {
 
 func ValidatePlugin(plugin Plugin) error {
 	return internalpluginstore.ValidatePlugin(plugin)
+}
+
+func NormalizeAuthConfigs(auth []AuthConfig) []AuthConfig {
+	return internalpluginstore.NormalizeAuthConfigs(auth)
+}
+
+func AuthConfigured(auth []AuthConfig, requestURL string, kind string) bool {
+	return internalpluginstore.AuthConfigured(auth, requestURL, kind)
 }
 
 func UpdateAvailable(installed, latest string) bool {
