@@ -44,6 +44,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { Progress } from '@/components/ui/progress'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { DataTableColumnHeader } from '@/components/data-table/column-header'
 import { GroupBadge } from '@/components/group-badge'
@@ -394,20 +395,22 @@ function formatCompactTimestamp(timestamp: number | null | undefined): string {
   return `${month}-${day} ${hours}:${minutes}`
 }
 
-function formatCliproxyCPAResetTime(
-  window: CliproxyCPAQuotaWindow | null | undefined,
-  updatedAt: number | null | undefined
-): string {
-  const resetAt = getCliproxyCPAResetAt(window, updatedAt)
-  if (resetAt == null) return '-'
-  const relative = formatShortDuration(window?.resetAfterSeconds)
-  return window?.resetAfterSeconds == null
-    ? formatTimestampToDate(resetAt)
-    : `${formatTimestampToDate(resetAt)} (${relative})`
-}
-
 function formatCliproxyCPAUnits(value: number | null | undefined): string {
   return value == null || !Number.isFinite(value) ? '-' : formatBalance(value)
+}
+
+function clampPercent(value: number | null | undefined): number {
+  if (value == null || !Number.isFinite(value)) return 0
+  return Math.min(100, Math.max(0, value))
+}
+
+function getCliproxyCPAProgressColor(
+  value: number | null | undefined
+): string {
+  const percent = clampPercent(value)
+  if (percent <= 10) return '[&_[data-slot=progress-indicator]]:bg-rose-500'
+  if (percent <= 30) return '[&_[data-slot=progress-indicator]]:bg-amber-500'
+  return '[&_[data-slot=progress-indicator]]:bg-emerald-500'
 }
 
 function formatCliproxyCPAAccountCount(bucket: CliproxyCPAQuotaBucket): string {
@@ -554,6 +557,37 @@ function UpstreamUpdateTags({ channel }: { channel: Channel }) {
   )
 }
 
+function CliproxyCPAQuotaProgress({
+  label,
+  window,
+  updatedAt,
+}: {
+  label: string
+  window: CliproxyCPAQuotaWindow | null
+  updatedAt: number | null
+}) {
+  const percent = window?.remainingPercent
+  const resetAt = getCliproxyCPAResetAt(window, updatedAt)
+
+  return (
+    <div className='space-y-1'>
+      <div className='flex items-center justify-between gap-2 text-[11px] leading-none'>
+        <span className='text-muted-foreground font-medium'>{label}</span>
+        <span className='flex shrink-0 items-center gap-1 tabular-nums'>
+          <span className='font-semibold'>{formatPercent(percent)}</span>
+          <span className='text-muted-foreground'>
+            {resetAt != null ? formatCompactTimestamp(resetAt) : '-'}
+          </span>
+        </span>
+      </div>
+      <Progress
+        value={clampPercent(percent)}
+        className={cn('h-1.5', getCliproxyCPAProgressColor(percent))}
+      />
+    </div>
+  )
+}
+
 function CliproxyCPABucketDetails({
   bucket,
   updatedAt,
@@ -568,92 +602,126 @@ function CliproxyCPABucketDetails({
     Math.abs(bucket.balanceUnits - bucket.usableBalanceUnits) > 0.000001
 
   return (
-    <div className='space-y-0.5'>
-      <p>
-        {bucket.label}
-        {count ? ` (${count})` : ''}: usable{' '}
-        {formatCliproxyCPAUnits(bucket.usableBalanceUnits)}
-      </p>
+    <div className='bg-muted/30 min-w-[260px] space-y-2 rounded-md border p-2'>
+      <div className='flex items-start justify-between gap-3'>
+        <div className='min-w-0'>
+          <p className='truncate text-xs font-semibold'>
+            {bucket.label}
+            {count ? ` (${count})` : ''}
+          </p>
+          {bucket.canExhaust === false && (
+            <p className='text-muted-foreground text-[11px]'>
+              reserve 5h {formatPercent(bucket.reserveFiveHourPercent)} / 7d{' '}
+              {formatPercent(bucket.reserveWeeklyPercent)}
+            </p>
+          )}
+        </div>
+        <div className='shrink-0 text-right tabular-nums'>
+          <p className='text-xs font-semibold'>
+            {formatCliproxyCPAUnits(bucket.usableBalanceUnits)}
+          </p>
+          <p className='text-muted-foreground text-[11px]'>usable</p>
+        </div>
+      </div>
       {rawBalanceVisible && (
-        <p>raw remaining: {formatCliproxyCPAUnits(bucket.balanceUnits)}</p>
+        <div className='text-muted-foreground flex justify-between gap-2 text-[11px]'>
+          <span>raw remaining</span>
+          <span className='tabular-nums'>
+            {formatCliproxyCPAUnits(bucket.balanceUnits)}
+          </span>
+        </div>
       )}
-      {bucket.canExhaust === false && (
-        <p>
-          reserve: 5h {formatPercent(bucket.reserveFiveHourPercent)} / 7d{' '}
-          {formatPercent(bucket.reserveWeeklyPercent)}
-        </p>
-      )}
-      <p>
-        5h remaining: {formatPercent(bucket.fiveHour?.remainingPercent)}, reset:{' '}
-        {formatCliproxyCPAResetTime(bucket.fiveHour, updatedAt)}
-      </p>
-      <p>
-        7d remaining: {formatPercent(bucket.weekly?.remainingPercent)}, reset:{' '}
-        {formatCliproxyCPAResetTime(bucket.weekly, updatedAt)}
-      </p>
+      <CliproxyCPAQuotaProgress
+        label='5h remaining'
+        window={bucket.fiveHour}
+        updatedAt={updatedAt}
+      />
+      <CliproxyCPAQuotaProgress
+        label='7d remaining'
+        window={bucket.weekly}
+        updatedAt={updatedAt}
+      />
     </div>
   )
 }
 
 function CliproxyCPAQuotaDetails({ meta }: { meta: CliproxyCPAQuotaMeta }) {
   return (
-    <>
-      {meta.usableBalanceUnits != null && (
-        <p>CPA usable: {formatCliproxyCPAUnits(meta.usableBalanceUnits)}</p>
-      )}
-      {meta.totalBalanceUnits != null &&
-        meta.usableBalanceUnits != null &&
-        Math.abs(meta.totalBalanceUnits - meta.usableBalanceUnits) >
-          0.000001 && (
-          <p>
-            CPA total remaining:{' '}
+    <div className='w-[320px] max-w-[calc(100vw-2rem)] space-y-2'>
+      <div className='grid grid-cols-3 gap-2'>
+        <div className='bg-muted/30 rounded-md border p-2'>
+          <p className='text-muted-foreground text-[11px]'>CPA usable</p>
+          <p className='text-sm font-semibold tabular-nums'>
+            {formatCliproxyCPAUnits(meta.usableBalanceUnits)}
+          </p>
+        </div>
+        <div className='bg-muted/30 rounded-md border p-2'>
+          <p className='text-muted-foreground text-[11px]'>Total</p>
+          <p className='text-sm font-semibold tabular-nums'>
             {formatCliproxyCPAUnits(meta.totalBalanceUnits)}
           </p>
-        )}
-      {meta.accountCount != null && (
-        <p>
-          Accounts:{' '}
-          {meta.availableAccountCount != null
-            ? `${meta.availableAccountCount}/${meta.accountCount}`
-            : meta.accountCount}
-        </p>
-      )}
+        </div>
+        <div className='bg-muted/30 rounded-md border p-2'>
+          <p className='text-muted-foreground text-[11px]'>Accounts</p>
+          <p className='text-sm font-semibold tabular-nums'>
+            {meta.accountCount == null
+              ? '-'
+              : meta.availableAccountCount != null
+                ? `${meta.availableAccountCount}/${meta.accountCount}`
+                : meta.accountCount}
+          </p>
+        </div>
+      </div>
       {meta.buckets.length > 0 ? (
-        meta.buckets.map((bucket) => (
-          <CliproxyCPABucketDetails
-            key={bucket.key}
-            bucket={bucket}
+        <div className='space-y-2'>
+          {meta.buckets.map((bucket) => (
+            <CliproxyCPABucketDetails
+              key={bucket.key}
+              bucket={bucket}
+              updatedAt={meta.updatedAt}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className='bg-muted/30 space-y-2 rounded-md border p-2'>
+          {meta.guardMode !== 'low_watermark' && (
+            <div className='text-muted-foreground flex justify-between gap-2 text-[11px]'>
+              <span>CPA share</span>
+              <span className='tabular-nums'>
+                {formatPercent(meta.remainingSharePercent)} /{' '}
+                {formatPercent(meta.shareLimitPercent)}
+              </span>
+            </div>
+          )}
+          <CliproxyCPAQuotaProgress
+            label='5h remaining'
+            window={meta.fiveHour}
             updatedAt={meta.updatedAt}
           />
-        ))
-      ) : (
-        <>
-          {meta.guardMode !== 'low_watermark' && (
-            <p>
-              CPA share: {formatPercent(meta.remainingSharePercent)} /{' '}
-              {formatPercent(meta.shareLimitPercent)}
-            </p>
-          )}
-          <p>
-            5h remaining: {formatPercent(meta.fiveHour?.remainingPercent)},
-            reset: {formatCliproxyCPAResetTime(meta.fiveHour, meta.updatedAt)}
-          </p>
-          <p>
-            7d remaining: {formatPercent(meta.weekly?.remainingPercent)}, reset:{' '}
-            {formatCliproxyCPAResetTime(meta.weekly, meta.updatedAt)}
-          </p>
-        </>
+          <CliproxyCPAQuotaProgress
+            label='7d remaining'
+            window={meta.weekly}
+            updatedAt={meta.updatedAt}
+          />
+        </div>
       )}
-      <p>
-        Next reset:{' '}
-        {meta.nextResetAt != null
-          ? formatTimestampToDate(meta.nextResetAt)
-          : formatShortDuration(meta.nextResetAfterSeconds)}
-      </p>
+      <div className='text-muted-foreground flex justify-between gap-2 text-[11px]'>
+        <span>Next reset</span>
+        <span className='tabular-nums'>
+          {meta.nextResetAt != null
+            ? formatCompactTimestamp(meta.nextResetAt)
+            : formatShortDuration(meta.nextResetAfterSeconds)}
+        </span>
+      </div>
       {meta.updatedAt && (
-        <p>{`Updated: ${formatTimestampToDate(meta.updatedAt)}`}</p>
+        <div className='text-muted-foreground flex justify-between gap-2 text-[11px]'>
+          <span>Updated</span>
+          <span className='tabular-nums'>
+            {formatCompactTimestamp(meta.updatedAt)}
+          </span>
+        </div>
       )}
-    </>
+    </div>
   )
 }
 
