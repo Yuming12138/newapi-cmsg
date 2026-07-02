@@ -107,15 +107,39 @@ type CliproxyCPAQuotaWindow = {
   resetAt: number | null
 }
 
+type CliproxyCPAQuotaBucket = {
+  key: string
+  label: string
+  bucketType: string | null
+  canExhaust: boolean | null
+  accountCount: number | null
+  availableAccountCount: number | null
+  balanceUnits: number | null
+  usableBalanceUnits: number | null
+  remainingSharePercent: number | null
+  rawRemainingPercent: number | null
+  fiveHour: CliproxyCPAQuotaWindow | null
+  weekly: CliproxyCPAQuotaWindow | null
+  nextResetAfterSeconds: number | null
+  nextResetAt: number | null
+  reserveFiveHourPercent: number | null
+  reserveWeeklyPercent: number | null
+}
+
 type CliproxyCPAQuotaMeta = {
   guardMode: string | null
   shareLimitPercent: number | null
   remainingSharePercent: number | null
+  usableBalanceUnits: number | null
+  totalBalanceUnits: number | null
+  accountCount: number | null
+  availableAccountCount: number | null
   updatedAt: number | null
   fiveHour: CliproxyCPAQuotaWindow | null
   weekly: CliproxyCPAQuotaWindow | null
   nextResetAfterSeconds: number | null
   nextResetAt: number | null
+  buckets: CliproxyCPAQuotaBucket[]
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -129,6 +153,17 @@ function numberValue(value: unknown): number | null {
   if (typeof value === 'string' && value.trim() !== '') {
     const parsed = Number(value)
     return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function booleanValue(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true
+    if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false
   }
   return null
 }
@@ -186,6 +221,84 @@ function parseCliproxyCPAQuotaWindow(
   }
 }
 
+function getCliproxyCPAResetAfter(
+  fiveHour: CliproxyCPAQuotaWindow | null,
+  weekly: CliproxyCPAQuotaWindow | null
+): number | null {
+  const candidates = [
+    fiveHour?.resetAfterSeconds,
+    weekly?.resetAfterSeconds,
+  ].filter((value): value is number => value != null && value >= 0)
+  return candidates.length > 0 ? Math.min(...candidates) : null
+}
+
+function getCliproxyCPANextResetAt(
+  fiveHour: CliproxyCPAQuotaWindow | null,
+  weekly: CliproxyCPAQuotaWindow | null,
+  updatedAt: number | null
+): number | null {
+  const candidates = [
+    getCliproxyCPAResetAt(fiveHour, updatedAt),
+    getCliproxyCPAResetAt(weekly, updatedAt),
+  ].filter((value): value is number => value != null && value > 0)
+  return candidates.length > 0 ? Math.min(...candidates) : null
+}
+
+function cliproxyCPABucketLabel(
+  key: string,
+  value: Record<string, unknown>,
+  canExhaust: boolean | null
+): string {
+  if (typeof value.label === 'string' && value.label.trim() !== '') {
+    return value.label
+  }
+  if (key === 'personal' || canExhaust) return '个人池'
+  if (key === 'protected') return '共享 Pro'
+  return key
+}
+
+function parseCliproxyCPAQuotaBucket(
+  key: string,
+  value: unknown,
+  updatedAt: number | null
+): CliproxyCPAQuotaBucket | null {
+  const item = asObject(value)
+  if (!item) return null
+  const windows = asObject(item.windows)
+  const canExhaust = booleanValue(item.can_exhaust)
+  const fiveHour = parseCliproxyCPAQuotaWindow(windows?.['5h'], null)
+  const weekly = parseCliproxyCPAQuotaWindow(windows?.['7d'], null)
+  return {
+    key,
+    label: cliproxyCPABucketLabel(key, item, canExhaust),
+    bucketType: typeof item.bucket === 'string' ? item.bucket : null,
+    canExhaust,
+    accountCount: numberValue(item.account_count),
+    availableAccountCount: numberValue(item.available_account_count),
+    balanceUnits: numberValue(item.balance_units),
+    usableBalanceUnits: numberValue(item.usable_balance_units),
+    remainingSharePercent: numberValue(item.remaining_share_percent),
+    rawRemainingPercent: numberValue(item.raw_remaining_percent),
+    fiveHour,
+    weekly,
+    nextResetAfterSeconds: getCliproxyCPAResetAfter(fiveHour, weekly),
+    nextResetAt: getCliproxyCPANextResetAt(fiveHour, weekly, updatedAt),
+    reserveFiveHourPercent: numberValue(item.min_remaining_percent_5h),
+    reserveWeeklyPercent: numberValue(item.min_remaining_percent_7d),
+  }
+}
+
+function parseCliproxyCPAQuotaBuckets(
+  value: unknown,
+  updatedAt: number | null
+): CliproxyCPAQuotaBucket[] {
+  const buckets = asObject(value)
+  if (!buckets) return []
+  return Object.entries(buckets)
+    .map(([key, item]) => parseCliproxyCPAQuotaBucket(key, item, updatedAt))
+    .filter((item): item is CliproxyCPAQuotaBucket => item != null)
+}
+
 function parseCliproxyCPAQuotaMeta(
   otherInfo: string | null | undefined
 ): CliproxyCPAQuotaMeta | null {
@@ -195,40 +308,56 @@ function parseCliproxyCPAQuotaMeta(
     const guard = asObject(parsed?.cliproxy_cpa_quota_guard)
     const health = asObject(guard?.health)
     const windows = asObject(health?.windows)
-    if (!guard || !health || !windows) return null
+    if (!guard || !health) return null
+    const updatedAt = timestampValue(guard.updated_at)
+    const buckets = parseCliproxyCPAQuotaBuckets(health.buckets, updatedAt)
 
     const shareLimitPercent = numberValue(health.share_limit_percent)
     const fiveHour = parseCliproxyCPAQuotaWindow(
-      windows['5h'],
+      windows?.['5h'],
       shareLimitPercent
     )
-    const weekly = parseCliproxyCPAQuotaWindow(windows['7d'], shareLimitPercent)
-    if (!fiveHour && !weekly) return null
-
-    const updatedAt = timestampValue(guard.updated_at)
-    const resetAfterCandidates = [
-      fiveHour?.resetAfterSeconds,
-      weekly?.resetAfterSeconds,
-    ].filter((value): value is number => value != null && value >= 0)
-    const resetAtCandidates = [
-      getCliproxyCPAResetAt(fiveHour, updatedAt),
-      getCliproxyCPAResetAt(weekly, updatedAt),
-    ].filter((value): value is number => value != null && value > 0)
+    const weekly = parseCliproxyCPAQuotaWindow(
+      windows?.['7d'],
+      shareLimitPercent
+    )
+    if (!fiveHour && !weekly && buckets.length === 0) return null
+    const topNextResetAfterSeconds = getCliproxyCPAResetAfter(fiveHour, weekly)
+    const topNextResetAt = getCliproxyCPANextResetAt(
+      fiveHour,
+      weekly,
+      updatedAt
+    )
+    const bucketNextResetAfterCandidates = buckets
+      .map((bucket) => bucket.nextResetAfterSeconds)
+      .filter((value): value is number => value != null && value >= 0)
+    const bucketNextResetAtCandidates = buckets
+      .map((bucket) => bucket.nextResetAt)
+      .filter((value): value is number => value != null && value > 0)
 
     return {
       shareLimitPercent,
       remainingSharePercent: numberValue(health.remaining_share_percent),
+      usableBalanceUnits: numberValue(health.usable_balance_units),
+      totalBalanceUnits: numberValue(health.total_balance_units),
+      accountCount: numberValue(health.account_count),
+      availableAccountCount: numberValue(health.available_account_count),
       updatedAt,
       fiveHour,
       weekly,
       nextResetAfterSeconds:
-        resetAfterCandidates.length > 0
-          ? Math.min(...resetAfterCandidates)
-          : null,
+        topNextResetAfterSeconds ??
+        (bucketNextResetAfterCandidates.length > 0
+          ? Math.min(...bucketNextResetAfterCandidates)
+          : null),
       nextResetAt:
-        resetAtCandidates.length > 0 ? Math.min(...resetAtCandidates) : null,
+        topNextResetAt ??
+        (bucketNextResetAtCandidates.length > 0
+          ? Math.min(...bucketNextResetAtCandidates)
+          : null),
       guardMode:
         typeof health.guard_mode === 'string' ? health.guard_mode : null,
+      buckets,
     }
   } catch {
     return null
@@ -277,7 +406,45 @@ function formatCliproxyCPAResetTime(
     : `${formatTimestampToDate(resetAt)} (${relative})`
 }
 
+function formatCliproxyCPAUnits(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) ? '-' : formatBalance(value)
+}
+
+function formatCliproxyCPAAccountCount(bucket: CliproxyCPAQuotaBucket): string {
+  if (bucket.accountCount == null) return ''
+  if (bucket.availableAccountCount == null) return `${bucket.accountCount}`
+  return `${bucket.availableAccountCount}/${bucket.accountCount}`
+}
+
+function formatCliproxyCPABucketSummary(
+  bucket: CliproxyCPAQuotaBucket
+): string {
+  const count = formatCliproxyCPAAccountCount(bucket)
+  const prefix = count ? `${bucket.label} ${count}` : bucket.label
+  return `${prefix} ${formatCliproxyCPAUnits(bucket.usableBalanceUnits)}`
+}
+
 function formatCliproxyCPASummary(meta: CliproxyCPAQuotaMeta): string {
+  if (meta.buckets.length > 0) {
+    const personal = meta.buckets.find(
+      (bucket) => bucket.key === 'personal' || bucket.canExhaust
+    )
+    const protectedBucket = meta.buckets.find(
+      (bucket) => bucket.key === 'protected' || bucket.canExhaust === false
+    )
+    const otherBuckets = meta.buckets.filter(
+      (bucket) => bucket !== personal && bucket !== protectedBucket
+    )
+    const parts = [personal, protectedBucket, ...otherBuckets]
+      .filter((bucket): bucket is CliproxyCPAQuotaBucket => bucket != null)
+      .map(formatCliproxyCPABucketSummary)
+    if (meta.nextResetAt != null) {
+      parts.push(`next ${formatCompactTimestamp(meta.nextResetAt)}`)
+    } else if (meta.nextResetAfterSeconds != null) {
+      parts.push(`reset ${formatShortDuration(meta.nextResetAfterSeconds)}`)
+    }
+    return parts.join(' · ')
+  }
   const fiveHourPercent =
     meta.guardMode === 'low_watermark'
       ? meta.fiveHour?.remainingPercent
@@ -384,6 +551,109 @@ function UpstreamUpdateTags({ channel }: { channel: Channel }) {
         />
       )}
     </div>
+  )
+}
+
+function CliproxyCPABucketDetails({
+  bucket,
+  updatedAt,
+}: {
+  bucket: CliproxyCPAQuotaBucket
+  updatedAt: number | null
+}) {
+  const count = formatCliproxyCPAAccountCount(bucket)
+  const rawBalanceVisible =
+    bucket.balanceUnits != null &&
+    bucket.usableBalanceUnits != null &&
+    Math.abs(bucket.balanceUnits - bucket.usableBalanceUnits) > 0.000001
+
+  return (
+    <div className='space-y-0.5'>
+      <p>
+        {bucket.label}
+        {count ? ` (${count})` : ''}: usable{' '}
+        {formatCliproxyCPAUnits(bucket.usableBalanceUnits)}
+      </p>
+      {rawBalanceVisible && (
+        <p>raw remaining: {formatCliproxyCPAUnits(bucket.balanceUnits)}</p>
+      )}
+      {bucket.canExhaust === false && (
+        <p>
+          reserve: 5h {formatPercent(bucket.reserveFiveHourPercent)} / 7d{' '}
+          {formatPercent(bucket.reserveWeeklyPercent)}
+        </p>
+      )}
+      <p>
+        5h remaining: {formatPercent(bucket.fiveHour?.remainingPercent)}, reset:{' '}
+        {formatCliproxyCPAResetTime(bucket.fiveHour, updatedAt)}
+      </p>
+      <p>
+        7d remaining: {formatPercent(bucket.weekly?.remainingPercent)}, reset:{' '}
+        {formatCliproxyCPAResetTime(bucket.weekly, updatedAt)}
+      </p>
+    </div>
+  )
+}
+
+function CliproxyCPAQuotaDetails({ meta }: { meta: CliproxyCPAQuotaMeta }) {
+  return (
+    <>
+      {meta.usableBalanceUnits != null && (
+        <p>CPA usable: {formatCliproxyCPAUnits(meta.usableBalanceUnits)}</p>
+      )}
+      {meta.totalBalanceUnits != null &&
+        meta.usableBalanceUnits != null &&
+        Math.abs(meta.totalBalanceUnits - meta.usableBalanceUnits) >
+          0.000001 && (
+          <p>
+            CPA total remaining:{' '}
+            {formatCliproxyCPAUnits(meta.totalBalanceUnits)}
+          </p>
+        )}
+      {meta.accountCount != null && (
+        <p>
+          Accounts:{' '}
+          {meta.availableAccountCount != null
+            ? `${meta.availableAccountCount}/${meta.accountCount}`
+            : meta.accountCount}
+        </p>
+      )}
+      {meta.buckets.length > 0 ? (
+        meta.buckets.map((bucket) => (
+          <CliproxyCPABucketDetails
+            key={bucket.key}
+            bucket={bucket}
+            updatedAt={meta.updatedAt}
+          />
+        ))
+      ) : (
+        <>
+          {meta.guardMode !== 'low_watermark' && (
+            <p>
+              CPA share: {formatPercent(meta.remainingSharePercent)} /{' '}
+              {formatPercent(meta.shareLimitPercent)}
+            </p>
+          )}
+          <p>
+            5h remaining: {formatPercent(meta.fiveHour?.remainingPercent)},
+            reset: {formatCliproxyCPAResetTime(meta.fiveHour, meta.updatedAt)}
+          </p>
+          <p>
+            7d remaining: {formatPercent(meta.weekly?.remainingPercent)}, reset:{' '}
+            {formatCliproxyCPAResetTime(meta.weekly, meta.updatedAt)}
+          </p>
+        </>
+      )}
+      <p>
+        Next reset:{' '}
+        {meta.nextResetAt != null
+          ? formatTimestampToDate(meta.nextResetAt)
+          : formatShortDuration(meta.nextResetAfterSeconds)}
+      </p>
+      {meta.updatedAt && (
+        <p>{`Updated: ${formatTimestampToDate(meta.updatedAt)}`}</p>
+      )}
+    </>
   )
 }
 
@@ -623,43 +893,13 @@ function BalanceCell({ channel }: { channel: Channel }) {
                 {sensitiveVisible
                   ? channel.type === 57
                     ? t('Click to view Codex usage')
-                    : `${t('Remaining:')} ${remainingDisplay}`
+                    : cliproxyCPAQuota
+                      ? `CPA usable: ${remainingDisplay}`
+                      : `${t('Remaining:')} ${remainingDisplay}`
                   : maskedRemainingLabel}
               </p>
               {cliproxyCPAQuota && (
-                <>
-                  {cliproxyCPAQuota.guardMode !== 'low_watermark' && (
-                    <p>
-                      CPA share:{' '}
-                      {formatPercent(cliproxyCPAQuota.remainingSharePercent)} /{' '}
-                      {formatPercent(cliproxyCPAQuota.shareLimitPercent)}
-                    </p>
-                  )}
-                  <p>
-                    5h remaining:{' '}
-                    {formatPercent(cliproxyCPAQuota.fiveHour?.remainingPercent)}
-                    , reset:{' '}
-                    {formatCliproxyCPAResetTime(
-                      cliproxyCPAQuota.fiveHour,
-                      cliproxyCPAQuota.updatedAt
-                    )}
-                  </p>
-                  <p>
-                    7d remaining:{' '}
-                    {formatPercent(cliproxyCPAQuota.weekly?.remainingPercent)},
-                    reset:{' '}
-                    {formatCliproxyCPAResetTime(
-                      cliproxyCPAQuota.weekly,
-                      cliproxyCPAQuota.updatedAt
-                    )}
-                  </p>
-                  {cliproxyCPAQuota.updatedAt && (
-                    <p>
-                      {t('Updated:')}{' '}
-                      {formatTimestampToDate(cliproxyCPAQuota.updatedAt)}
-                    </p>
-                  )}
-                </>
+                <CliproxyCPAQuotaDetails meta={cliproxyCPAQuota} />
               )}
               {channel.type !== 57 && <p>{t('Click to update balance')}</p>}
             </TooltipContent>
@@ -675,40 +915,7 @@ function BalanceCell({ channel }: { channel: Channel }) {
               {formatCliproxyCPASummary(cliproxyCPAQuota)}
             </TooltipTrigger>
             <TooltipContent>
-              <p>
-                5h remaining:{' '}
-                {formatPercent(cliproxyCPAQuota.fiveHour?.remainingPercent)}
-              </p>
-              <p>
-                5h reset:{' '}
-                {formatCliproxyCPAResetTime(
-                  cliproxyCPAQuota.fiveHour,
-                  cliproxyCPAQuota.updatedAt
-                )}
-              </p>
-              <p>
-                7d remaining:{' '}
-                {formatPercent(cliproxyCPAQuota.weekly?.remainingPercent)}
-              </p>
-              <p>
-                7d reset:{' '}
-                {formatCliproxyCPAResetTime(
-                  cliproxyCPAQuota.weekly,
-                  cliproxyCPAQuota.updatedAt
-                )}
-              </p>
-              <p>
-                Next reset:{' '}
-                {cliproxyCPAQuota.nextResetAt != null
-                  ? formatTimestampToDate(cliproxyCPAQuota.nextResetAt)
-                  : formatShortDuration(cliproxyCPAQuota.nextResetAfterSeconds)}
-              </p>
-              {cliproxyCPAQuota.updatedAt && (
-                <p>
-                  {t('Updated:')}{' '}
-                  {formatTimestampToDate(cliproxyCPAQuota.updatedAt)}
-                </p>
-              )}
+              <CliproxyCPAQuotaDetails meta={cliproxyCPAQuota} />
             </TooltipContent>
           </Tooltip>
         )}

@@ -112,6 +112,66 @@ func TestUpdateCliproxyCPAQuotaGuardBalanceUsesGuardSnapshot(t *testing.T) {
 	}
 }
 
+func TestUpdateCliproxyCPAQuotaGuardBalancePrefersUsableBalance(t *testing.T) {
+	channel := &model.Channel{
+		Id:      12,
+		Name:    "cliproxy-codex-pool",
+		Balance: 0,
+		OtherInfo: `{
+			"cliproxy_cpa_quota_guard": {
+				"managed": true,
+				"health": {
+					"ok": true,
+					"balance_units": 2602.46,
+					"usable_balance_units": 93,
+					"total_balance_units": 2602.46
+				}
+			}
+		}`,
+	}
+	balance, handled, err := UpdateCliproxyCPAQuotaGuardBalance(channel)
+	if err != nil {
+		t.Fatalf("UpdateCliproxyCPAQuotaGuardBalance() error = %v", err)
+	}
+	if !handled || balance != 93 || channel.Balance != 93 {
+		t.Fatalf("balance=%v handled=%v channel.Balance=%v", balance, handled, channel.Balance)
+	}
+}
+
+func TestUpdateCliproxyCPAQuotaGuardBalanceUsesBuckets(t *testing.T) {
+	channel := &model.Channel{
+		Id:      12,
+		Name:    "cliproxy-codex-pool",
+		Balance: 0,
+		OtherInfo: `{
+			"cliproxy_cpa_quota_guard": {
+				"managed": true,
+				"health": {
+					"ok": true,
+					"buckets": {
+						"personal": {
+							"can_exhaust": true,
+							"balance_units": 42.5
+						},
+						"protected": {
+							"can_exhaust": false,
+							"balance_units": 2602.46,
+							"usable_balance_units": 13.25
+						}
+					}
+				}
+			}
+		}`,
+	}
+	balance, handled, err := UpdateCliproxyCPAQuotaGuardBalance(channel)
+	if err != nil {
+		t.Fatalf("UpdateCliproxyCPAQuotaGuardBalance() error = %v", err)
+	}
+	if !handled || math.Abs(balance-55.75) > 0.000001 || math.Abs(channel.Balance-55.75) > 0.000001 {
+		t.Fatalf("balance=%v handled=%v channel.Balance=%v", balance, handled, channel.Balance)
+	}
+}
+
 func TestASXSChannelBudgetPoolIncludesXMAPIGroupFallback(t *testing.T) {
 	asxsBaseURL := "https://api.asxs.top"
 	xmapiBaseURL := "https://code.xmapi.cc"

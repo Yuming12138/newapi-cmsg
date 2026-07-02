@@ -300,6 +300,10 @@ func UpdateCliproxyCPAQuotaGuardBalance(channel *model.Channel) (float64, bool, 
 	if health == nil {
 		return channel.Balance, true, nil
 	}
+	if balance, ok := cliproxyCPAUsableBalance(health); ok {
+		channel.Balance = balance
+		return balance, true, nil
+	}
 	if balance, ok := guardObjectFloat(health, "balance_units"); ok {
 		channel.Balance = balance
 		return balance, true, nil
@@ -309,6 +313,39 @@ func UpdateCliproxyCPAQuotaGuardBalance(channel *model.Channel) (float64, bool, 
 		return balance, true, nil
 	}
 	return channel.Balance, true, nil
+}
+
+func cliproxyCPAUsableBalance(health map[string]interface{}) (float64, bool) {
+	if balance, ok := guardObjectFloat(health, "usable_balance_units"); ok {
+		return math.Max(0, balance), true
+	}
+	buckets, ok := health["buckets"].(map[string]interface{})
+	if !ok || len(buckets) == 0 {
+		return 0, false
+	}
+	total := 0.0
+	found := false
+	for _, raw := range buckets {
+		bucket, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if balance, ok := guardObjectFloat(bucket, "usable_balance_units"); ok {
+			total += math.Max(0, balance)
+			found = true
+			continue
+		}
+		if canExhaust, ok := guardObjectBool(bucket, "can_exhaust"); ok && canExhaust {
+			if balance, ok := guardObjectFloat(bucket, "balance_units"); ok {
+				total += math.Max(0, balance)
+				found = true
+			}
+		}
+	}
+	if !found {
+		return 0, false
+	}
+	return total, true
 }
 
 func GetASXSChannelBudgetPoolSnapshot(ctx context.Context) (ChannelBudgetPoolSummary, bool, error) {
@@ -1201,6 +1238,38 @@ func guardObjectFloat(values map[string]interface{}, key string) (float64, bool)
 		return 0, false
 	}
 	return interfaceToFloat64(values[key])
+}
+
+func guardObjectBool(values map[string]interface{}, key string) (bool, bool) {
+	if values == nil {
+		return false, false
+	}
+	switch value := values[key].(type) {
+	case bool:
+		return value, true
+	case string:
+		trimmed := strings.TrimSpace(strings.ToLower(value))
+		if trimmed == "" {
+			return false, false
+		}
+		switch trimmed {
+		case "1", "true", "yes", "y", "on":
+			return true, true
+		case "0", "false", "no", "n", "off":
+			return false, true
+		}
+	case float64:
+		return value != 0, true
+	case float32:
+		return value != 0, true
+	case int:
+		return value != 0, true
+	case int64:
+		return value != 0, true
+	case int32:
+		return value != 0, true
+	}
+	return false, false
 }
 
 func guardObjectInt64(values map[string]interface{}, key string) (int64, bool) {

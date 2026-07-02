@@ -44,6 +44,10 @@ DEFAULT_CONFIG = {
     "min_remaining_percent_7d": 20.0,
     "fail_closed_after_consecutive_failures": 3,
     "balance_units_per_percent": 1.0,
+    "personal_plan_keywords": ["plus"],
+    "protected_plan_keywords": ["pro"],
+    "default_account_bucket": "protected",
+    "account_bucket_overrides": {},
 }
 
 OPTION_CONFIG_MAP = {
@@ -297,7 +301,7 @@ def plan_type_from_entry(entry: dict[str, Any], usage_payload: dict[str, Any] | 
     return str(value or "unknown").strip() or "unknown"
 
 
-def select_codex_auth(auth_files_payload: dict[str, Any]) -> dict[str, Any]:
+def codex_auth_entries(auth_files_payload: dict[str, Any]) -> list[dict[str, Any]]:
     files = auth_files_payload.get("files")
     if not isinstance(files, list):
         raise RuntimeError("auth_files_missing_files")
@@ -308,23 +312,78 @@ def select_codex_auth(auth_files_payload: dict[str, Any]) -> dict[str, Any]:
     ]
     if not codex:
         raise RuntimeError("codex_auth_not_found")
-    active = [item for item in codex if not item.get("disabled") and not item.get("unavailable")]
-    return active[0] if active else codex[0]
+    return codex
 
 
-def call_wham_usage(config: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
-    timeout = int(config.get("timeout_sec") or 30)
-    base_url = str(config.get("cpa_base_url") or "").rstrip("/")
-    if not base_url:
-        raise RuntimeError("empty_cpa_base_url")
-    headers = management_headers(env)
-    if not headers.get("Authorization") and not headers.get("X-Management-Key"):
-        raise RuntimeError("missing_cpa_management_credentials")
+def auth_is_unavailable(entry: dict[str, Any]) -> bool:
+    return bool(entry.get("disabled") or entry.get("unavailable"))
 
-    auth_payload = request_json(base_url + "/v0/management/auth-files", headers, timeout)
-    auth_entry = select_codex_auth(auth_payload)
+
+def normalize_bucket(value: Any) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_")
+    if raw in {"personal", "expendable", "plus", "owned", "own"}:
+        return "personal"
+    if raw in {"protected", "shared", "shared_pro", "pro", "reserved"}:
+        return "protected"
+    return ""
+
+
+def string_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip().lower() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [item.strip().lower() for item in value.split(",") if item.strip()]
+    return []
+
+
+def classify_account_bucket(
+    config: dict[str, Any],
+    auth_entry: dict[str, Any],
+    usage_payload: dict[str, Any] | None,
+    account_id_hash: str,
+    auth_index: str,
+) -> str:
+    overrides = config.get("account_bucket_overrides")
+    if not isinstance(overrides, dict):
+        overrides = {}
+    candidates = [
+        account_id_hash,
+        "hash:" + account_id_hash,
+        "auth_index:" + auth_index,
+        str(auth_index),
+        str(first_non_empty(auth_entry.get("name"), auth_entry.get("label")) or "").strip(),
+    ]
+    for key in candidates:
+        if key and key in overrides:
+            bucket = normalize_bucket(overrides.get(key))
+            if bucket:
+                return bucket
+
+    plan_type = plan_type_from_entry(auth_entry, usage_payload).lower()
+    for keyword in string_list(config.get("personal_plan_keywords")):
+        if keyword and keyword in plan_type:
+            return "personal"
+    for keyword in string_list(config.get("protected_plan_keywords")):
+        if keyword and keyword in plan_type:
+            return "protected"
+    return normalize_bucket(config.get("default_account_bucket")) or "protected"
+
+
+def account_identity(auth_entry: dict[str, Any]) -> tuple[str, str, str]:
     auth_index = str(first_non_empty(auth_entry.get("auth_index"), auth_entry.get("authIndex")) or "").strip()
     account_id = account_id_from_entry(auth_entry)
+    account_id_hash = hashlib.sha256(account_id.encode("utf-8")).hexdigest()[:12] if account_id else ""
+    return auth_index, account_id, account_id_hash
+
+
+def call_wham_usage_for_auth(
+    config: dict[str, Any],
+    base_url: str,
+    headers: dict[str, str],
+    timeout: int,
+    auth_entry: dict[str, Any],
+) -> dict[str, Any]:
+    auth_index, account_id, account_id_hash = account_identity(auth_entry)
     if not auth_index:
         raise RuntimeError("missing_auth_index")
     if not account_id:
@@ -353,11 +412,55 @@ def call_wham_usage(config: dict[str, Any], env: dict[str, str]) -> dict[str, An
     if not isinstance(usage, dict):
         raise RuntimeError("wham_usage_payload_not_object")
     usage["_guard_auth"] = {
-        "auth_count": len(auth_payload.get("files") or []),
+        "auth_index": auth_index,
         "account_id_hash": hashlib.sha256(account_id.encode("utf-8")).hexdigest()[:12],
         "plan_type_hint": plan_type_from_entry(auth_entry, usage),
     }
     return usage
+
+
+def call_wham_usages(config: dict[str, Any], env: dict[str, str]) -> list[dict[str, Any]]:
+    timeout = int(config.get("timeout_sec") or 30)
+    base_url = str(config.get("cpa_base_url") or "").rstrip("/")
+    if not base_url:
+        raise RuntimeError("empty_cpa_base_url")
+    headers = management_headers(env)
+    if not headers.get("Authorization") and not headers.get("X-Management-Key"):
+        raise RuntimeError("missing_cpa_management_credentials")
+
+    auth_payload = request_json(base_url + "/v0/management/auth-files", headers, timeout)
+    entries = codex_auth_entries(auth_payload)
+    accounts: list[dict[str, Any]] = []
+    successful = 0
+
+    for auth_entry in entries:
+        auth_index, _, account_id_hash = account_identity(auth_entry)
+        bucket = classify_account_bucket(config, auth_entry, None, account_id_hash, auth_index)
+        base_account = {
+            "auth_index": auth_index,
+            "account_id_hash": account_id_hash,
+            "plan_type": plan_type_from_entry(auth_entry),
+            "bucket": bucket,
+            "disabled": bool(auth_entry.get("disabled")),
+            "unavailable": bool(auth_entry.get("unavailable")),
+        }
+        if auth_is_unavailable(auth_entry):
+            accounts.append({**base_account, "ok": False, "skipped": True, "reason": "auth_unavailable"})
+            continue
+        try:
+            usage = call_wham_usage_for_auth(config, base_url, headers, timeout, auth_entry)
+            account = evaluate_account_quota(config, auth_entry, usage)
+            accounts.append(account)
+            successful += 1
+        except Exception as exc:
+            accounts.append({**base_account, "ok": False, "error": str(exc)[:180]})
+
+    if successful == 0 and accounts and all(item.get("skipped") for item in accounts):
+        return accounts
+    if successful == 0:
+        errors = [str(item.get("error") or item.get("reason") or "unknown") for item in accounts]
+        raise RuntimeError("wham_usage_all_accounts_failed: " + "; ".join(errors[:3]))
+    return accounts
 
 
 def number(value: Any) -> float | None:
@@ -404,41 +507,145 @@ def quota_windows(usage: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return out
 
 
-def evaluate_quota(config: dict[str, Any], usage: dict[str, Any]) -> dict[str, Any]:
+def account_window_remaining(windows: dict[str, dict[str, Any]], key: str) -> float:
+    value = number(windows.get(key, {}).get("remaining_percent"))
+    if value is None:
+        raise RuntimeError(f"missing_{key}_remaining_percent")
+    return max(0.0, min(100.0, value))
+
+
+def evaluate_account_quota(config: dict[str, Any], auth_entry: dict[str, Any], usage: dict[str, Any]) -> dict[str, Any]:
     windows = quota_windows(usage)
-    enabled = bool_value(config.get("enabled"), True)
     threshold_5h = clamp_percent(config.get("min_remaining_percent_5h"), 30.0)
     threshold_7d = clamp_percent(config.get("min_remaining_percent_7d"), 20.0)
-    remaining_5h = windows["5h"].get("remaining_percent")
-    remaining_7d = windows["7d"].get("remaining_percent")
-    if remaining_5h is None or remaining_7d is None:
-        raise RuntimeError("missing_remaining_percent")
-    remaining_5h = float(remaining_5h)
-    remaining_7d = float(remaining_7d)
+    remaining_5h = account_window_remaining(windows, "5h")
+    remaining_7d = account_window_remaining(windows, "7d")
     headroom_5h = remaining_5h - threshold_5h
     headroom_7d = remaining_7d - threshold_7d
-    remaining_headroom = min(headroom_5h, headroom_7d)
-    quota_ok = (not enabled) or (remaining_5h >= threshold_5h and remaining_7d >= threshold_7d)
-    visible_remaining = min(remaining_5h, remaining_7d)
-    balance_units = visible_remaining * float(config.get("balance_units_per_percent") or 1.0)
     guard_auth = usage.get("_guard_auth") if isinstance(usage.get("_guard_auth"), dict) else {}
+    auth_index = str(guard_auth.get("auth_index") or "").strip()
+    account_id_hash = str(guard_auth.get("account_id_hash") or "").strip()
+    bucket = classify_account_bucket(config, auth_entry, usage, account_id_hash, auth_index)
+    can_exhaust = bucket == "personal"
+    raw_remaining = min(remaining_5h, remaining_7d)
+    protected_headroom = max(0.0, min(headroom_5h, headroom_7d))
+    visible_remaining = raw_remaining if can_exhaust else protected_headroom
+    units_per_percent = float(config.get("balance_units_per_percent") or 1.0)
+    balance_units = raw_remaining * units_per_percent
+    usable_balance_units = visible_remaining * units_per_percent
+    return {
+        "ok": True,
+        "auth_index": auth_index,
+        "account_id_hash": account_id_hash,
+        "bucket": bucket,
+        "can_exhaust": can_exhaust,
+        "min_remaining_percent_5h": threshold_5h,
+        "min_remaining_percent_7d": threshold_7d,
+        "remaining_headroom_percent": round(min(headroom_5h, headroom_7d), 6),
+        "remaining_share_percent": round(visible_remaining, 6),
+        "raw_remaining_percent": round(raw_remaining, 6),
+        "balance_units": round(balance_units, 6),
+        "usable_balance_units": round(usable_balance_units, 6),
+        "plan_type": usage.get("plan_type") or usage.get("planType") or guard_auth.get("plan_type_hint"),
+        "windows": windows,
+        "rate_limit_reached_type": usage.get("rate_limit_reached_type"),
+    }
+
+
+def aggregate_windows(accounts: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for name in ("5h", "7d"):
+        items = [
+            account.get("windows", {}).get(name)
+            for account in accounts
+            if account.get("ok") and isinstance(account.get("windows"), dict) and isinstance(account.get("windows", {}).get(name), dict)
+        ]
+        if not items:
+            continue
+        remaining_values = [number(item.get("remaining_percent")) for item in items]
+        used_values = [number(item.get("used_percent")) for item in items]
+        reset_after_values = [number(item.get("reset_after_seconds")) for item in items]
+        reset_at_values = [number(item.get("reset_at")) for item in items]
+        remaining = [value for value in remaining_values if value is not None]
+        used = [value for value in used_values if value is not None]
+        reset_after = [value for value in reset_after_values if value is not None and value >= 0]
+        reset_at = [value for value in reset_at_values if value is not None and value > 0]
+        duration = number(first_non_empty(*[item.get("duration_seconds") for item in items]))
+        out[name] = {
+            "duration_seconds": int(duration) if duration else WINDOW_5H_SECONDS if name == "5h" else WINDOW_7D_SECONDS,
+            "used_percent": round(sum(used) / len(used), 6) if used else None,
+            "remaining_percent": round(sum(remaining) / len(remaining), 6) if remaining else None,
+            "reset_after_seconds": int(min(reset_after)) if reset_after else None,
+            "reset_at": int(min(reset_at)) if reset_at else None,
+        }
+    return out
+
+
+def empty_bucket(key: str, config: dict[str, Any]) -> dict[str, Any]:
+    can_exhaust = key == "personal"
+    return {
+        "bucket": key,
+        "label": "个人池" if can_exhaust else "共享 Pro",
+        "can_exhaust": can_exhaust,
+        "account_count": 0,
+        "available_account_count": 0,
+        "balance_units": 0.0,
+        "usable_balance_units": 0.0,
+        "min_remaining_percent_5h": None if can_exhaust else clamp_percent(config.get("min_remaining_percent_5h"), 30.0),
+        "min_remaining_percent_7d": None if can_exhaust else clamp_percent(config.get("min_remaining_percent_7d"), 20.0),
+        "windows": {},
+    }
+
+
+def bucket_summary(config: dict[str, Any], bucket_key: str, accounts: list[dict[str, Any]]) -> dict[str, Any]:
+    summary = empty_bucket(bucket_key, config)
+    summary["account_count"] = len(accounts)
+    ok_accounts = [account for account in accounts if account.get("ok")]
+    summary["available_account_count"] = len(ok_accounts)
+    summary["balance_units"] = round(sum(float(account.get("balance_units") or 0) for account in ok_accounts), 6)
+    summary["usable_balance_units"] = round(sum(float(account.get("usable_balance_units") or 0) for account in ok_accounts), 6)
+    summary["remaining_share_percent"] = round(sum(float(account.get("remaining_share_percent") or 0) for account in ok_accounts), 6)
+    summary["raw_remaining_percent"] = round(sum(float(account.get("raw_remaining_percent") or 0) for account in ok_accounts), 6)
+    summary["windows"] = aggregate_windows(ok_accounts)
+    plans: dict[str, int] = {}
+    for account in accounts:
+        plan = str(account.get("plan_type") or "unknown").strip() or "unknown"
+        plans[plan] = plans.get(plan, 0) + 1
+    summary["plans"] = plans
+    return summary
+
+
+def evaluate_quota(config: dict[str, Any], accounts: list[dict[str, Any]]) -> dict[str, Any]:
+    enabled = bool_value(config.get("enabled"), True)
+    buckets: dict[str, dict[str, Any]] = {}
+    for key in ("personal", "protected"):
+        bucket_accounts = [account for account in accounts if account.get("bucket") == key]
+        if bucket_accounts:
+            buckets[key] = bucket_summary(config, key, bucket_accounts)
+    ok_accounts = [account for account in accounts if account.get("ok")]
+    usable_balance_units = round(sum(float(account.get("usable_balance_units") or 0) for account in ok_accounts), 6)
+    total_balance_units = round(sum(float(account.get("balance_units") or 0) for account in ok_accounts), 6)
+    quota_ok = (not enabled) or usable_balance_units > 0
+    windows = aggregate_windows(ok_accounts)
     return {
         "ok": True,
         "quota_ok": quota_ok,
         "within_share": quota_ok,
-        "reason": "above_low_watermark" if quota_ok else "low_watermark_reached",
-        "guard_mode": "low_watermark",
+        "reason": "usable_balance_available" if quota_ok else "quota_low_watermark_reached",
+        "guard_mode": "bucket_low_watermark",
         "enabled": enabled,
         "low_watermark_enabled": enabled,
-        "min_remaining_percent_5h": threshold_5h,
-        "min_remaining_percent_7d": threshold_7d,
-        "remaining_headroom_percent": round(remaining_headroom, 6),
-        "remaining_share_percent": round(visible_remaining, 6),
-        "balance_units": round(balance_units, 6),
-        "plan_type": usage.get("plan_type") or usage.get("planType") or guard_auth.get("plan_type_hint"),
-        "account_id_hash": guard_auth.get("account_id_hash"),
+        "min_remaining_percent_5h": clamp_percent(config.get("min_remaining_percent_5h"), 30.0),
+        "min_remaining_percent_7d": clamp_percent(config.get("min_remaining_percent_7d"), 20.0),
+        "account_count": len(accounts),
+        "available_account_count": len(ok_accounts),
+        "remaining_share_percent": usable_balance_units,
+        "balance_units": usable_balance_units,
+        "usable_balance_units": usable_balance_units,
+        "total_balance_units": total_balance_units,
+        "buckets": buckets,
+        "accounts": accounts,
         "windows": windows,
-        "rate_limit_reached_type": usage.get("rate_limit_reached_type"),
     }
 
 
@@ -469,7 +676,7 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
     balance_update: float | None = None
 
     if desired_enabled:
-        balance_update = float(result.get("balance_units") or 0)
+        balance_update = float(first_non_empty(result.get("usable_balance_units"), result.get("balance_units")) or 0)
         if not manually_disabled and current_status != STATUS_ENABLED:
             status = STATUS_ENABLED
             abilities_enabled = True
@@ -494,7 +701,10 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
 
     name = channel.get("name") or f"channel-{cid}"
     if desired_enabled:
-        return f"{name}: enabled remaining={float(result.get('remaining_share_percent') or 0):.3f}% balance={float(result.get('balance_units') or 0):.6f}"
+        return (
+            f"{name}: enabled usable={float(result.get('usable_balance_units') or 0):.6f} "
+            f"total={float(result.get('total_balance_units') or result.get('balance_units') or 0):.6f}"
+        )
     if ok:
         return f"{name}: auto-disabled {result.get('reason')}"
     if fail_closed:
@@ -512,8 +722,8 @@ def main() -> int:
     config = deep_merge(config, load_option_overrides(db))
 
     try:
-        usage = call_wham_usage(config, env)
-        result = evaluate_quota(config, usage)
+        accounts = call_wham_usages(config, env)
+        result = evaluate_quota(config, accounts)
         state["failure_count"] = 0
         state["last_success_at"] = int(time.time())
         state["last_error"] = None
