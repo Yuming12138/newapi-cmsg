@@ -29,6 +29,7 @@ import {
   ShieldCheck,
   UserCog,
   Info,
+  MessagesSquare,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
@@ -476,6 +477,40 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const useChannel = other?.admin_info?.use_channel
   const channelChain =
     useChannel && useChannel.length > 0 ? useChannel.join(' → ') : undefined
+  const openWebUIInfo = props.isAdmin ? other?.admin_info?.open_webui : null
+  const openWebUIRows =
+    openWebUIInfo != null
+      ? ([
+          openWebUIInfo.name && {
+            label: t('Name'),
+            value: openWebUIInfo.name,
+          },
+          openWebUIInfo.email && {
+            label: t('Email'),
+            value: openWebUIInfo.email,
+          },
+          openWebUIInfo.user_id && {
+            label: t('User ID'),
+            value: openWebUIInfo.user_id,
+          },
+          openWebUIInfo.role && {
+            label: t('Role'),
+            value: openWebUIInfo.role,
+          },
+          openWebUIInfo.chat_id && {
+            label: t('Chat ID'),
+            value: openWebUIInfo.chat_id,
+          },
+          openWebUIInfo.message_id && {
+            label: t('Message ID'),
+            value: openWebUIInfo.message_id,
+          },
+          {
+            label: t('Verified'),
+            value: openWebUIInfo.verified ? t('Yes') : t('No'),
+          },
+        ].filter(Boolean) as Array<{ label: string; value: string }>)
+      : []
 
   return (
     <Dialog
@@ -547,6 +582,22 @@ export function DetailsDialog(props: DetailsDialogProps) {
               value={props.log.group || other?.group || ''}
               mono
             />
+          )}
+
+          {openWebUIRows.length > 0 && (
+            <DetailSection
+              icon={<MessagesSquare className='size-3.5' aria-hidden='true' />}
+              label='Open WebUI'
+            >
+              {openWebUIRows.map((row, idx) => (
+                <DetailRow
+                  key={idx}
+                  label={row.label}
+                  value={row.value}
+                  mono={row.label !== t('Name') && row.label !== t('Role')}
+                />
+              ))}
+            </DetailSection>
           )}
 
           {showAdminIp && (

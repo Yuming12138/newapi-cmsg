@@ -99,6 +99,16 @@ export interface LogOtherData {
     use_channel?: number[]
     local_count_tokens?: boolean
     channel_affinity?: ChannelAffinityInfo
+    open_webui?: {
+      source?: string
+      verified?: boolean
+      user_id?: string
+      email?: string
+      name?: string
+      role?: string
+      chat_id?: string
+      message_id?: string
+    }
     // Top-up audit fields (type=1, admin only)
     payment_method?: string
     callback_payment_method?: string

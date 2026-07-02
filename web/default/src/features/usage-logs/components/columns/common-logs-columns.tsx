@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useState } from 'react'
 import { type ColumnDef } from '@tanstack/react-table'
-import { CircleAlert, Sparkles, KeyRound } from 'lucide-react'
+import { CircleAlert, Sparkles, KeyRound, MessagesSquare } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
@@ -86,6 +86,21 @@ function getGroupRatioText(other: LogOtherData | null): string | null {
     return `${formatRatioCompact(groupRatio)}x`
   }
 
+  return null
+}
+
+function getOpenWebUIActorText(other: LogOtherData | null): string | null {
+  const actor = other?.admin_info?.open_webui
+  if (!actor) return null
+
+  const name = typeof actor.name === 'string' ? actor.name.trim() : ''
+  const email = typeof actor.email === 'string' ? actor.email.trim() : ''
+  const userId = typeof actor.user_id === 'string' ? actor.user_id.trim() : ''
+
+  if (name && email) return `${name} · ${email}`
+  if (name) return name
+  if (email) return email
+  if (userId) return userId
   return null
 }
 
@@ -406,6 +421,8 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
           const log = row.original
 
           if (!log.username) return null
+          const other = parseLogOther(log.other)
+          const openWebUIActor = getOpenWebUIActorText(other)
 
           return (
             <button
@@ -432,8 +449,45 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                   {sensitiveVisible ? getUserAvatarFallback(log.username) : '•'}
                 </AvatarFallback>
               </Avatar>
-              <span className='text-muted-foreground truncate text-sm hover:underline'>
-                {sensitiveVisible ? log.username : '••••'}
+              <span className='flex min-w-0 flex-col gap-0.5'>
+                <span className='text-muted-foreground truncate text-sm hover:underline'>
+                  {sensitiveVisible ? log.username : '••••'}
+                </span>
+                {openWebUIActor && (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <span className='text-primary inline-flex max-w-[160px] items-center gap-1 truncate text-[11px]' />
+                        }
+                      >
+                        <MessagesSquare
+                          className='size-3 shrink-0'
+                          aria-hidden='true'
+                        />
+                        <span className='truncate'>
+                          {sensitiveVisible ? openWebUIActor : '••••'}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <div className='space-y-0.5 text-xs'>
+                          <p className='font-medium'>Open WebUI</p>
+                          <p>
+                            {sensitiveVisible ? openWebUIActor : '••••'}
+                          </p>
+                          {other?.admin_info?.open_webui?.chat_id && (
+                            <p className='text-muted-foreground font-mono'>
+                              {t('Chat ID')}:{' '}
+                              {sensitiveVisible
+                                ? other.admin_info.open_webui.chat_id
+                                : '••••'}
+                            </p>
+                          )}
+                        </div>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
               </span>
             </button>
           )
