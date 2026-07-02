@@ -1635,6 +1635,9 @@ func (l *FileRequestLogger) formatRequestInfo(url, method string, headers map[st
 // It spools streaming response chunks to a temporary file to avoid retaining large responses in memory.
 // The final log file is assembled when Close is called.
 type FileStreamingLogWriter struct {
+	mu     sync.RWMutex
+	closed bool
+
 	// logFilePath is the final log file path.
 	logFilePath string
 
@@ -1701,19 +1704,21 @@ type FileStreamingLogWriter struct {
 // Parameters:
 //   - chunk: The response chunk to write
 func (w *FileStreamingLogWriter) WriteChunkAsync(chunk []byte) {
-	if w.chunkChan == nil {
-		return
-	}
-
-	// Make a copy of the chunk to avoid data races
+	// Make a copy of the chunk to avoid data races.
 	chunkCopy := make([]byte, len(chunk))
 	copy(chunkCopy, chunk)
 
-	// Non-blocking send
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if w.closed || w.chunkChan == nil {
+		return
+	}
+
+	// Non-blocking send.
 	select {
 	case w.chunkChan <- chunkCopy:
 	default:
-		// Channel is full, skip this chunk to avoid blocking
+		// Channel is full, skip this chunk to avoid blocking.
 	}
 }
 
@@ -1819,14 +1824,27 @@ func (w *FileStreamingLogWriter) SetFirstChunkTimestamp(timestamp time.Time) {
 // Returns:
 //   - error: An error if closing fails, nil otherwise
 func (w *FileStreamingLogWriter) Close() error {
-	if w.chunkChan != nil {
-		close(w.chunkChan)
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return nil
+	}
+	w.closed = true
+	chunkChan := w.chunkChan
+	closeChan := w.closeChan
+	w.mu.Unlock()
+
+	if chunkChan != nil {
+		close(chunkChan)
 	}
 
-	// Wait for async writer to finish spooling chunks
-	if w.closeChan != nil {
-		<-w.closeChan
+	// Wait for async writer to finish spooling chunks.
+	if closeChan != nil {
+		<-closeChan
+		w.mu.Lock()
 		w.chunkChan = nil
+		w.closeChan = nil
+		w.mu.Unlock()
 	}
 
 	select {

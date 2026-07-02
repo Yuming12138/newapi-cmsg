@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -294,6 +295,52 @@ func TestFileRequestLogger_HomeEnabled_ForwardsSourceLogAndCleansParts(t *testin
 		t.Fatalf("forwarded request_log missing websocket request: %s", got.RequestLog)
 	}
 	assertFileBodySourceCleaned(t, partPaths)
+}
+
+func TestFileStreamingLogWriterConcurrentCloseAndWriteChunk(t *testing.T) {
+	logsDir := t.TempDir()
+	logger := NewFileRequestLogger(true, logsDir, "", 0)
+	writer, errLog := logger.LogStreamingRequest(
+		"/v1/responses",
+		http.MethodPost,
+		map[string][]string{"Content-Type": {"application/json"}},
+		[]byte(`{"input":"hello"}`),
+		"stream-race-1",
+	)
+	if errLog != nil {
+		t.Fatalf("LogStreamingRequest error: %v", errLog)
+	}
+
+	fileWriter, ok := writer.(*FileStreamingLogWriter)
+	if !ok {
+		t.Fatalf("writer type = %T, want *FileStreamingLogWriter", writer)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				fileWriter.WriteChunkAsync([]byte("data: ok\n\n"))
+			}
+		}()
+	}
+
+	errCh := make(chan error, 2)
+	go func() {
+		errCh <- fileWriter.Close()
+	}()
+	go func() {
+		errCh <- fileWriter.Close()
+	}()
+
+	wg.Wait()
+	for i := 0; i < 2; i++ {
+		if errClose := <-errCh; errClose != nil {
+			t.Fatalf("Close error: %v", errClose)
+		}
+	}
 }
 
 func TestFileRequestLogger_HomeEnabled_ForwardsStreamingRequestID(t *testing.T) {
