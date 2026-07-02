@@ -281,6 +281,7 @@ func migrateDB() error {
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
 		&PerfMetric{},
+		&SystemTask{},
 		&SystemInstance{},
 		&ResponsesChatSession{},
 	)
@@ -332,6 +333,7 @@ func migrateDBFast() error {
 		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
 		{&PerfMetric{}, "PerfMetric"},
+		{&SystemTask{}, "SystemTask"},
 		{&SystemInstance{}, "SystemInstance"},
 		{&ResponsesChatSession{}, "ResponsesChatSession"},
 	}

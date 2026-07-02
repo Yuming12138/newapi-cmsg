@@ -126,6 +126,9 @@ func main() {
 	// Report this process as a system instance for multi-node runtime visibility.
 	service.StartSystemInstanceReporter()
 
+	// Persistent system maintenance task runner
+	service.StartSystemTaskRunner()
+
 	// DeepSeek Anthropic balance sync task
 	service.StartDeepSeekBalanceSyncTask()
 

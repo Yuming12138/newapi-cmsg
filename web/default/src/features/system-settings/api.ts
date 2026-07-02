@@ -19,9 +19,11 @@ For commercial licensing, please contact support@quantumnous.com
 import { api } from '@/lib/api'
 import type {
   DeleteLogsResponse,
+  LogCleanupTask,
   FetchUpstreamRatiosRequest,
   SystemInstancesResponse,
   SystemOptionsResponse,
+  SystemTaskResponse,
   UpdateOptionRequest,
   UpdateOptionResponse,
   UpstreamChannelsResponse,
@@ -42,6 +44,34 @@ export async function deleteLogsBefore(targetTimestamp: number) {
   const res = await api.delete<DeleteLogsResponse>('/api/log/', {
     params: { target_timestamp: targetTimestamp },
   })
+  return res.data
+}
+
+export async function startLogCleanupTask(targetTimestamp: number) {
+  const res = await api.post<SystemTaskResponse<LogCleanupTask>>(
+    '/api/performance/system-tasks/log-cleanup',
+    null,
+    {
+      params: { target_timestamp: targetTimestamp },
+    }
+  )
+  return res.data
+}
+
+export async function getCurrentLogCleanupTask() {
+  const res = await api.get<SystemTaskResponse<LogCleanupTask | null>>(
+    '/api/performance/system-tasks/current',
+    {
+      params: { type: 'log_cleanup' },
+    }
+  )
+  return res.data
+}
+
+export async function getSystemTask(taskId: string) {
+  const res = await api.get<SystemTaskResponse<LogCleanupTask>>(
+    `/api/performance/system-tasks/${taskId}`
+  )
   return res.data
 }
 

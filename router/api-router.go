@@ -218,6 +218,9 @@ func SetApiRouter(router *gin.Engine) {
 			performanceRoute.POST("/gc", controller.ForceGC)
 			performanceRoute.GET("/logs", controller.GetLogFiles)
 			performanceRoute.DELETE("/logs", controller.CleanupLogFiles)
+			performanceRoute.POST("/system-tasks/log-cleanup", controller.CreateLogCleanupSystemTask)
+			performanceRoute.GET("/system-tasks/current", controller.GetCurrentSystemTask)
+			performanceRoute.GET("/system-tasks/:task_id", controller.GetSystemTask)
 		}
 		ratioSyncRoute := apiRouter.Group("/ratio_sync")
 		ratioSyncRoute.Use(middleware.RootAuth())
