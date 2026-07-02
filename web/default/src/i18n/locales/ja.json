@@ -1825,7 +1825,7 @@
     "footer.columns.related.links.oneApi": "1つのAPI",
     "footer.columns.related.title": "関連プロジェクト",
     "footer.defaultCopyright": "すべての権利を留保します。",
-    "footer.new\u0061pi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
+    "footer.newapi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "2025 年 5 月 10 日以降に追加されたチャネルの場合、デプロイ時にモデル名から「.」を削除する必要はありません",
     "For private deployments, format: https://fastgpt.run/api/openapi": "プライベートデプロイメントの場合、形式: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "構文的に有効な JSON 応答を強制",
@@ -4618,5 +4618,13 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
     "Zoom": "ズーム"
-  }
+  },
+  "Copy selected models": "選択したモデルをコピー",
+  "Copy selected models separated by commas (e.g. a,b)": "選択したモデルをカンマ区切りでコピーします（例: a,b）",
+  "Delete failed models": "失敗したモデルを削除",
+  "Delete failed models ({{count}})": "失敗したモデルを削除（{{count}}）",
+  "Deleted {{count}} failed models": "{{count}} 個の失敗したモデルを削除しました",
+  "Failed to delete failed models": "失敗したモデルの削除に失敗しました",
+  "Select successful models ({{count}})": "成功したモデルを選択（{{count}}）",
+  "This removes {{count}} failed models from this channel. This action cannot be undone.": "このチャンネルから {{count}} 個の失敗したモデルを削除します。この操作は元に戻せません。"
 }

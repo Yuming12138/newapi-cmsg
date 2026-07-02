@@ -1825,7 +1825,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Projets liés",
     "footer.defaultCopyright": "Tous droits réservés.",
-    "footer.new\u0061pi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
+    "footer.newapi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Pour les canaux ajoutés après le 10 mai 2025, pas besoin de supprimer \".\" des noms de modèles lors du déploiement",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Pour les déploiements privés, format : https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Imposer une réponse JSON syntaxiquement valide",
@@ -4618,5 +4618,13 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom"
-  }
+  },
+  "Copy selected models": "Copier les modèles sélectionnés",
+  "Copy selected models separated by commas (e.g. a,b)": "Copier les modèles sélectionnés séparés par des virgules (par ex. a,b)",
+  "Delete failed models": "Supprimer les modèles en échec",
+  "Delete failed models ({{count}})": "Supprimer les modèles en échec ({{count}})",
+  "Deleted {{count}} failed models": "{{count}} modèles en échec supprimés",
+  "Failed to delete failed models": "Échec de la suppression des modèles en échec",
+  "Select successful models ({{count}})": "Sélectionner les modèles réussis ({{count}})",
+  "This removes {{count}} failed models from this channel. This action cannot be undone.": "Cela supprime {{count}} modèles en échec de ce canal. Cette action est irréversible."
 }
