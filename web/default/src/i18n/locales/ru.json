@@ -2333,6 +2333,7 @@
     "Max Success": "Макс. успешных",
     "Max successful requests": "Макс. успешных запросов",
     "Max Successful Requests": "Макс. успешных запросов",
+    "Max Retries": "Максимум повторных попыток",
     "Maximum 1000 characters. Supports Markdown and HTML.": "Максимум 1000 символов. Поддерживает Markdown и HTML.",
     "Maximum 200 characters": "Максимум 200 символов",
     "Maximum 500 characters. Supports Markdown and HTML.": "Максимум 500 символов. Поддерживает Markdown и HTML.",
