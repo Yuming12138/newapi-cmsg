@@ -134,7 +134,13 @@ type CliproxyCPAQuotaAccount = {
   label: string
   bucket: string | null
   ok: boolean | null
+  skipped: boolean | null
+  unavailable: boolean | null
+  disabled: boolean | null
   canExhaust: boolean | null
+  reason: string | null
+  error: string | null
+  planType: string | null
   resetCreditsAvailable: number | null
   balanceUnits: number | null
   usableBalanceUnits: number | null
@@ -333,7 +339,13 @@ function parseCliproxyCPAQuotaAccount(
     label: cliproxyCPAAccountLabel(item, authIndex),
     bucket: typeof item.bucket === 'string' ? item.bucket : null,
     ok: booleanValue(item.ok),
+    skipped: booleanValue(item.skipped),
+    unavailable: booleanValue(item.unavailable),
+    disabled: booleanValue(item.disabled),
     canExhaust: booleanValue(item.can_exhaust),
+    reason: typeof item.reason === 'string' ? item.reason : null,
+    error: typeof item.error === 'string' ? item.error : null,
+    planType: typeof item.plan_type === 'string' ? item.plan_type : null,
     resetCreditsAvailable: numberValue(item.reset_credits_available),
     balanceUnits: numberValue(item.balance_units),
     usableBalanceUnits: numberValue(item.usable_balance_units),
@@ -468,6 +480,43 @@ function formatResetCreditsAvailable(value: number | null | undefined): string {
   return String(Math.max(0, Math.trunc(value)))
 }
 
+function isCliproxyCPAAccountAvailable(
+  account: CliproxyCPAQuotaAccount
+): boolean {
+  return (
+    account.ok === true &&
+    account.skipped !== true &&
+    account.unavailable !== true &&
+    account.disabled !== true
+  )
+}
+
+function getCliproxyCPAAccountIssue(account: CliproxyCPAQuotaAccount): string {
+  if (account.disabled === true) return '已禁用'
+  if (account.unavailable === true) return '不可用'
+  if (account.skipped === true) {
+    if (account.reason === 'auth_unavailable') return '需重新登录'
+    return '已跳过'
+  }
+  if (account.ok === false) return '不可用'
+  return '状态异常'
+}
+
+function getCliproxyCPAAccountIssueDetail(
+  account: CliproxyCPAQuotaAccount
+): string | null {
+  return account.reason || account.error || null
+}
+
+function getCliproxyCPAAccountPlanLabel(
+  account: CliproxyCPAQuotaAccount
+): string | null {
+  if (account.planType && account.planType.trim() !== '') return account.planType
+  if (account.canExhaust === true) return '个人池'
+  if (account.canExhaust === false) return '共享 Pro'
+  return null
+}
+
 function clampPercent(value: number | null | undefined): number {
   if (value == null || !Number.isFinite(value)) return 0
   return Math.min(100, Math.max(0, value))
@@ -482,16 +531,18 @@ function getCliproxyCPAProgressColor(
   return '[&_[data-slot=progress-indicator]]:bg-emerald-500'
 }
 
-function formatCliproxyCPAAccountCount(bucket: CliproxyCPAQuotaBucket): string {
-  if (bucket.accountCount == null) return ''
-  if (bucket.availableAccountCount == null) return `${bucket.accountCount}`
-  return `${bucket.availableAccountCount}/${bucket.accountCount}`
+function getCliproxyCPABucketAccountCountLabel(
+  bucket: CliproxyCPAQuotaBucket
+): string | null {
+  if (bucket.accountCount == null) return null
+  if (bucket.availableAccountCount == null) return `总 ${bucket.accountCount}`
+  return `可用 ${bucket.availableAccountCount} / 总 ${bucket.accountCount}`
 }
 
 function formatCliproxyCPABucketSummary(
   bucket: CliproxyCPAQuotaBucket
 ): string {
-  const count = formatCliproxyCPAAccountCount(bucket)
+  const count = getCliproxyCPABucketAccountCountLabel(bucket)
   const prefix = count ? `${bucket.label} ${count}` : bucket.label
   return `${prefix} ${formatCliproxyCPAUnits(bucket.usableBalanceUnits)}`
 }
@@ -777,11 +828,17 @@ function CliproxyCPAAccountRow({
   account,
   channelId,
   updatedAt,
+  unavailable = false,
 }: {
   account: CliproxyCPAQuotaAccount
   channelId: number
   updatedAt: number | null
+  unavailable?: boolean
 }) {
+  const issue = unavailable ? getCliproxyCPAAccountIssue(account) : null
+  const issueDetail = unavailable ? getCliproxyCPAAccountIssueDetail(account) : null
+  const planLabel = getCliproxyCPAAccountPlanLabel(account)
+
   return (
     <div className='bg-muted/30 border-border/80 space-y-1 rounded border p-1.5'>
       <div className='flex items-start justify-between gap-2'>
@@ -789,14 +846,27 @@ function CliproxyCPAAccountRow({
           <p className='text-foreground truncate text-[11px] font-medium'>
             {account.label}
           </p>
-          <p className='text-foreground/70 text-[10px]'>
-            reset credits{' '}
-            <span className='tabular-nums'>
-              {formatResetCreditsAvailable(account.resetCreditsAvailable)}
-            </span>
-          </p>
+          {unavailable ? (
+            <p className='text-destructive text-[10px]'>
+              {issue}
+              {issueDetail ? ` · ${issueDetail}` : ''}
+              {planLabel ? ` · ${planLabel}` : ''}
+            </p>
+          ) : (
+            <p className='text-foreground/70 text-[10px]'>
+              reset credits{' '}
+              <span className='tabular-nums'>
+                {formatResetCreditsAvailable(account.resetCreditsAvailable)}
+              </span>
+            </p>
+          )}
         </div>
-        <CliproxyCPAResetCreditButton channelId={channelId} account={account} />
+        {!unavailable && (
+          <CliproxyCPAResetCreditButton
+            channelId={channelId}
+            account={account}
+          />
+        )}
       </div>
       <CliproxyCPAAccountWindowSummary
         account={account}
@@ -811,6 +881,7 @@ function filterCliproxyCPAAccountsForBucket(
   bucket: CliproxyCPAQuotaBucket
 ): CliproxyCPAQuotaAccount[] {
   return accounts.filter((account) => {
+    if (!isCliproxyCPAAccountAvailable(account)) return false
     if (account.bucket && account.bucket === bucket.key) return true
     return account.bucket == null && account.canExhaust === bucket.canExhaust
   })
@@ -827,7 +898,7 @@ function CliproxyCPABucketDetails({
   channelId: number
   updatedAt: number | null
 }) {
-  const count = formatCliproxyCPAAccountCount(bucket)
+  const count = getCliproxyCPABucketAccountCountLabel(bucket)
   const rawBalanceVisible =
     bucket.balanceUnits != null &&
     bucket.usableBalanceUnits != null &&
@@ -839,7 +910,7 @@ function CliproxyCPABucketDetails({
         <div className='min-w-0'>
           <p className='truncate text-xs font-semibold'>
             {bucket.label}
-            {count ? ` (${count})` : ''}
+            {count ? ` · ${count}` : ''}
           </p>
           {bucket.canExhaust === false && (
             <p className='text-foreground/70 text-[11px]'>
@@ -875,7 +946,7 @@ function CliproxyCPABucketDetails({
       />
       {accounts.length > 0 && (
         <div className='border-border/70 space-y-1 border-t pt-2'>
-          <p className='text-foreground/70 text-[11px]'>Accounts</p>
+          <p className='text-foreground/70 text-[11px]'>可用账号</p>
           {accounts.map((account) => (
             <CliproxyCPAAccountRow
               key={account.authIndex}
@@ -897,6 +968,10 @@ function CliproxyCPAQuotaDetails({
   meta: CliproxyCPAQuotaMeta
   channelId: number
 }) {
+  const unavailableAccounts = meta.accounts.filter(
+    (account) => !isCliproxyCPAAccountAvailable(account)
+  )
+
   return (
     <div className='text-foreground w-[360px] max-w-[calc(100vw-2rem)] space-y-2'>
       <div className='grid grid-cols-3 gap-2'>
@@ -913,7 +988,7 @@ function CliproxyCPAQuotaDetails({
           </p>
         </div>
         <div className='bg-background border-border rounded-md border p-2 shadow-sm'>
-          <p className='text-foreground/70 text-[11px]'>Accounts</p>
+          <p className='text-foreground/70 text-[11px]'>可用/总账号</p>
           <p className='text-sm font-semibold tabular-nums'>
             {meta.accountCount == null
               ? '-'
@@ -972,6 +1047,27 @@ function CliproxyCPAQuotaDetails({
               ))}
             </div>
           )}
+        </div>
+      )}
+      {unavailableAccounts.length > 0 && (
+        <div className='bg-background border-border space-y-2 rounded-md border p-2 shadow-sm'>
+          <div className='flex items-center justify-between gap-2'>
+            <p className='text-xs font-semibold'>
+              不可用账号 · {unavailableAccounts.length}
+            </p>
+            <p className='text-foreground/70 text-[11px]'>需在 CPA 侧修复登录</p>
+          </div>
+          <div className='space-y-1'>
+            {unavailableAccounts.map((account) => (
+              <CliproxyCPAAccountRow
+                key={account.authIndex}
+                account={account}
+                channelId={channelId}
+                updatedAt={meta.updatedAt}
+                unavailable
+              />
+            ))}
+          </div>
         </div>
       )}
       <div className='text-foreground/70 flex justify-between gap-2 text-[11px]'>
