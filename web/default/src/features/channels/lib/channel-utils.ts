@@ -80,7 +80,7 @@ export function getChannelTypeIcon(type: number): string {
     45: 'Volcengine', // VolcEngine
 
     58: 'OpenAI', // MiMo
-    59: 'OpenAI', // Advanced Custom
+    59: 'NewAPI', // Advanced Custom
     // Other AI providers
     4: 'Ollama', // Ollama
     27: 'Perplexity', // Perplexity
