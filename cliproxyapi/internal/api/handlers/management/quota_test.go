@@ -132,3 +132,122 @@ func TestResetQuota_DoesNotAcceptAuthIDOrFileName(t *testing.T) {
 		})
 	}
 }
+
+func TestConsumeCodexResetCredit_PostsUpstreamAndClearsQuota(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	next := time.Now().Add(time.Hour)
+	auth := &coreauth.Auth{
+		ID:             "codex-reset-credit-auth",
+		FileName:       "codex-reset-credit-auth.json",
+		Provider:       "codex",
+		Status:         coreauth.StatusError,
+		StatusMessage:  "quota exhausted",
+		Unavailable:    true,
+		NextRetryAfter: next,
+		Quota:          coreauth.QuotaState{Exceeded: true, Reason: "quota", NextRecoverAt: next, BackoffLevel: 2},
+		Metadata: map[string]any{
+			"access_token": "test-access-token",
+			"account_id":   "acct-test",
+		},
+		ModelStates: map[string]*coreauth.ModelState{
+			"gpt-5": {
+				Status:         coreauth.StatusError,
+				StatusMessage:  "quota exhausted",
+				Unavailable:    true,
+				NextRetryAfter: next,
+				Quota:          coreauth.QuotaState{Exceeded: true, Reason: "quota", NextRecoverAt: next, BackoffLevel: 2},
+			},
+		},
+	}
+	authIndex := auth.EnsureIndex()
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("failed to register auth record: %v", errRegister)
+	}
+
+	called := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-access-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("Chatgpt-Account-Id"); got != "acct-test" {
+			t.Fatalf("Chatgpt-Account-Id = %q, want acct-test", got)
+		}
+		if got := r.Header.Get("User-Agent"); got != codexResetCreditUserAgent {
+			t.Fatalf("User-Agent = %q, want %q", got, codexResetCreditUserAgent)
+		}
+		var body map[string]string
+		if errDecode := json.NewDecoder(r.Body).Decode(&body); errDecode != nil {
+			t.Fatalf("failed to decode body: %v", errDecode)
+		}
+		if strings.TrimSpace(body["redeem_request_id"]) == "" {
+			t.Fatalf("redeem_request_id is required")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	previousURL := codexResetCreditsConsumeURL
+	codexResetCreditsConsumeURL = upstream.URL
+	defer func() { codexResetCreditsConsumeURL = previousURL }()
+
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: t.TempDir()}, manager)
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	req := httptest.NewRequest(http.MethodPost, "/v0/management/consume-codex-reset-credit", strings.NewReader(`{"auth_index":"`+authIndex+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	ctx.Request = req
+	h.ConsumeCodexResetCredit(ctx)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d with body %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if !called {
+		t.Fatal("expected upstream reset endpoint to be called")
+	}
+
+	updated, ok := manager.GetByID("codex-reset-credit-auth")
+	if !ok || updated == nil {
+		t.Fatalf("expected auth record to exist after reset")
+	}
+	if updated.Status != coreauth.StatusActive || updated.StatusMessage != "" || updated.Unavailable || !updated.NextRetryAfter.IsZero() {
+		t.Fatalf("updated auth state = status %q message %q unavailable %v next %v", updated.Status, updated.StatusMessage, updated.Unavailable, updated.NextRetryAfter)
+	}
+	if updated.Quota.Exceeded || updated.Quota.Reason != "" || !updated.Quota.NextRecoverAt.IsZero() || updated.Quota.BackoffLevel != 0 {
+		t.Fatalf("updated auth quota = %+v, want cleared", updated.Quota)
+	}
+}
+
+func TestConsumeCodexResetCredit_RejectsNonCodexProvider(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+
+	manager := coreauth.NewManager(nil, nil, nil)
+	auth := &coreauth.Auth{
+		ID:       "claude-reset-credit-auth",
+		FileName: "claude-reset-credit-auth.json",
+		Provider: "claude",
+	}
+	authIndex := auth.EnsureIndex()
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("failed to register auth record: %v", errRegister)
+	}
+
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: t.TempDir()}, manager)
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	req := httptest.NewRequest(http.MethodPost, "/v0/management/consume-codex-reset-credit", strings.NewReader(`{"auth_index":"`+authIndex+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	ctx.Request = req
+	h.ConsumeCodexResetCredit(ctx)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d with body %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+}
