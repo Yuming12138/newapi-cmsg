@@ -111,9 +111,9 @@ func ReleaseVersion(release Release) (string, error) {
 }
 
 func (c Client) DownloadAsset(ctx context.Context, asset ReleaseAsset) ([]byte, error) {
-	downloadURL := strings.TrimSpace(asset.APIURL)
+	downloadURL := strings.TrimSpace(asset.BrowserDownloadURL)
 	if downloadURL == "" {
-		downloadURL = strings.TrimSpace(asset.BrowserDownloadURL)
+		downloadURL = strings.TrimSpace(asset.APIURL)
 	}
 	if downloadURL == "" {
 		return nil, fmt.Errorf("asset %q missing download url", asset.Name)

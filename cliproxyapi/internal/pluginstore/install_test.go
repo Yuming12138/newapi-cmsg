@@ -336,34 +336,26 @@ func TestInstallUsesLatestReleaseVersion(t *testing.T) {
 	}
 }
 
-func TestInstallDownloadsReleaseAssetsViaAPIURL(t *testing.T) {
+func TestInstallDownloadsReleaseAssetsViaBrowserDownloadURL(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	archiveData := makeZip(t, map[string]string{"sample-provider.dylib": "library-data"})
-	archiveName := "sample-provider_0.2.0_darwin_arm64.zip"
+	archiveName := "sample-provider_0.3.0_darwin_arm64.zip"
 	checksum := sha256.Sum256(archiveData)
 	client := Client{HTTPClient: mapHTTPDoer{
-		"https://api.github.com/repos/author-name/cliproxy-sample-provider-plugin/releases/latest": []byte(`{
-			"tag_name": "v0.2.0",
+		"https://api.github.com/repos/author-name/cliproxy-sample-provider-plugin/releases/tags/v0.3.0": []byte(`{
+			"tag_name": "v0.3.0",
 			"assets": [
-				{
-					"name": "` + archiveName + `",
-					"url": "https://api.github.com/repos/author-name/cliproxy-sample-provider-plugin/releases/assets/1",
-					"browser_download_url": "https://downloads.example/missing.zip"
-				},
-				{
-					"name": "checksums.txt",
-					"url": "https://api.github.com/repos/author-name/cliproxy-sample-provider-plugin/releases/assets/2",
-					"browser_download_url": "https://downloads.example/missing-checksums.txt"
-				}
+				{"name": "` + archiveName + `", "url": "https://api.github.com/assets/archive", "browser_download_url": "https://downloads.example/archive"},
+				{"name": "checksums.txt", "url": "https://api.github.com/assets/checksums", "browser_download_url": "https://downloads.example/checksums"}
 			]
 		}`),
-		"https://api.github.com/repos/author-name/cliproxy-sample-provider-plugin/releases/assets/1": archiveData,
-		"https://api.github.com/repos/author-name/cliproxy-sample-provider-plugin/releases/assets/2": []byte(hex.EncodeToString(checksum[:]) + "  " + archiveName + "\n"),
+		"https://downloads.example/archive":   archiveData,
+		"https://downloads.example/checksums": []byte(hex.EncodeToString(checksum[:]) + "  " + archiveName + "\n"),
 	}}
 
-	result, errInstall := client.Install(context.Background(), testPlugin(), InstallOptions{
+	result, errInstall := client.InstallVersion(context.Background(), testPlugin(), "v0.3.0", "0.3.0", InstallOptions{
 		PluginsDir: root,
 		GOOS:       "darwin",
 		GOARCH:     "arm64",
@@ -371,15 +363,40 @@ func TestInstallDownloadsReleaseAssetsViaAPIURL(t *testing.T) {
 	if errInstall != nil {
 		t.Fatalf("Install() error = %v", errInstall)
 	}
-	if result.Version != "0.2.0" {
-		t.Fatalf("Version = %q, want 0.2.0 from latest release tag", result.Version)
+	if result.Path != filepath.Join(root, "darwin", "arm64", "sample-provider-v0.3.0.dylib") {
+		t.Fatalf("Path = %q", result.Path)
 	}
-	data, errRead := os.ReadFile(filepath.Join(root, "darwin", "arm64", "sample-provider-v0.2.0.dylib"))
-	if errRead != nil {
-		t.Fatalf("ReadFile() error = %v", errRead)
+}
+
+func TestInstallFallsBackToReleaseAssetAPIURL(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	archiveData := makeZip(t, map[string]string{"sample-provider.dylib": "library-data"})
+	archiveName := "sample-provider_0.3.0_darwin_arm64.zip"
+	checksum := sha256.Sum256(archiveData)
+	client := Client{HTTPClient: mapHTTPDoer{
+		"https://api.github.com/repos/author-name/cliproxy-sample-provider-plugin/releases/tags/v0.3.0": []byte(`{
+			"tag_name": "v0.3.0",
+			"assets": [
+				{"name": "` + archiveName + `", "url": "https://api.github.com/assets/archive"},
+				{"name": "checksums.txt", "url": "https://api.github.com/assets/checksums"}
+			]
+		}`),
+		"https://api.github.com/assets/archive":   archiveData,
+		"https://api.github.com/assets/checksums": []byte(hex.EncodeToString(checksum[:]) + "  " + archiveName + "\n"),
+	}}
+
+	result, errInstall := client.InstallVersion(context.Background(), testPlugin(), "v0.3.0", "0.3.0", InstallOptions{
+		PluginsDir: root,
+		GOOS:       "darwin",
+		GOARCH:     "arm64",
+	})
+	if errInstall != nil {
+		t.Fatalf("Install() error = %v", errInstall)
 	}
-	if string(data) != "library-data" {
-		t.Fatalf("installed data = %q, want library-data", data)
+	if result.Path != filepath.Join(root, "darwin", "arm64", "sample-provider-v0.3.0.dylib") {
+		t.Fatalf("Path = %q", result.Path)
 	}
 }
 
