@@ -170,7 +170,7 @@ func TestInstallArchiveWritesPlatformPlugin(t *testing.T) {
 	if errInstall != nil {
 		t.Fatalf("InstallArchive() error = %v", errInstall)
 	}
-	wantPath := filepath.Join(root, "darwin", "arm64", "sample-provider.dylib")
+	wantPath := filepath.Join(root, "darwin", "arm64", "sample-provider-v0.2.0.dylib")
 	if result.Path != wantPath {
 		t.Fatalf("Path = %q, want %q", result.Path, wantPath)
 	}
@@ -327,12 +327,59 @@ func TestInstallUsesLatestReleaseVersion(t *testing.T) {
 	if result.Version != "0.2.0" {
 		t.Fatalf("Version = %q, want 0.2.0 from latest release tag", result.Version)
 	}
-	data, errRead := os.ReadFile(filepath.Join(root, "darwin", "arm64", "sample-provider.dylib"))
+	data, errRead := os.ReadFile(filepath.Join(root, "darwin", "arm64", "sample-provider-v0.2.0.dylib"))
 	if errRead != nil {
 		t.Fatalf("ReadFile() error = %v", errRead)
 	}
 	if string(data) != "library-data" {
 		t.Fatalf("installed data = %q", data)
+	}
+}
+
+func TestInstallDownloadsReleaseAssetsViaAPIURL(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	archiveData := makeZip(t, map[string]string{"sample-provider.dylib": "library-data"})
+	archiveName := "sample-provider_0.2.0_darwin_arm64.zip"
+	checksum := sha256.Sum256(archiveData)
+	client := Client{HTTPClient: mapHTTPDoer{
+		"https://api.github.com/repos/author-name/cliproxy-sample-provider-plugin/releases/latest": []byte(`{
+			"tag_name": "v0.2.0",
+			"assets": [
+				{
+					"name": "` + archiveName + `",
+					"url": "https://api.github.com/repos/author-name/cliproxy-sample-provider-plugin/releases/assets/1",
+					"browser_download_url": "https://downloads.example/missing.zip"
+				},
+				{
+					"name": "checksums.txt",
+					"url": "https://api.github.com/repos/author-name/cliproxy-sample-provider-plugin/releases/assets/2",
+					"browser_download_url": "https://downloads.example/missing-checksums.txt"
+				}
+			]
+		}`),
+		"https://api.github.com/repos/author-name/cliproxy-sample-provider-plugin/releases/assets/1": archiveData,
+		"https://api.github.com/repos/author-name/cliproxy-sample-provider-plugin/releases/assets/2": []byte(hex.EncodeToString(checksum[:]) + "  " + archiveName + "\n"),
+	}}
+
+	result, errInstall := client.Install(context.Background(), testPlugin(), InstallOptions{
+		PluginsDir: root,
+		GOOS:       "darwin",
+		GOARCH:     "arm64",
+	})
+	if errInstall != nil {
+		t.Fatalf("Install() error = %v", errInstall)
+	}
+	if result.Version != "0.2.0" {
+		t.Fatalf("Version = %q, want 0.2.0 from latest release tag", result.Version)
+	}
+	data, errRead := os.ReadFile(filepath.Join(root, "darwin", "arm64", "sample-provider-v0.2.0.dylib"))
+	if errRead != nil {
+		t.Fatalf("ReadFile() error = %v", errRead)
+	}
+	if string(data) != "library-data" {
+		t.Fatalf("installed data = %q, want library-data", data)
 	}
 }
 
@@ -366,7 +413,7 @@ func TestInstallVersionUsesPinnedReleaseTag(t *testing.T) {
 	if result.Version != "0.3.0" {
 		t.Fatalf("Version = %q, want 0.3.0", result.Version)
 	}
-	data, errRead := os.ReadFile(filepath.Join(root, "linux", "amd64", "sample-provider.so"))
+	data, errRead := os.ReadFile(filepath.Join(root, "linux", "amd64", "sample-provider-v0.3.0.so"))
 	if errRead != nil {
 		t.Fatalf("ReadFile() error = %v", errRead)
 	}
