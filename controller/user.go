@@ -247,11 +247,29 @@ func GetAllUsers(c *gin.Context) {
 	return
 }
 
+func parseIntQueryArray(c *gin.Context, key string) []int {
+	values := c.QueryArray(key)
+	if len(values) == 0 {
+		values = c.QueryArray(key + "[]")
+	}
+
+	result := make([]int, 0, len(values))
+	for _, value := range values {
+		parsed, err := strconv.Atoi(value)
+		if err == nil {
+			result = append(result, parsed)
+		}
+	}
+	return result
+}
+
 func SearchUsers(c *gin.Context) {
 	keyword := c.Query("keyword")
 	group := c.Query("group")
+	roles := parseIntQueryArray(c, "role")
+	statuses := parseIntQueryArray(c, "status")
 	pageInfo := common.GetPageQuery(c)
-	users, total, err := model.SearchUsers(keyword, group, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	users, total, err := model.SearchUsers(keyword, group, roles, statuses, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return

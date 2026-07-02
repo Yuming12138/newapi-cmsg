@@ -31,7 +31,12 @@ import { DataTableColumnHeader } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
 import { LongText } from '@/components/long-text'
 import { StatusBadge, dotColorMap } from '@/components/status-badge'
-import { USER_STATUSES, USER_ROLES, isUserDeleted } from '../constants'
+import {
+  USER_STATUS,
+  USER_STATUSES,
+  USER_ROLES,
+  isUserDeleted,
+} from '../constants'
 import { type User } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 
@@ -127,7 +132,7 @@ export function useUsersColumns(): ColumnDef<User>[] {
         const requestCount = user.request_count
 
         const statusConfig = isUserDeleted(user)
-          ? USER_STATUSES.DELETED
+          ? USER_STATUSES[USER_STATUS.DELETED]
           : USER_STATUSES[user.status as keyof typeof USER_STATUSES]
 
         if (!statusConfig) {

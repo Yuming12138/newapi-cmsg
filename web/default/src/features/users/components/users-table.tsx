@@ -86,6 +86,18 @@ export function UsersTable() {
     ],
   })
 
+  const statusFilter =
+    (columnFilters.find((filter) => filter.id === 'status')?.value as
+      | string[]
+      | undefined) ?? []
+  const roleFilter =
+    (columnFilters.find((filter) => filter.id === 'role')?.value as
+      | string[]
+      | undefined) ?? []
+  const groupFilter =
+    (columnFilters.find((filter) => filter.id === 'group')?.value as string) ??
+    ''
+
   // Fetch data with React Query
   const { data, isLoading, isFetching } = useQuery({
     queryKey: [
@@ -93,17 +105,30 @@ export function UsersTable() {
       pagination.pageIndex + 1,
       pagination.pageSize,
       globalFilter,
+      statusFilter,
+      roleFilter,
+      groupFilter,
       refreshTrigger,
     ],
     queryFn: async () => {
-      const hasFilter = globalFilter?.trim()
+      const hasFilter =
+        Boolean(globalFilter?.trim()) ||
+        statusFilter.length > 0 ||
+        roleFilter.length > 0 ||
+        Boolean(groupFilter.trim())
       const params = {
         p: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
       }
 
       const result = hasFilter
-        ? await searchUsers({ ...params, keyword: globalFilter })
+        ? await searchUsers({
+            ...params,
+            keyword: globalFilter,
+            status: statusFilter,
+            role: roleFilter,
+            group: groupFilter,
+          })
         : await getUsers(params)
 
       if (!result.success) {
@@ -160,7 +185,8 @@ export function UsersTable() {
     onPaginationChange,
     onGlobalFilterChange,
     onColumnFiltersChange,
-    manualPagination: !globalFilter,
+    manualPagination: true,
+    manualFiltering: true,
     pageCount: Math.ceil((data?.total || 0) / pagination.pageSize),
   })
 

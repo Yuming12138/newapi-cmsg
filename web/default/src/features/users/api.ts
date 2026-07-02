@@ -51,10 +51,23 @@ export async function getUsers(
 export async function searchUsers(
   params: SearchUsersParams
 ): Promise<GetUsersResponse> {
-  const { keyword = '', group = '', p = 1, page_size = 10 } = params
-  const res = await api.get(
-    `/api/user/search?keyword=${keyword}&group=${group}&p=${p}&page_size=${page_size}`
-  )
+  const {
+    keyword = '',
+    group = '',
+    role = [],
+    status = [],
+    p = 1,
+    page_size = 10,
+  } = params
+  const searchParams = new URLSearchParams({
+    keyword,
+    group,
+    p: String(p),
+    page_size: String(page_size),
+  })
+  for (const value of role) searchParams.append('role', value)
+  for (const value of status) searchParams.append('status', value)
+  const res = await api.get(`/api/user/search?${searchParams.toString()}`)
   return res.data
 }
 

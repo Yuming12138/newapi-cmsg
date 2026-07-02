@@ -225,7 +225,7 @@ func GetAllUsers(pageInfo *common.PageInfo) (users []*User, total int64, err err
 	return users, total, nil
 }
 
-func SearchUsers(keyword string, group string, startIdx int, num int) ([]*User, int64, error) {
+func SearchUsers(keyword string, group string, roles []int, statuses []int, startIdx int, num int) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 	var err error
@@ -245,28 +245,50 @@ func SearchUsers(keyword string, group string, startIdx int, num int) ([]*User, 
 	query := tx.Unscoped().Model(&User{})
 
 	// 构建搜索条件
-	likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"
+	keyword = strings.TrimSpace(keyword)
+	if keyword != "" {
+		likeCondition := "username LIKE ? OR email LIKE ? OR display_name LIKE ?"
 
-	// 尝试将关键字转换为整数ID
-	keywordInt, err := strconv.Atoi(keyword)
-	if err == nil {
-		// 如果是数字，同时搜索ID和其他字段
-		likeCondition = "id = ? OR " + likeCondition
-		if group != "" {
-			query = query.Where("("+likeCondition+") AND "+commonGroupCol+" = ?",
-				keywordInt, "%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%", group)
-		} else {
+		// 尝试将关键字转换为整数ID
+		keywordInt, err := strconv.Atoi(keyword)
+		if err == nil {
+			// 如果是数字，同时搜索ID和其他字段
+			likeCondition = "id = ? OR " + likeCondition
 			query = query.Where(likeCondition,
 				keywordInt, "%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%")
-		}
-	} else {
-		// 非数字关键字，只搜索字符串字段
-		if group != "" {
-			query = query.Where("("+likeCondition+") AND "+commonGroupCol+" = ?",
-				"%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%", group)
 		} else {
+			// 非数字关键字，只搜索字符串字段
 			query = query.Where(likeCondition,
 				"%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%")
+		}
+	}
+
+	if group != "" {
+		query = query.Where(commonGroupCol+" = ?", group)
+	}
+
+	if len(roles) > 0 {
+		query = query.Where("role IN ?", roles)
+	}
+
+	if len(statuses) > 0 {
+		normalStatuses := make([]int, 0, len(statuses))
+		includeDeleted := false
+		for _, status := range statuses {
+			if status == -1 {
+				includeDeleted = true
+				continue
+			}
+			normalStatuses = append(normalStatuses, status)
+		}
+
+		switch {
+		case includeDeleted && len(normalStatuses) > 0:
+			query = query.Where("deleted_at IS NOT NULL OR (deleted_at IS NULL AND status IN ?)", normalStatuses)
+		case includeDeleted:
+			query = query.Where("deleted_at IS NOT NULL")
+		default:
+			query = query.Where("deleted_at IS NULL").Where("status IN ?", normalStatuses)
 		}
 	}
 
