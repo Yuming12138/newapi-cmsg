@@ -137,6 +137,7 @@
     "Active models": "Активные модели",
     "active users": "активных пользователей",
     "Actual Amount": "Фактическая сумма",
+    "Amount the user pays to purchase this plan; the actual currency depends on the payment gateway.": "Сумма, которую пользователь платит за покупку тарифа; фактическая валюта зависит от платёжного шлюза.",
     "Actual Model": "Фактическая модель",
     "Actual Model:": "Фактическая модель:",
     "Adapt `-thinking` suffix requests to Anthropic native thinking behavior while keeping billing predictable.": "Адаптировать запросы с суффиксом `-thinking` к собственному режиму размышления Anthropic, сохраняя предсказуемость биллинга.",
