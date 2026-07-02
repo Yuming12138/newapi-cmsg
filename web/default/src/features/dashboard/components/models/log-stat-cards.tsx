@@ -17,8 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
-import { formatNumber, formatQuota } from '@/lib/format'
+import { formatCompactNumber, formatNumber, formatQuota } from '@/lib/format'
 import { computeTimeRange } from '@/lib/time'
 import { useStatus } from '@/hooks/use-status'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -39,7 +40,23 @@ interface LogStatCardsProps {
   onDataUpdate?: (data: QuotaDataItem[], loading: boolean) => void
 }
 
+const MAX_INLINE_STAT_CHARS = 9
+
+function formatStatNumber(value: number, locale: Intl.LocalesArgument) {
+  const fullValue = formatNumber(value, locale)
+  const displayValue =
+    fullValue.length > MAX_INLINE_STAT_CHARS
+      ? formatCompactNumber(value, locale)
+      : fullValue
+
+  return {
+    displayValue,
+    fullValue,
+  }
+}
+
 export function LogStatCards(props: LogStatCardsProps) {
+  const { i18n } = useTranslation()
   const statCardsConfig = useModelStatCardsConfig()
   const user = useAuthStore((state) => state.auth.user)
   const { status } = useStatus()
@@ -104,15 +121,25 @@ export function LogStatCards(props: LogStatCardsProps) {
     tpm: stats?.totalTokens ?? 0,
   }
 
-  const items = statCardsConfig.map((config) => ({
-    title: config.title,
-    value:
+  const items = statCardsConfig.map((config) => {
+    const rawValue = config.getValue(adaptedStats, timeRangeMinutes)
+    const locale = i18n.resolvedLanguage || i18n.language
+    const formatted =
       config.key === 'quota'
-        ? formatQuota(config.getValue(adaptedStats, timeRangeMinutes))
-        : formatNumber(config.getValue(adaptedStats, timeRangeMinutes)),
-    desc: config.description,
-    icon: config.icon,
-  }))
+        ? {
+            displayValue: formatQuota(rawValue),
+            fullValue: formatQuota(rawValue),
+          }
+        : formatStatNumber(rawValue, locale)
+
+    return {
+      title: config.title,
+      value: formatted.displayValue,
+      fullValue: formatted.fullValue,
+      desc: config.description,
+      icon: config.icon,
+    }
+  })
 
   return (
     <div className='overflow-hidden rounded-lg border'>
@@ -147,7 +174,10 @@ export function LogStatCards(props: LogStatCardsProps) {
                 </>
               ) : (
                 <>
-                  <div className='text-foreground mt-1.5 font-mono text-lg font-bold tracking-tight tabular-nums sm:mt-2 sm:text-2xl'>
+                  <div
+                    className='text-foreground mt-1.5 max-w-full truncate font-mono text-lg font-bold tracking-tight tabular-nums sm:mt-2 sm:text-2xl'
+                    title={it.fullValue}
+                  >
                     {it.value}
                   </div>
                   <div className='text-muted-foreground/60 mt-1 hidden text-xs md:block'>
