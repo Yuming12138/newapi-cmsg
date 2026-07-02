@@ -25,6 +25,7 @@ import {
   ChevronDown,
   ChevronRight,
   ListOrdered,
+  RotateCcw,
   Shuffle,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -53,7 +54,7 @@ import {
   dotColorMap,
   textColorMap,
 } from '@/components/status-badge'
-import { getCodexUsage } from '../api'
+import { consumeCliproxyCPAResetCredit, getCodexUsage } from '../api'
 import { CHANNEL_STATUS_CONFIG, MODEL_FETCHABLE_TYPES } from '../constants'
 import {
   formatBalance,
@@ -71,6 +72,7 @@ import {
   handleUpdateTagField,
   handleUpdateChannelBalance,
   isTagAggregateRow,
+  channelsQueryKeys,
   type TagRow,
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
@@ -127,6 +129,19 @@ type CliproxyCPAQuotaBucket = {
   reserveWeeklyPercent: number | null
 }
 
+type CliproxyCPAQuotaAccount = {
+  authIndex: string
+  label: string
+  bucket: string | null
+  ok: boolean | null
+  canExhaust: boolean | null
+  resetCreditsAvailable: number | null
+  balanceUnits: number | null
+  usableBalanceUnits: number | null
+  fiveHour: CliproxyCPAQuotaWindow | null
+  weekly: CliproxyCPAQuotaWindow | null
+}
+
 type CliproxyCPAQuotaMeta = {
   guardMode: string | null
   shareLimitPercent: number | null
@@ -141,6 +156,7 @@ type CliproxyCPAQuotaMeta = {
   nextResetAfterSeconds: number | null
   nextResetAt: number | null
   buckets: CliproxyCPAQuotaBucket[]
+  accounts: CliproxyCPAQuotaAccount[]
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -289,6 +305,52 @@ function parseCliproxyCPAQuotaBucket(
   }
 }
 
+function cliproxyCPAAccountLabel(
+  item: Record<string, unknown>,
+  authIndex: string
+): string {
+  const raw =
+    typeof item.account_label === 'string' && item.account_label.trim() !== ''
+      ? item.account_label
+      : typeof item.label === 'string' && item.label.trim() !== ''
+        ? item.label
+        : ''
+  if (raw) return raw
+  return authIndex ? `account ${authIndex.slice(-6)}` : 'account'
+}
+
+function parseCliproxyCPAQuotaAccount(
+  value: unknown
+): CliproxyCPAQuotaAccount | null {
+  const item = asObject(value)
+  if (!item) return null
+  const authIndex =
+    typeof item.auth_index === 'string' ? item.auth_index.trim() : ''
+  if (!authIndex) return null
+  const windows = asObject(item.windows)
+  return {
+    authIndex,
+    label: cliproxyCPAAccountLabel(item, authIndex),
+    bucket: typeof item.bucket === 'string' ? item.bucket : null,
+    ok: booleanValue(item.ok),
+    canExhaust: booleanValue(item.can_exhaust),
+    resetCreditsAvailable: numberValue(item.reset_credits_available),
+    balanceUnits: numberValue(item.balance_units),
+    usableBalanceUnits: numberValue(item.usable_balance_units),
+    fiveHour: parseCliproxyCPAQuotaWindow(windows?.['5h'], null),
+    weekly: parseCliproxyCPAQuotaWindow(windows?.['7d'], null),
+  }
+}
+
+function parseCliproxyCPAQuotaAccounts(
+  value: unknown
+): CliproxyCPAQuotaAccount[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map(parseCliproxyCPAQuotaAccount)
+    .filter((item): item is CliproxyCPAQuotaAccount => item != null)
+}
+
 function parseCliproxyCPAQuotaBuckets(
   value: unknown,
   updatedAt: number | null
@@ -312,6 +374,7 @@ function parseCliproxyCPAQuotaMeta(
     if (!guard || !health) return null
     const updatedAt = timestampValue(guard.updated_at)
     const buckets = parseCliproxyCPAQuotaBuckets(health.buckets, updatedAt)
+    const accounts = parseCliproxyCPAQuotaAccounts(health.accounts)
 
     const shareLimitPercent = numberValue(health.share_limit_percent)
     const fiveHour = parseCliproxyCPAQuotaWindow(
@@ -359,6 +422,7 @@ function parseCliproxyCPAQuotaMeta(
       guardMode:
         typeof health.guard_mode === 'string' ? health.guard_mode : null,
       buckets,
+      accounts,
     }
   } catch {
     return null
@@ -397,6 +461,11 @@ function formatCompactTimestamp(timestamp: number | null | undefined): string {
 
 function formatCliproxyCPAUnits(value: number | null | undefined): string {
   return value == null || !Number.isFinite(value) ? '-' : formatBalance(value)
+}
+
+function formatResetCreditsAvailable(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return String(Math.max(0, Math.trunc(value)))
 }
 
 function clampPercent(value: number | null | undefined): number {
@@ -595,11 +664,167 @@ function CliproxyCPAQuotaProgress({
   )
 }
 
+function CliproxyCPAAccountWindowSummary({
+  account,
+  updatedAt,
+}: {
+  account: CliproxyCPAQuotaAccount
+  updatedAt: number | null
+}) {
+  const fiveHourResetAt = getCliproxyCPAResetAt(account.fiveHour, updatedAt)
+  const weeklyResetAt = getCliproxyCPAResetAt(account.weekly, updatedAt)
+
+  return (
+    <div className='text-foreground/70 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] tabular-nums'>
+      <span>5h {formatPercent(account.fiveHour?.remainingPercent)}</span>
+      {fiveHourResetAt != null && (
+        <span>reset {formatCompactTimestamp(fiveHourResetAt)}</span>
+      )}
+      <span>7d {formatPercent(account.weekly?.remainingPercent)}</span>
+      {weeklyResetAt != null && (
+        <span>reset {formatCompactTimestamp(weeklyResetAt)}</span>
+      )}
+    </div>
+  )
+}
+
+function CliproxyCPAResetCreditButton({
+  channelId,
+  account,
+}: {
+  channelId: number
+  account: CliproxyCPAQuotaAccount
+}) {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [isResetting, setIsResetting] = useState(false)
+  const resetCredits = account.resetCreditsAvailable ?? 0
+  const disabled = resetCredits <= 0 || isResetting || account.ok === false
+
+  const handleConfirm = async () => {
+    setIsResetting(true)
+    try {
+      const res = await consumeCliproxyCPAResetCredit(
+        channelId,
+        account.authIndex
+      )
+      if (!res.success) {
+        throw new Error(res.message || t('Reset request failed'))
+      }
+      toast.success(
+        t('Reset request sent. Quota display will refresh after CPA polling.')
+      )
+      queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      setConfirmOpen(false)
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t('Reset request failed')
+      )
+    } finally {
+      setIsResetting(false)
+    }
+  }
+
+  return (
+    <>
+      <Button
+        type='button'
+        variant='outline'
+        size='xs'
+        disabled={disabled}
+        className='h-6 px-1.5 text-[11px]'
+        onClick={(event: React.MouseEvent<HTMLButtonElement>) => {
+          event.preventDefault()
+          event.stopPropagation()
+          setConfirmOpen(true)
+        }}
+      >
+        <RotateCcw className='size-3' />
+        {isResetting ? t('Resetting') : t('主动重置')}
+      </Button>
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title={t('Consume reset credit?')}
+        desc={
+          <div className='space-y-1 text-sm'>
+            <p>
+              {t(
+                'This will consume one upstream reset credit for this CPA account.'
+              )}
+            </p>
+            <p className='text-muted-foreground'>
+              {t(
+                'The upstream API does not guarantee this only resets the 5h window; the actual affected quota window is controlled by OpenAI.'
+              )}
+            </p>
+            <p className='text-muted-foreground'>
+              {account.label} · {t('Remaining reset credits')}{' '}
+              {formatResetCreditsAvailable(account.resetCreditsAvailable)}
+            </p>
+          </div>
+        }
+        confirmText={isResetting ? t('Resetting') : t('Confirm reset')}
+        isLoading={isResetting}
+        handleConfirm={handleConfirm}
+      />
+    </>
+  )
+}
+
+function CliproxyCPAAccountRow({
+  account,
+  channelId,
+  updatedAt,
+}: {
+  account: CliproxyCPAQuotaAccount
+  channelId: number
+  updatedAt: number | null
+}) {
+  return (
+    <div className='bg-muted/30 border-border/80 space-y-1 rounded border p-1.5'>
+      <div className='flex items-start justify-between gap-2'>
+        <div className='min-w-0'>
+          <p className='text-foreground truncate text-[11px] font-medium'>
+            {account.label}
+          </p>
+          <p className='text-foreground/70 text-[10px]'>
+            reset credits{' '}
+            <span className='tabular-nums'>
+              {formatResetCreditsAvailable(account.resetCreditsAvailable)}
+            </span>
+          </p>
+        </div>
+        <CliproxyCPAResetCreditButton channelId={channelId} account={account} />
+      </div>
+      <CliproxyCPAAccountWindowSummary
+        account={account}
+        updatedAt={updatedAt}
+      />
+    </div>
+  )
+}
+
+function filterCliproxyCPAAccountsForBucket(
+  accounts: CliproxyCPAQuotaAccount[],
+  bucket: CliproxyCPAQuotaBucket
+): CliproxyCPAQuotaAccount[] {
+  return accounts.filter((account) => {
+    if (account.bucket && account.bucket === bucket.key) return true
+    return account.bucket == null && account.canExhaust === bucket.canExhaust
+  })
+}
+
 function CliproxyCPABucketDetails({
   bucket,
+  accounts,
+  channelId,
   updatedAt,
 }: {
   bucket: CliproxyCPAQuotaBucket
+  accounts: CliproxyCPAQuotaAccount[]
+  channelId: number
   updatedAt: number | null
 }) {
   const count = formatCliproxyCPAAccountCount(bucket)
@@ -648,11 +873,30 @@ function CliproxyCPABucketDetails({
         window={bucket.weekly}
         updatedAt={updatedAt}
       />
+      {accounts.length > 0 && (
+        <div className='border-border/70 space-y-1 border-t pt-2'>
+          <p className='text-foreground/70 text-[11px]'>Accounts</p>
+          {accounts.map((account) => (
+            <CliproxyCPAAccountRow
+              key={account.authIndex}
+              account={account}
+              channelId={channelId}
+              updatedAt={updatedAt}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
 
-function CliproxyCPAQuotaDetails({ meta }: { meta: CliproxyCPAQuotaMeta }) {
+function CliproxyCPAQuotaDetails({
+  meta,
+  channelId,
+}: {
+  meta: CliproxyCPAQuotaMeta
+  channelId: number
+}) {
   return (
     <div className='text-foreground w-[360px] max-w-[calc(100vw-2rem)] space-y-2'>
       <div className='grid grid-cols-3 gap-2'>
@@ -685,6 +929,11 @@ function CliproxyCPAQuotaDetails({ meta }: { meta: CliproxyCPAQuotaMeta }) {
             <CliproxyCPABucketDetails
               key={bucket.key}
               bucket={bucket}
+              accounts={filterCliproxyCPAAccountsForBucket(
+                meta.accounts,
+                bucket
+              )}
+              channelId={channelId}
               updatedAt={meta.updatedAt}
             />
           ))}
@@ -710,6 +959,19 @@ function CliproxyCPAQuotaDetails({ meta }: { meta: CliproxyCPAQuotaMeta }) {
             window={meta.weekly}
             updatedAt={meta.updatedAt}
           />
+          {meta.accounts.length > 0 && (
+            <div className='border-border/70 space-y-1 border-t pt-2'>
+              <p className='text-foreground/70 text-[11px]'>Accounts</p>
+              {meta.accounts.map((account) => (
+                <CliproxyCPAAccountRow
+                  key={account.authIndex}
+                  account={account}
+                  channelId={channelId}
+                  updatedAt={meta.updatedAt}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
       <div className='text-foreground/70 flex justify-between gap-2 text-[11px]'>
@@ -978,7 +1240,10 @@ function BalanceCell({ channel }: { channel: Channel }) {
                   : maskedRemainingLabel}
               </p>
               {cliproxyCPAQuota && (
-                <CliproxyCPAQuotaDetails meta={cliproxyCPAQuota} />
+                <CliproxyCPAQuotaDetails
+                  meta={cliproxyCPAQuota}
+                  channelId={channel.id}
+                />
               )}
               {channel.type !== 57 && <p>{t('Click to update balance')}</p>}
             </TooltipContent>
@@ -994,7 +1259,10 @@ function BalanceCell({ channel }: { channel: Channel }) {
               {formatCliproxyCPASummary(cliproxyCPAQuota)}
             </TooltipTrigger>
             <TooltipContent className={CPA_TOOLTIP_CONTENT_CLASS}>
-              <CliproxyCPAQuotaDetails meta={cliproxyCPAQuota} />
+              <CliproxyCPAQuotaDetails
+                meta={cliproxyCPAQuota}
+                channelId={channel.id}
+              />
             </TooltipContent>
           </Tooltip>
         )}

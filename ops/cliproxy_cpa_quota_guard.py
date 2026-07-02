@@ -278,6 +278,12 @@ def account_id_from_entry(entry: dict[str, Any]) -> str:
         first_non_empty(entry.get("id_token"), nested(entry, "metadata", "id_token"), nested(entry, "attributes", "id_token"))
     )
     account_id = first_non_empty(
+        entry.get("account_id"),
+        entry.get("accountId"),
+        nested(entry, "metadata", "account_id"),
+        nested(entry, "metadata", "accountId"),
+        nested(entry, "attributes", "account_id"),
+        nested(entry, "attributes", "accountId"),
         claims.get("chatgpt_account_id"),
         nested(claims, "https://api.openai.com/auth", "chatgpt_account_id"),
     )
@@ -299,6 +305,22 @@ def plan_type_from_entry(entry: dict[str, Any], usage_payload: dict[str, Any] | 
         nested(claims, "https://api.openai.com/auth", "chatgpt_plan_type"),
     )
     return str(value or "unknown").strip() or "unknown"
+
+
+def account_label_from_entry(entry: dict[str, Any]) -> str:
+    value = first_non_empty(entry.get("label"), entry.get("name"), entry.get("email"), entry.get("account"))
+    return str(value or "").strip()
+
+
+def reset_credits_available(usage: dict[str, Any]) -> int | None:
+    credits = first_non_empty(
+        nested(usage, "rate_limit_reset_credits", "available_count"),
+        nested(usage, "rateLimitResetCredits", "availableCount"),
+    )
+    parsed = number(credits)
+    if parsed is None:
+        return None
+    return max(0, int(parsed))
 
 
 def codex_auth_entries(auth_files_payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -439,10 +461,12 @@ def call_wham_usages(config: dict[str, Any], env: dict[str, str]) -> list[dict[s
         base_account = {
             "auth_index": auth_index,
             "account_id_hash": account_id_hash,
+            "account_label": account_label_from_entry(auth_entry),
             "plan_type": plan_type_from_entry(auth_entry),
             "bucket": bucket,
             "disabled": bool(auth_entry.get("disabled")),
             "unavailable": bool(auth_entry.get("unavailable")),
+            "reset_credits_available": None,
         }
         if auth_is_unavailable(auth_entry):
             accounts.append({**base_account, "ok": False, "skipped": True, "reason": "auth_unavailable"})
@@ -537,6 +561,7 @@ def evaluate_account_quota(config: dict[str, Any], auth_entry: dict[str, Any], u
         "ok": True,
         "auth_index": auth_index,
         "account_id_hash": account_id_hash,
+        "account_label": account_label_from_entry(auth_entry),
         "bucket": bucket,
         "can_exhaust": can_exhaust,
         "min_remaining_percent_5h": threshold_5h,
@@ -547,6 +572,7 @@ def evaluate_account_quota(config: dict[str, Any], auth_entry: dict[str, Any], u
         "balance_units": round(balance_units, 6),
         "usable_balance_units": round(usable_balance_units, 6),
         "plan_type": usage.get("plan_type") or usage.get("planType") or guard_auth.get("plan_type_hint"),
+        "reset_credits_available": reset_credits_available(usage),
         "windows": windows,
         "rate_limit_reached_type": usage.get("rate_limit_reached_type"),
     }
@@ -593,8 +619,34 @@ def empty_bucket(key: str, config: dict[str, Any]) -> dict[str, Any]:
         "usable_balance_units": 0.0,
         "min_remaining_percent_5h": None if can_exhaust else clamp_percent(config.get("min_remaining_percent_5h"), 30.0),
         "min_remaining_percent_7d": None if can_exhaust else clamp_percent(config.get("min_remaining_percent_7d"), 20.0),
+        "reset_credits_available": None,
+        "accounts": [],
         "windows": {},
     }
+
+
+def account_summary(account: dict[str, Any]) -> dict[str, Any]:
+    keys = [
+        "auth_index",
+        "account_id_hash",
+        "account_label",
+        "plan_type",
+        "bucket",
+        "ok",
+        "can_exhaust",
+        "disabled",
+        "unavailable",
+        "skipped",
+        "reason",
+        "error",
+        "balance_units",
+        "usable_balance_units",
+        "remaining_share_percent",
+        "raw_remaining_percent",
+        "reset_credits_available",
+        "windows",
+    ]
+    return {key: account.get(key) for key in keys if key in account}
 
 
 def bucket_summary(config: dict[str, Any], bucket_key: str, accounts: list[dict[str, Any]]) -> dict[str, Any]:
@@ -606,6 +658,13 @@ def bucket_summary(config: dict[str, Any], bucket_key: str, accounts: list[dict[
     summary["usable_balance_units"] = round(sum(float(account.get("usable_balance_units") or 0) for account in ok_accounts), 6)
     summary["remaining_share_percent"] = round(sum(float(account.get("remaining_share_percent") or 0) for account in ok_accounts), 6)
     summary["raw_remaining_percent"] = round(sum(float(account.get("raw_remaining_percent") or 0) for account in ok_accounts), 6)
+    reset_values = [
+        int(account.get("reset_credits_available"))
+        for account in ok_accounts
+        if account.get("reset_credits_available") is not None
+    ]
+    summary["reset_credits_available"] = sum(reset_values) if reset_values else None
+    summary["accounts"] = [account_summary(account) for account in accounts]
     summary["windows"] = aggregate_windows(ok_accounts)
     plans: dict[str, int] = {}
     for account in accounts:

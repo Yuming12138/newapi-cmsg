@@ -319,6 +319,22 @@ export async function getCodexUsage(
   return res.data
 }
 
+export async function consumeCliproxyCPAResetCredit(
+  channelId: number,
+  authIndex: string
+): Promise<{ success: boolean; message?: string; upstream_status?: number }> {
+  const config: ExtendedApiConfig = {
+    skipBusinessError: true,
+    disableDuplicate: true,
+  }
+  const res = await api.post(
+    `/api/channel/${channelId}/cpa/reset_credit`,
+    { auth_index: authIndex },
+    config
+  )
+  return res.data
+}
+
 // ============================================================================
 // Multi-Key Management
 // ============================================================================
