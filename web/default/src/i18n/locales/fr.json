@@ -137,6 +137,7 @@
     "Active models": "Modèles actifs",
     "active users": "utilisateurs actifs",
     "Actual Amount": "Montant réel",
+    "Amount the user pays to purchase this plan; the actual currency depends on the payment gateway.": "Montant que l'utilisateur paie pour acheter ce forfait ; la devise réelle dépend de la passerelle de paiement.",
     "Actual Model": "Modèle réel",
     "Actual Model:": "Modèle réel :",
     "Adapt `-thinking` suffix requests to Anthropic native thinking behavior while keeping billing predictable.": "Adapter les requêtes avec le suffixe `-thinking` au comportement de pensée natif d’Anthropic tout en gardant une facturation prévisible.",

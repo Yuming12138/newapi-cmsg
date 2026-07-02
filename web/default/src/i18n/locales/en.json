@@ -137,6 +137,7 @@
     "Active models": "Active models",
     "active users": "active users",
     "Actual Amount": "Actual Amount",
+    "Amount the user pays to purchase this plan; the actual currency depends on the payment gateway.": "Amount the user pays to purchase this plan; the actual currency depends on the payment gateway.",
     "Actual Model": "Actual Model",
     "Actual Model:": "Actual Model:",
     "Adapt `-thinking` suffix requests to Anthropic native thinking behavior while keeping billing predictable.": "Adapt `-thinking` suffix requests to Anthropic native thinking behavior while keeping billing predictable.",

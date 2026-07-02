@@ -137,6 +137,7 @@
     "Active models": "活跃模型",
     "active users": "活跃用户",
     "Actual Amount": "实付金额",
+    "Amount the user pays to purchase this plan; the actual currency depends on the payment gateway.": "用户购买该套餐需支付的金额，具体币种由支付渠道决定。",
     "Actual Model": "实际模型",
     "Actual Model:": "实际模型：",
     "Adapt `-thinking` suffix requests to Anthropic native thinking behavior while keeping billing predictable.": "将带 `-thinking` 后缀的请求适配为 Anthropic 原生思考请求，并保持计费可预测。",
