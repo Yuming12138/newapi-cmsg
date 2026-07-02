@@ -1512,7 +1512,6 @@
     "Enter one keyword per line": "Введите по одному ключевому слову на строку",
     "Enter password": "Введите пароль",
     "Enter password (8-20 characters)": "Введите пароль (8-20 символов)",
-    "Enter password (min 8 characters)": "Введите пароль (минимум 8 символов)",
     "Enter quota in {{currency}}": "Введите квоту в {{currency}}",
     "Enter quota in tokens": "Введите квоту в токенах",
     "Enter secret key": "Введите секретный ключ",
@@ -2636,7 +2635,7 @@
     "No models fetched yet.": "Модели еще не получены.",
     "No models found": "Модели не найдены",
     "No Models Found": "Модели не найдены",
-    "No models found.": "Модели автомобиля не найдены.",
+    "No models found.": "Модели не найдены.",
     "No models match the selected filters": "Нет моделей, соответствующих фильтрам",
     "No models match your current filters.": "Модели, соответствующие вашим текущим фильтрам, не найдены.",
     "No models match your search": "Модели не найдены",
@@ -2909,7 +2908,6 @@
     "Password has been copied to clipboard": "Пароль скопирован в буфер обмена",
     "Password Login": "Вход по паролю",
     "Password must be at least 8 characters": "Пароль должен содержать не менее 8 символов",
-    "Password must be at least 8 characters long": "Пароль должен содержать не менее 8 символов",
     "Password Registration": "Регистрация пароля",
     "Password reset and copied to clipboard: {{password}}": "Пароль сброшен и скопирован в буфер обмена: {{password}}",
     "Password reset: {{password}}": "Пароль сброшен: {{password}}",
@@ -4625,6 +4623,14 @@
     "Deleted {{count}} failed models": "Удалено неудачных моделей: {{count}}",
     "Failed to delete failed models": "Не удалось удалить неудачные модели",
     "Select successful models ({{count}})": "Выбрать успешные модели ({{count}})",
-    "This removes {{count}} failed models from this channel. This action cannot be undone.": "Это удалит {{count}} неудачных моделей из этого канала. Это действие нельзя отменить."
+    "This removes {{count}} failed models from this channel. This action cannot be undone.": "Это удалит {{count}} неудачных моделей из этого канала. Это действие нельзя отменить.",
+    "Password must be at most 20 characters long": "Пароль должен содержать не более 20 символов",
+    "Password must be between 8 and 20 characters": "Пароль должен содержать от 8 до 20 символов",
+    "Passwords don't match.": "Пароли не совпадают.",
+    "Please confirm your password": "Пожалуйста, подтвердите пароль",
+    "Please enter a code.": "Пожалуйста, введите код.",
+    "Please enter your password": "Пожалуйста, введите пароль",
+    "Please enter your username": "Пожалуйста, введите имя пользователя",
+    "Please enter your username or email": "Пожалуйста, введите имя пользователя или email"
   }
 }

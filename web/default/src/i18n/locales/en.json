@@ -1512,7 +1512,6 @@
     "Enter one keyword per line": "Enter one keyword per line",
     "Enter password": "Enter password",
     "Enter password (8-20 characters)": "Enter password (8-20 characters)",
-    "Enter password (min 8 characters)": "Enter password (min 8 characters)",
     "Enter quota in {{currency}}": "Enter quota in {{currency}}",
     "Enter quota in tokens": "Enter quota in tokens",
     "Enter secret key": "Enter secret key",
@@ -2909,7 +2908,6 @@
     "Password has been copied to clipboard": "Password has been copied to clipboard",
     "Password Login": "Password Login",
     "Password must be at least 8 characters": "Password must be at least 8 characters",
-    "Password must be at least 8 characters long": "Password must be at least 8 characters long",
     "Password Registration": "Password Registration",
     "Password reset and copied to clipboard: {{password}}": "Password reset and copied to clipboard: {{password}}",
     "Password reset: {{password}}": "Password reset: {{password}}",
@@ -4625,6 +4623,14 @@
     "Deleted {{count}} failed models": "Deleted {{count}} failed models",
     "Failed to delete failed models": "Failed to delete failed models",
     "Select successful models ({{count}})": "Select successful models ({{count}})",
-    "This removes {{count}} failed models from this channel. This action cannot be undone.": "This removes {{count}} failed models from this channel. This action cannot be undone."
+    "This removes {{count}} failed models from this channel. This action cannot be undone.": "This removes {{count}} failed models from this channel. This action cannot be undone.",
+    "Password must be at most 20 characters long": "Password must be at most 20 characters long",
+    "Password must be between 8 and 20 characters": "Password must be between 8 and 20 characters",
+    "Passwords don't match.": "Passwords don't match.",
+    "Please confirm your password": "Please confirm your password",
+    "Please enter a code.": "Please enter a code.",
+    "Please enter your password": "Please enter your password",
+    "Please enter your username": "Please enter your username",
+    "Please enter your username or email": "Please enter your username or email"
   }
 }

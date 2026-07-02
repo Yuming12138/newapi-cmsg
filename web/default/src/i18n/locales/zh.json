@@ -1512,7 +1512,6 @@
     "Enter one keyword per line": "每行输入一个关键词",
     "Enter password": "输入密码",
     "Enter password (8-20 characters)": "输入密码（8-20 个字符）",
-    "Enter password (min 8 characters)": "请输入密码（至少 8 个字符）",
     "Enter quota in {{currency}}": "输入 {{currency}} 额度",
     "Enter quota in tokens": "输入令牌配额",
     "Enter secret key": "输入密钥",
@@ -2909,7 +2908,6 @@
     "Password has been copied to clipboard": "密码已复制到剪贴板",
     "Password Login": "密码登录",
     "Password must be at least 8 characters": "密码必须至少 8 个字符",
-    "Password must be at least 8 characters long": "密码必须至少 8 个字符长",
     "Password Registration": "密码注册",
     "Password reset and copied to clipboard: {{password}}": "密码已重置并复制到剪贴板：{{password}}",
     "Password reset: {{password}}": "密码已重置：{{password}}",
@@ -4625,6 +4623,14 @@
     "Deleted {{count}} failed models": "已删除 {{count}} 个失败模型",
     "Failed to delete failed models": "删除失败模型失败",
     "Select successful models ({{count}})": "选择成功模型（{{count}}）",
-    "This removes {{count}} failed models from this channel. This action cannot be undone.": "这会从该渠道移除 {{count}} 个失败模型。此操作无法撤销。"
+    "This removes {{count}} failed models from this channel. This action cannot be undone.": "这会从该渠道移除 {{count}} 个失败模型。此操作无法撤销。",
+    "Password must be at most 20 characters long": "密码最多 20 个字符",
+    "Password must be between 8 and 20 characters": "密码长度必须在 8 到 20 个字符之间",
+    "Passwords don't match.": "两次输入的密码不一致。",
+    "Please confirm your password": "请确认密码",
+    "Please enter a code.": "请输入验证码。",
+    "Please enter your password": "请输入密码",
+    "Please enter your username": "请输入用户名",
+    "Please enter your username or email": "请输入用户名或邮箱"
   }
 }
