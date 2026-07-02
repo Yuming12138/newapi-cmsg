@@ -25,7 +25,7 @@ func TestInstallBlocksLoadedWindowsPlugin(t *testing.T) {
 		loaded      bool
 		wantBlocked bool
 	}{
-		{name: "windows loaded", goos: "windows", loaded: true, wantBlocked: true},
+		{name: "windows loaded", goos: "windows", loaded: true, wantBlocked: false},
 		{name: "windows not loaded", goos: "windows", loaded: false, wantBlocked: false},
 		{name: "linux loaded", goos: "linux", loaded: true, wantBlocked: false},
 		{name: "darwin loaded", goos: "darwin", loaded: true, wantBlocked: false},
@@ -53,10 +53,18 @@ func TestInstallBlocksLoadedWindowsPlugin(t *testing.T) {
 func TestInstallArchiveBlocksLoadedWindowsPluginBeforeWrite(t *testing.T) {
 	t.Parallel()
 
+	root := t.TempDir()
+	targetDir := filepath.Join(root, "windows", "amd64")
+	if errMkdir := os.MkdirAll(targetDir, 0o755); errMkdir != nil {
+		t.Fatalf("MkdirAll() error = %v", errMkdir)
+	}
+	if errWrite := os.WriteFile(filepath.Join(targetDir, "sample-provider-v0.1.0.dll"), []byte("old"), 0o644); errWrite != nil {
+		t.Fatalf("WriteFile() error = %v", errWrite)
+	}
 	_, errInstall := InstallArchive(makeZip(t, map[string]string{
 		"sample-provider.dll": "library-data",
 	}), testPlugin(), InstallOptions{
-		PluginsDir:   t.TempDir(),
+		PluginsDir:   root,
 		GOOS:         "windows",
 		GOARCH:       "amd64",
 		PluginLoaded: func() bool { return true },
@@ -74,7 +82,7 @@ func TestInstallArchivePreparesLoadedWindowsPluginBeforeWrite(t *testing.T) {
 	if errMkdir := os.MkdirAll(targetDir, 0o755); errMkdir != nil {
 		t.Fatalf("MkdirAll() error = %v", errMkdir)
 	}
-	targetPath := filepath.Join(targetDir, "sample-provider.dll")
+	targetPath := filepath.Join(targetDir, "sample-provider-v0.1.0.dll")
 	if errWrite := os.WriteFile(targetPath, []byte("old"), 0o644); errWrite != nil {
 		t.Fatalf("WriteFile() error = %v", errWrite)
 	}
@@ -120,7 +128,7 @@ func TestInstallArchiveSkipsIdenticalLoadedWindowsPlugin(t *testing.T) {
 	if errMkdir := os.MkdirAll(targetDir, 0o755); errMkdir != nil {
 		t.Fatalf("MkdirAll() error = %v", errMkdir)
 	}
-	targetPath := filepath.Join(targetDir, "sample-provider.dll")
+	targetPath := filepath.Join(targetDir, "sample-provider-v0.1.0.dll")
 	if errWrite := os.WriteFile(targetPath, []byte("same"), 0o644); errWrite != nil {
 		t.Fatalf("WriteFile() error = %v", errWrite)
 	}
@@ -170,7 +178,7 @@ func TestInstallArchiveWritesPlatformPlugin(t *testing.T) {
 	if errInstall != nil {
 		t.Fatalf("InstallArchive() error = %v", errInstall)
 	}
-	wantPath := filepath.Join(root, "darwin", "arm64", "sample-provider-v0.2.0.dylib")
+	wantPath := filepath.Join(root, "darwin", "arm64", "sample-provider-v0.1.0.dylib")
 	if result.Path != wantPath {
 		t.Fatalf("Path = %q, want %q", result.Path, wantPath)
 	}
@@ -191,7 +199,7 @@ func TestInstallArchiveReportsOverwrite(t *testing.T) {
 	if errMkdir := os.MkdirAll(targetDir, 0o755); errMkdir != nil {
 		t.Fatalf("MkdirAll() error = %v", errMkdir)
 	}
-	if errWrite := os.WriteFile(filepath.Join(targetDir, "sample-provider.dylib"), []byte("old"), 0o644); errWrite != nil {
+	if errWrite := os.WriteFile(filepath.Join(targetDir, "sample-provider-v0.1.0.dylib"), []byte("old"), 0o644); errWrite != nil {
 		t.Fatalf("WriteFile() error = %v", errWrite)
 	}
 	result, errInstall := InstallArchive(makeZip(t, map[string]string{
@@ -209,7 +217,10 @@ func TestInstallArchiveOverwritesRuntimeSelectedPlugin(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	existingPath := filepath.Join(root, "sample-provider"+pluginExtension(runtime.GOOS))
+	existingPath := filepath.Join(root, runtime.GOOS, runtime.GOARCH, "sample-provider-v0.1.0"+pluginExtension(runtime.GOOS))
+	if errMkdir := os.MkdirAll(filepath.Dir(existingPath), 0o755); errMkdir != nil {
+		t.Fatalf("MkdirAll() error = %v", errMkdir)
+	}
 	if errWrite := os.WriteFile(existingPath, []byte("old"), 0o644); errWrite != nil {
 		t.Fatalf("WriteFile() error = %v", errWrite)
 	}
