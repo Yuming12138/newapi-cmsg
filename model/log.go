@@ -699,12 +699,32 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
 	var total int64 = 0
 
+	if isClickHouseLogDatabase() {
+		if nil != ctx.Err() {
+			return total, ctx.Err()
+		}
+
+		if err := LOG_DB.WithContext(ctx).Model(&Log{}).Where("created_at < ?", targetTimestamp).Count(&total).Error; err != nil {
+			return 0, err
+		}
+		if total == 0 {
+			return 0, nil
+		}
+		if err := LOG_DB.WithContext(ctx).Exec(
+			"ALTER TABLE logs DELETE WHERE created_at < ? SETTINGS mutations_sync = 1",
+			targetTimestamp,
+		).Error; err != nil {
+			return 0, err
+		}
+		return total, nil
+	}
+
 	for {
 		if nil != ctx.Err() {
 			return total, ctx.Err()
 		}
 
-		result := LOG_DB.Where("created_at < ?", targetTimestamp).Limit(limit).Delete(&Log{})
+		result := LOG_DB.WithContext(ctx).Where("created_at < ?", targetTimestamp).Limit(limit).Delete(&Log{})
 		if nil != result.Error {
 			return total, result.Error
 		}

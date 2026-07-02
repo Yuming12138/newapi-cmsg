@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -72,4 +73,38 @@ func TestApplyExplicitLogTextFilterUsesLikeWhenWildcardIsExplicit(t *testing.T) 
 	stmt := tx.Find(&[]Log{}).Statement
 	assert.Contains(t, stmt.SQL.String(), "logs.model_name LIKE ? ESCAPE '!'")
 	assert.Equal(t, "gpt%", stmt.Vars[0])
+}
+
+func TestDeleteOldLogKeepsBatchDeletionForStandardDatabases(t *testing.T) {
+	originalLogSqlType := common.LogSqlType
+	originalUsingClickHouse := common.UsingClickHouse
+	t.Cleanup(func() {
+		common.LogSqlType = originalLogSqlType
+		common.UsingClickHouse = originalUsingClickHouse
+		require.NoError(t, LOG_DB.Exec("DELETE FROM logs").Error)
+	})
+	common.LogSqlType = common.DatabaseTypeSQLite
+	common.UsingClickHouse = false
+
+	require.NoError(t, LOG_DB.Exec("DELETE FROM logs").Error)
+	require.NoError(t, LOG_DB.Create(&[]Log{
+		{CreatedAt: 100, Type: LogTypeConsume, ModelName: "old-a"},
+		{CreatedAt: 150, Type: LogTypeConsume, ModelName: "old-b"},
+		{CreatedAt: 199, Type: LogTypeConsume, ModelName: "old-c"},
+		{CreatedAt: 200, Type: LogTypeConsume, ModelName: "boundary"},
+		{CreatedAt: 300, Type: LogTypeConsume, ModelName: "new"},
+	}).Error)
+
+	deleted, err := DeleteOldLog(context.Background(), 200, 2)
+
+	require.NoError(t, err)
+	assert.EqualValues(t, 3, deleted)
+
+	var remaining []Log
+	require.NoError(t, LOG_DB.Order("created_at asc").Find(&remaining).Error)
+	require.Len(t, remaining, 2)
+	assert.EqualValues(t, 200, remaining[0].CreatedAt)
+	assert.Equal(t, "boundary", remaining[0].ModelName)
+	assert.EqualValues(t, 300, remaining[1].CreatedAt)
+	assert.Equal(t, "new", remaining[1].ModelName)
 }
