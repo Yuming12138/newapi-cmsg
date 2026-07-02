@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { type Row } from '@tanstack/react-table'
+import type { Row } from '@tanstack/react-table'
 import {
   MoreHorizontal,
   Boxes,
@@ -143,8 +143,34 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     }
   }
 
+  let statusIcon = <Power className='size-4' />
+  if (isTogglingStatus) {
+    statusIcon = <Loader2 className='size-4 animate-spin' />
+  } else if (isEnabled) {
+    statusIcon = <PowerOff className='size-4' />
+  }
+
   return (
     <div className='flex items-center justify-end gap-1'>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant='ghost'
+              size='icon-sm'
+              onClick={(e) => {
+                e.stopPropagation()
+                handleEdit()
+              }}
+              aria-label={t('Edit')}
+            />
+          }
+        >
+          <Pencil className='size-4' />
+        </TooltipTrigger>
+        <TooltipContent>{t('Edit')}</TooltipContent>
+      </Tooltip>
+
       <Tooltip>
         <TooltipTrigger
           render={
@@ -183,13 +209,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             />
           }
         >
-          {isTogglingStatus ? (
-            <Loader2 className='size-4 animate-spin' />
-          ) : isEnabled ? (
-            <PowerOff className='size-4' />
-          ) : (
-            <Power className='size-4' />
-          )}
+          {statusIcon}
         </TooltipTrigger>
         <TooltipContent>
           {isEnabled ? t('Disable') : t('Enable')}
@@ -209,14 +229,6 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           <span className='sr-only'>{t('Open menu')}</span>
         </DropdownMenuTrigger>
         <DropdownMenuContent align='end' className='w-48'>
-          {/* Edit */}
-          <DropdownMenuItem onClick={handleEdit}>
-            {t('Edit')}
-            <DropdownMenuShortcut>
-              <Pencil size={16} />
-            </DropdownMenuShortcut>
-          </DropdownMenuItem>
-
           {/* Test Connection */}
           <DropdownMenuItem onClick={handleTest}>
             {t('Test Connection')}
@@ -320,8 +332,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         open={deleteConfirmOpen}
         onOpenChange={setDeleteConfirmOpen}
         title={t('Delete Channel')}
-        desc={`Are you sure you want to delete "${channel.name}"? This action cannot be undone.`}
-        confirmText='Delete'
+        desc={t(
+          'Are you sure you want to delete channel "{{name}}"? This action cannot be undone.',
+          { name: channel.name }
+        )}
+        confirmText={t('Delete')}
         destructive
         handleConfirm={() => {
           handleDeleteChannel(channel.id, queryClient)

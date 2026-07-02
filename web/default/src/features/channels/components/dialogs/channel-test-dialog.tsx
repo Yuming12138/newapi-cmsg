@@ -776,7 +776,6 @@ function ChannelTestDialogContent({
           )
         },
         enableSorting: false,
-        size: 120,
       },
     ],
     [
@@ -929,7 +928,7 @@ function ChannelTestDialogContent({
                       <col className='w-10 min-w-10' />
                       <col className='w-auto' />
                       <col className='w-70' />
-                      <col className='w-24 sm:w-28' />
+                      <col className='w-auto' />
                     </colgroup>
                     <TableHeader>
                       {table.getHeaderGroups().map((headerGroup) => (

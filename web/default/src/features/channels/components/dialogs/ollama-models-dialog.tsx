@@ -193,7 +193,7 @@ export function OllamaModelsDialog({
     setSelected((prev) => {
       const next = new Set(prev)
       filteredModels.forEach((m) => next.add(m.id))
-      return Array.from(next)
+      return [...next]
     })
   }
 
@@ -208,8 +208,8 @@ export function OllamaModelsDialog({
 
     const next =
       mode === 'replace'
-        ? Array.from(new Set(selected))
-        : Array.from(new Set([...existingModels, ...selected]))
+        ? [...new Set(selected)]
+        : [...new Set([...existingModels, ...selected])]
 
     const res = await updateChannel(currentRow.id, { models: next.join(',') })
     if (res.success) {
@@ -586,7 +586,7 @@ export function OllamaModelsDialog({
               {t('Cancel')}
             </AlertDialogCancel>
             <AlertDialogAction
-              className='bg-destructive text-destructive-foreground hover:bg-destructive/90'
+              variant='destructive'
               disabled={isDeleting || !deleteTarget}
               onClick={() => {
                 if (!deleteTarget) return
