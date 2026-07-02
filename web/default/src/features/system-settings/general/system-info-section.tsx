@@ -19,8 +19,12 @@ For commercial licensing, please contact support@quantumnous.com
 import * as z from 'zod'
 import type { Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { RotateCcw } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { AlertTriangle, RefreshCw, RotateCcw, ServerCog } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { formatTimestampRelative, formatTimestampToDate } from '@/lib/format'
+import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -40,12 +44,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
+import { ErrorState } from '@/components/error-state'
+import { listSystemInstances } from '../api'
 import { FormDirtyIndicator } from '../components/form-dirty-indicator'
 import { FormNavigationGuard } from '../components/form-navigation-guard'
 import { SettingsSection } from '../components/settings-section'
 import { useSettingsForm } from '../hooks/use-settings-form'
 import { useUpdateOption } from '../hooks/use-update-option'
+import type { SystemInstance, SystemInstanceStatus } from '../types'
 
 const _systemInfoSchema = z.object({
   theme: z.object({
@@ -67,6 +83,245 @@ type SystemInfoFormValues = z.infer<typeof _systemInfoSchema>
 
 type SystemInfoSectionProps = {
   defaultValues: SystemInfoFormValues
+}
+
+const INSTANCE_POLL_INTERVAL_MS = 30_000
+
+const STATUS_CLASS_NAME: Record<SystemInstanceStatus, string> = {
+  online:
+    'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
+  stale: 'bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300',
+}
+
+const STATUS_DOT_CLASS_NAME: Record<SystemInstanceStatus, string> = {
+  online: 'bg-emerald-500',
+  stale: 'bg-amber-500',
+}
+
+function roleLabel(instance: SystemInstance) {
+  if (instance.info?.role?.is_master) return 'master'
+  return 'worker'
+}
+
+function runtimeLabel(instance: SystemInstance) {
+  const runtime = instance.info?.runtime
+  if (!runtime?.goos && !runtime?.goarch) return '-'
+  return [runtime.goos, runtime.goarch].filter(Boolean).join('/')
+}
+
+function getNodeName(instance: SystemInstance) {
+  return instance.info?.node?.name || instance.node_name
+}
+
+function formatPercent(value?: number) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '-'
+  return `${new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 1,
+  }).format(value)}%`
+}
+
+function formatBytes(bytes?: number): string {
+  if (typeof bytes !== 'number' || Number.isNaN(bytes)) return '-'
+  if (bytes === 0) return '0 B'
+  if (bytes < 0) return `-${formatBytes(-bytes)}`
+
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const index = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+    units.length - 1
+  )
+  const value = bytes / 1024 ** index
+  return `${new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: index === 0 ? 0 : 1,
+  }).format(value)} ${units[index]}`
+}
+
+function SystemInstancesPanel() {
+  const { t, i18n } = useTranslation()
+  const instancesQuery = useQuery({
+    queryKey: ['system-settings', 'system-info', 'instances'],
+    queryFn: async () => {
+      const res = await listSystemInstances()
+      if (!res.success || !Array.isArray(res.data)) {
+        throw new Error(res.message || t('We could not load system instances.'))
+      }
+      return res.data
+    },
+    staleTime: 30 * 1000,
+    retry: false,
+    refetchInterval: INSTANCE_POLL_INTERVAL_MS,
+  })
+
+  const instances = instancesQuery.data ?? []
+  const refreshing = instancesQuery.isFetching && !instancesQuery.isLoading
+
+  return (
+    <SettingsSection
+      title={t('System Instances')}
+      description={t('Runtime nodes currently reporting into this deployment.')}
+    >
+      <div className='space-y-3'>
+        <div className='flex items-center justify-between gap-3'>
+          <span
+            className='text-muted-foreground inline-flex items-center gap-1.5 text-xs'
+            aria-live='polite'
+          >
+            <span className='size-1.5 rounded-full bg-emerald-500' />
+            {t('Auto-refreshing every {{seconds}}s', {
+              seconds: INSTANCE_POLL_INTERVAL_MS / 1000,
+            })}
+          </span>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            onClick={() => instancesQuery.refetch()}
+            disabled={refreshing}
+          >
+            <RefreshCw
+              className={cn('mr-2 size-3.5', refreshing && 'animate-spin')}
+            />
+            {t('Refresh')}
+          </Button>
+        </div>
+
+        {instancesQuery.isLoading ? (
+          <div className='space-y-2 rounded-md border p-3'>
+            <Skeleton className='h-8 w-full' />
+            <Skeleton className='h-8 w-full' />
+            <Skeleton className='h-8 w-3/4' />
+          </div>
+        ) : instancesQuery.isError ? (
+          <ErrorState
+            icon={AlertTriangle}
+            title={t('Failed to load system instances')}
+            description={
+              instancesQuery.error instanceof Error
+                ? instancesQuery.error.message
+                : undefined
+            }
+            onRetry={() => instancesQuery.refetch()}
+            className='min-h-[220px] rounded-md border'
+          />
+        ) : instances.length === 0 ? (
+          <div className='text-muted-foreground rounded-md border p-4 text-sm'>
+            {t('No system instances have reported yet.')}
+          </div>
+        ) : (
+          <div className='overflow-x-auto rounded-md border'>
+            <Table className='min-w-[980px]'>
+              <TableHeader>
+                <TableRow className='bg-muted/40 hover:bg-muted/40'>
+                  <TableHead className='h-9 min-w-[220px] px-4 text-xs'>
+                    {t('Instance')}
+                  </TableHead>
+                  <TableHead className='h-9 w-[110px] text-xs'>
+                    {t('Status')}
+                  </TableHead>
+                  <TableHead className='h-9 w-[90px] text-xs'>
+                    {t('Role')}
+                  </TableHead>
+                  <TableHead className='h-9 w-[90px] text-xs'>
+                    {t('CPU')}
+                  </TableHead>
+                  <TableHead className='h-9 w-[90px] text-xs'>
+                    {t('Memory')}
+                  </TableHead>
+                  <TableHead className='h-9 w-[140px] text-xs'>
+                    {t('Storage')}
+                  </TableHead>
+                  <TableHead className='h-9 w-[110px] text-xs'>
+                    {t('Version')}
+                  </TableHead>
+                  <TableHead className='h-9 w-[130px] text-xs'>
+                    {t('Runtime')}
+                  </TableHead>
+                  <TableHead className='h-9 w-[165px] pr-4 text-xs'>
+                    {t('Last Seen')}
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {instances.map((instance) => {
+                  const storage = instance.info?.resources?.storage
+                  return (
+                    <TableRow key={instance.node_name}>
+                      <TableCell className='px-4 py-2.5 align-middle'>
+                        <div className='flex min-w-0 items-center gap-2'>
+                          <ServerCog className='text-muted-foreground size-4 shrink-0' />
+                          <div className='min-w-0'>
+                            <div className='truncate font-medium'>
+                              {getNodeName(instance)}
+                            </div>
+                            <div className='text-muted-foreground truncate text-xs'>
+                              {instance.info?.host?.hostname || '-'}
+                            </div>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell className='py-2.5 align-middle'>
+                        <Badge
+                          variant='secondary'
+                          className={cn(
+                            'gap-1.5',
+                            STATUS_CLASS_NAME[instance.status]
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              'size-1.5 rounded-full',
+                              STATUS_DOT_CLASS_NAME[instance.status]
+                            )}
+                          />
+                          {t(instance.status)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className='py-2.5 align-middle text-sm'>
+                        {t(roleLabel(instance))}
+                      </TableCell>
+                      <TableCell className='py-2.5 align-middle font-mono text-xs'>
+                        {formatPercent(
+                          instance.info?.resources?.cpu?.usage_percent
+                        )}
+                      </TableCell>
+                      <TableCell className='py-2.5 align-middle font-mono text-xs'>
+                        {formatPercent(
+                          instance.info?.resources?.memory?.usage_percent
+                        )}
+                      </TableCell>
+                      <TableCell className='py-2.5 align-middle font-mono text-xs'>
+                        <div>{formatPercent(storage?.used_percent)}</div>
+                        <div className='text-muted-foreground'>
+                          {formatBytes(storage?.used_bytes)} /{' '}
+                          {formatBytes(storage?.total_bytes)}
+                        </div>
+                      </TableCell>
+                      <TableCell className='py-2.5 align-middle font-mono text-xs'>
+                        {instance.info?.runtime?.version || '-'}
+                      </TableCell>
+                      <TableCell className='py-2.5 align-middle font-mono text-xs'>
+                        {runtimeLabel(instance)}
+                      </TableCell>
+                      <TableCell
+                        className='text-muted-foreground py-2.5 pr-4 align-middle text-xs whitespace-nowrap'
+                        title={formatTimestampToDate(instance.last_seen_at)}
+                      >
+                        {formatTimestampRelative(
+                          instance.last_seen_at,
+                          'seconds',
+                          i18n.language
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </div>
+    </SettingsSection>
+  )
 }
 
 function normalizeValue(value: unknown): string {
@@ -171,6 +426,8 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
   return (
     <>
       <FormNavigationGuard when={isDirty} />
+
+      <SystemInstancesPanel />
 
       <SettingsSection
         title={t('System Information')}

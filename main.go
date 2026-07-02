@@ -123,6 +123,9 @@ func main() {
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
 
+	// Report this process as a system instance for multi-node runtime visibility.
+	service.StartSystemInstanceReporter()
+
 	// DeepSeek Anthropic balance sync task
 	service.StartDeepSeekBalanceSyncTask()
 
