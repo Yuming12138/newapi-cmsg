@@ -38,6 +38,7 @@ var ErrLoadedPluginLocked = errors.New("loaded plugin library cannot be overwrit
 type InstallResult struct {
 	ID          string `json:"id"`
 	Version     string `json:"version"`
+	ReleaseTag  string `json:"release_tag,omitempty"`
 	Path        string `json:"path"`
 	Overwritten bool   `json:"overwritten"`
 	Skipped     bool   `json:"skipped"`
@@ -110,7 +111,12 @@ func (c Client) installRelease(ctx context.Context, plugin Plugin, release Relea
 		return InstallResult{}, errVerify
 	}
 	plugin.Version = version
-	return InstallArchive(archiveData, plugin, options)
+	result, errInstall := InstallArchive(archiveData, plugin, options)
+	if errInstall != nil {
+		return InstallResult{}, errInstall
+	}
+	result.ReleaseTag = strings.TrimSpace(release.TagName)
+	return result, nil
 }
 
 func InstallArchive(archiveData []byte, plugin Plugin, options InstallOptions) (InstallResult, error) {

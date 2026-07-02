@@ -17,7 +17,9 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginstore"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	sdkpluginstore "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
 	log "github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -218,6 +220,15 @@ func (h *Handler) installPluginFromStore(c *gin.Context, goos, goarch string) {
 		return
 	}
 	restartRequired := false
+	manifest, errManifest := pluginStoreManifestForInstall(source, plugin, result)
+	if errManifest != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "plugin_manifest_failed",
+			"message": fmt.Sprintf("plugin file installed at %s but creating store manifest failed: %s", result.Path, errManifest.Error()),
+			"path":    result.Path,
+		})
+		return
+	}
 
 	h.mu.Lock()
 	if h.cfg == nil {
@@ -229,7 +240,7 @@ func (h *Handler) installPluginFromStore(c *gin.Context, goos, goarch string) {
 		})
 		return
 	}
-	if errEnable := h.enablePluginConfigLocked(id); errEnable != nil {
+	if errEnable := h.enablePluginConfigLocked(id, manifest); errEnable != nil {
 		h.mu.Unlock()
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "config_update_failed",
@@ -275,16 +286,43 @@ func (h *Handler) installPluginFromStore(c *gin.Context, goos, goarch string) {
 
 // enablePluginConfigLocked sets plugins.configs.<id>.enabled to true while preserving
 // the rest of the plugin's raw configuration. Callers must hold h.mu.
-func (h *Handler) enablePluginConfigLocked(id string) error {
+func (h *Handler) enablePluginConfigLocked(id string, storeManifest ...sdkpluginstore.Manifest) error {
 	ensurePluginConfigMap(h.cfg)
 	node := pluginConfigNode(h.cfg.Plugins.Configs[id])
 	setYAMLMappingValue(node, "enabled", boolYAMLNode(true))
+	if len(storeManifest) > 0 && strings.TrimSpace(storeManifest[0].ID) != "" {
+		storeNode, errStoreNode := pluginStoreManifestYAMLNode(storeManifest[0])
+		if errStoreNode != nil {
+			return errStoreNode
+		}
+		setYAMLMappingValue(node, "store", storeNode)
+	}
 	updated, errConfig := pluginInstanceConfigFromNode(node)
 	if errConfig != nil {
 		return fmt.Errorf("decode plugin config: %w", errConfig)
 	}
 	h.cfg.Plugins.Configs[id] = updated
 	return nil
+}
+
+func pluginStoreManifestForInstall(source pluginstore.Source, plugin pluginstore.Plugin, result pluginstore.InstallResult) (sdkpluginstore.Manifest, error) {
+	releaseTag := strings.TrimSpace(result.ReleaseTag)
+	if releaseTag == "" {
+		version := strings.TrimSpace(result.Version)
+		if version == "" {
+			return sdkpluginstore.Manifest{}, fmt.Errorf("installed plugin version is empty")
+		}
+		releaseTag = "v" + version
+	}
+	return sdkpluginstore.ManifestFromRelease(source, plugin, pluginstore.Release{TagName: releaseTag})
+}
+
+func pluginStoreManifestYAMLNode(manifest sdkpluginstore.Manifest) (*yaml.Node, error) {
+	var node yaml.Node
+	if errEncode := node.Encode(manifest); errEncode != nil {
+		return nil, fmt.Errorf("encode store manifest: %w", errEncode)
+	}
+	return &node, nil
 }
 
 func (h *Handler) pluginStoreSnapshot() (bool, string, string, []string, map[string]config.PluginInstanceConfig, *pluginhost.Host) {
@@ -509,6 +547,7 @@ func pluginLocalStatuses(pluginsEnabled bool, pluginsDir string, configs map[str
 		status := statuses[file.ID]
 		status.Installed = true
 		status.Path = file.Path
+		status.InstalledVersion = strings.TrimSpace(file.Version)
 		status.Enabled = true
 		statuses[file.ID] = status
 	}
