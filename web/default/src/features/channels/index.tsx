@@ -16,8 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
+import { Badge } from '@/components/ui/badge'
 import { SectionPageLayout } from '@/components/layout'
+import { getChannelOps } from './api'
 import { ChannelsDialogs } from './components/channels-dialogs'
 import { ChannelsPrimaryButtons } from './components/channels-primary-buttons'
 import { ChannelsProvider } from './components/channels-provider'
@@ -25,10 +28,29 @@ import { ChannelsTable } from './components/channels-table'
 
 export function Channels() {
   const { t } = useTranslation()
+  const channelOpsQuery = useQuery({
+    queryKey: ['channel-ops'],
+    queryFn: getChannelOps,
+    retry: false,
+    staleTime: 5 * 60 * 1000,
+  })
+  const retryTimes = channelOpsQuery.data?.data?.retry_times
+  const retryLabel =
+    typeof retryTimes === 'number' ? `${t('Max Retries')}: ${retryTimes}` : null
+
   return (
     <ChannelsProvider>
       <SectionPageLayout>
-        <SectionPageLayout.Title>{t('Channels')}</SectionPageLayout.Title>
+        <SectionPageLayout.Title>
+          <span className='flex min-w-0 items-center gap-2'>
+            <span className='truncate'>{t('Channels')}</span>
+            {retryLabel && (
+              <Badge variant='outline' className='shrink-0 text-xs font-normal'>
+                {retryLabel}
+              </Badge>
+            )}
+          </span>
+        </SectionPageLayout.Title>
         <SectionPageLayout.Description>
           {t('Manage API channels and provider configurations')}
         </SectionPageLayout.Description>

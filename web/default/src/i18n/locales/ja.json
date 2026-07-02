@@ -2333,6 +2333,7 @@
     "Max Success": "最大成功数",
     "Max successful requests": "最大成功リクエスト数",
     "Max Successful Requests": "最大成功リクエスト数",
+    "Max Retries": "最大再試行回数",
     "Maximum 1000 characters. Supports Markdown and HTML.": "最大1000文字。MarkdownとHTMLをサポートしています。",
     "Maximum 200 characters": "最大200文字",
     "Maximum 500 characters. Supports Markdown and HTML.": "最大500文字。MarkdownとHTMLをサポートしています。",
