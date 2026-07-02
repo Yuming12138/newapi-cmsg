@@ -4617,14 +4617,14 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
-  },
-  "Copy selected models": "Sao chép model đã chọn",
-  "Copy selected models separated by commas (e.g. a,b)": "Sao chép các model đã chọn, phân tách bằng dấu phẩy (ví dụ: a,b)",
-  "Delete failed models": "Xóa model thất bại",
-  "Delete failed models ({{count}})": "Xóa model thất bại ({{count}})",
-  "Deleted {{count}} failed models": "Đã xóa {{count}} model thất bại",
-  "Failed to delete failed models": "Không thể xóa model thất bại",
-  "Select successful models ({{count}})": "Chọn model thành công ({{count}})",
-  "This removes {{count}} failed models from this channel. This action cannot be undone.": "Thao tác này sẽ xóa {{count}} model thất bại khỏi kênh này. Không thể hoàn tác."
+    "Zoom": "Zoom",
+    "Copy selected models": "Sao chép model đã chọn",
+    "Copy selected models separated by commas (e.g. a,b)": "Sao chép các model đã chọn, phân tách bằng dấu phẩy (ví dụ: a,b)",
+    "Delete failed models": "Xóa model thất bại",
+    "Delete failed models ({{count}})": "Xóa model thất bại ({{count}})",
+    "Deleted {{count}} failed models": "Đã xóa {{count}} model thất bại",
+    "Failed to delete failed models": "Không thể xóa model thất bại",
+    "Select successful models ({{count}})": "Chọn model thành công ({{count}})",
+    "This removes {{count}} failed models from this channel. This action cannot be undone.": "Thao tác này sẽ xóa {{count}} model thất bại khỏi kênh này. Không thể hoàn tác."
+  }
 }

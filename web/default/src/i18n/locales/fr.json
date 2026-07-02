@@ -4617,14 +4617,14 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
-  },
-  "Copy selected models": "Copier les modèles sélectionnés",
-  "Copy selected models separated by commas (e.g. a,b)": "Copier les modèles sélectionnés séparés par des virgules (par ex. a,b)",
-  "Delete failed models": "Supprimer les modèles en échec",
-  "Delete failed models ({{count}})": "Supprimer les modèles en échec ({{count}})",
-  "Deleted {{count}} failed models": "{{count}} modèles en échec supprimés",
-  "Failed to delete failed models": "Échec de la suppression des modèles en échec",
-  "Select successful models ({{count}})": "Sélectionner les modèles réussis ({{count}})",
-  "This removes {{count}} failed models from this channel. This action cannot be undone.": "Cela supprime {{count}} modèles en échec de ce canal. Cette action est irréversible."
+    "Zoom": "Zoom",
+    "Copy selected models": "Copier les modèles sélectionnés",
+    "Copy selected models separated by commas (e.g. a,b)": "Copier les modèles sélectionnés séparés par des virgules (par ex. a,b)",
+    "Delete failed models": "Supprimer les modèles en échec",
+    "Delete failed models ({{count}})": "Supprimer les modèles en échec ({{count}})",
+    "Deleted {{count}} failed models": "{{count}} modèles en échec supprimés",
+    "Failed to delete failed models": "Échec de la suppression des modèles en échec",
+    "Select successful models ({{count}})": "Sélectionner les modèles réussis ({{count}})",
+    "This removes {{count}} failed models from this channel. This action cannot be undone.": "Cela supprime {{count}} modèles en échec de ce canal. Cette action est irréversible."
+  }
 }

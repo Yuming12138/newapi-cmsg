@@ -4617,14 +4617,14 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
-  },
-  "Copy selected models": "選択したモデルをコピー",
-  "Copy selected models separated by commas (e.g. a,b)": "選択したモデルをカンマ区切りでコピーします（例: a,b）",
-  "Delete failed models": "失敗したモデルを削除",
-  "Delete failed models ({{count}})": "失敗したモデルを削除（{{count}}）",
-  "Deleted {{count}} failed models": "{{count}} 個の失敗したモデルを削除しました",
-  "Failed to delete failed models": "失敗したモデルの削除に失敗しました",
-  "Select successful models ({{count}})": "成功したモデルを選択（{{count}}）",
-  "This removes {{count}} failed models from this channel. This action cannot be undone.": "このチャンネルから {{count}} 個の失敗したモデルを削除します。この操作は元に戻せません。"
+    "Zoom": "ズーム",
+    "Copy selected models": "選択したモデルをコピー",
+    "Copy selected models separated by commas (e.g. a,b)": "選択したモデルをカンマ区切りでコピーします（例: a,b）",
+    "Delete failed models": "失敗したモデルを削除",
+    "Delete failed models ({{count}})": "失敗したモデルを削除（{{count}}）",
+    "Deleted {{count}} failed models": "{{count}} 個の失敗したモデルを削除しました",
+    "Failed to delete failed models": "失敗したモデルの削除に失敗しました",
+    "Select successful models ({{count}})": "成功したモデルを選択（{{count}}）",
+    "This removes {{count}} failed models from this channel. This action cannot be undone.": "このチャンネルから {{count}} 個の失敗したモデルを削除します。この操作は元に戻せません。"
+  }
 }

@@ -4617,14 +4617,14 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
-  },
-  "Copy selected models": "Скопировать выбранные модели",
-  "Copy selected models separated by commas (e.g. a,b)": "Скопировать выбранные модели через запятую (например, a,b)",
-  "Delete failed models": "Удалить неудачные модели",
-  "Delete failed models ({{count}})": "Удалить неудачные модели ({{count}})",
-  "Deleted {{count}} failed models": "Удалено неудачных моделей: {{count}}",
-  "Failed to delete failed models": "Не удалось удалить неудачные модели",
-  "Select successful models ({{count}})": "Выбрать успешные модели ({{count}})",
-  "This removes {{count}} failed models from this channel. This action cannot be undone.": "Это удалит {{count}} неудачных моделей из этого канала. Это действие нельзя отменить."
+    "Zoom": "Zoom",
+    "Copy selected models": "Скопировать выбранные модели",
+    "Copy selected models separated by commas (e.g. a,b)": "Скопировать выбранные модели через запятую (например, a,b)",
+    "Delete failed models": "Удалить неудачные модели",
+    "Delete failed models ({{count}})": "Удалить неудачные модели ({{count}})",
+    "Deleted {{count}} failed models": "Удалено неудачных моделей: {{count}}",
+    "Failed to delete failed models": "Не удалось удалить неудачные модели",
+    "Select successful models ({{count}})": "Выбрать успешные модели ({{count}})",
+    "This removes {{count}} failed models from this channel. This action cannot be undone.": "Это удалит {{count}} неудачных моделей из этого канала. Это действие нельзя отменить."
+  }
 }
