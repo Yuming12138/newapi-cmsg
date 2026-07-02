@@ -1770,6 +1770,12 @@ func (e *AntigravityExecutor) CountTokens(ctx context.Context, auth *cliproxyaut
 		}
 		if errRead != nil {
 			helps.RecordAPIResponseError(ctx, e.cfg, errRead)
+			if errors.Is(errRead, context.Canceled) || errors.Is(errRead, context.DeadlineExceeded) {
+				return cliproxyexecutor.Response{}, errRead
+			}
+			if errCtx := ctx.Err(); errCtx != nil {
+				return cliproxyexecutor.Response{}, errCtx
+			}
 			return cliproxyexecutor.Response{}, errRead
 		}
 		helps.AppendAPIResponseChunk(ctx, e.cfg, bodyBytes)
