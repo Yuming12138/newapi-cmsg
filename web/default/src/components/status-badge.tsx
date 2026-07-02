@@ -126,12 +126,16 @@ export function StatusBadge({
   }
 
   const content =
-    children ?? (label ? <span className='truncate'>{label}</span> : null)
+    children ??
+    (label ? <span className='min-w-0 truncate'>{label}</span> : null)
+  const title = copyable
+    ? `Click to copy: ${copyText || label || ''}`
+    : label || undefined
 
   return (
     <span
       className={cn(
-        'inline-flex w-fit shrink-0 items-center font-medium whitespace-nowrap',
+        'inline-flex w-fit max-w-full min-w-0 shrink items-center font-medium whitespace-nowrap',
         sizeMap[size ?? 'sm'],
         textColorMap[computedVariant],
         pulse && 'animate-pulse',
@@ -140,7 +144,7 @@ export function StatusBadge({
         className
       )}
       onClick={handleClick}
-      title={copyable ? `Click to copy: ${copyText || label || ''}` : undefined}
+      title={title}
       {...props}
     >
       {showDot && (

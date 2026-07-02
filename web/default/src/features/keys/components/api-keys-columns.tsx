@@ -235,14 +235,14 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
             <Tooltip>
               <TooltipTrigger
                 render={
-                  <span className='inline-flex items-center gap-1.5 text-xs' />
+                  <span className='inline-flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden text-xs' />
                 }
               >
                 <GroupBadge group='auto' />
                 {apiKey.cross_group_retry && (
                   <>
                     <span className='text-muted-foreground/30'>·</span>
-                    <span className='text-muted-foreground/60'>
+                    <span className='text-muted-foreground/60 min-w-0 truncate'>
                       {t('Cross-group')}
                     </span>
                   </>
@@ -258,7 +258,7 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
             </Tooltip>
           )
         }
-        return <GroupBadge group={group} ratio={ratio} />
+        return <GroupBadge group={group} ratio={ratio} className='max-w-full' />
       },
       meta: { label: t('Group'), mobileHidden: true },
     },

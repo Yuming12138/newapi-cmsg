@@ -153,7 +153,9 @@ export function ModelLimitsCell({ apiKey }: { apiKey: ApiKey }) {
 
   return (
     <Tooltip>
-      <TooltipTrigger render={<span />}>
+      <TooltipTrigger
+        render={<span className='inline-flex max-w-full min-w-0' />}
+      >
         <StatusBadge
           label={t('{{count}} model(s)', { count: models.length })}
           variant='neutral'
@@ -194,7 +196,9 @@ export function IpRestrictionsCell({ apiKey }: { apiKey: ApiKey }) {
 
   return (
     <Tooltip>
-      <TooltipTrigger render={<span />}>
+      <TooltipTrigger
+        render={<span className='inline-flex max-w-full min-w-0' />}
+      >
         <StatusBadge
           label={t('{{count}} IP(s)', { count: ips.length })}
           variant='neutral'
