@@ -16,7 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useMemo, useEffect } from 'react'
+import {
+  useState,
+  useMemo,
+  useEffect,
+  useRef,
+  type ChangeEvent,
+  type CompositionEvent,
+} from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import {
@@ -29,12 +36,12 @@ import {
   type ExpandedState,
   type Row,
 } from '@tanstack/react-table'
-import { Eye, EyeOff } from 'lucide-react'
 import { useDebounce, useMediaQuery } from '@/hooks'
+import { Eye, EyeOff } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { getLobeIcon } from '@/lib/lobe-icon'
-import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { useColumnVisibilityStorage } from '@/hooks/use-column-visibility-storage'
+import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -66,8 +73,7 @@ import { useChannels } from './channels-provider'
 import { DataTableBulkActions } from './data-table-bulk-actions'
 
 const route = getRouteApi('/_authenticated/channels/')
-const CHANNELS_COLUMN_VISIBILITY_STORAGE_KEY =
-  'channels:column-visibility'
+const CHANNELS_COLUMN_VISIBILITY_STORAGE_KEY = 'channels:column-visibility'
 const CHANNELS_INITIAL_COLUMN_VISIBILITY: VisibilityState = {
   models: false,
   tag: false,
@@ -90,21 +96,16 @@ function isDisabledChannelRow(channel: Channel) {
 
 export function ChannelsTable() {
   const { t } = useTranslation()
-  const {
-    enableTagMode,
-    idSort,
-    sensitiveVisible,
-    setSensitiveVisible,
-  } = useChannels()
+  const { enableTagMode, idSort, sensitiveVisible, setSensitiveVisible } =
+    useChannels()
   const isMobile = useMediaQuery('(max-width: 640px)')
 
   // Table state
   const [sorting, setSorting] = useState<SortingState>([])
-  const [columnVisibility, setColumnVisibility] =
-    useColumnVisibilityStorage(
-      CHANNELS_COLUMN_VISIBILITY_STORAGE_KEY,
-      CHANNELS_INITIAL_COLUMN_VISIBILITY
-    )
+  const [columnVisibility, setColumnVisibility] = useColumnVisibilityStorage(
+    CHANNELS_COLUMN_VISIBILITY_STORAGE_KEY,
+    CHANNELS_INITIAL_COLUMN_VISIBILITY
+  )
   const [rowSelection, setRowSelection] = useState({})
   const [expanded, setExpanded] = useState<ExpandedState>({})
 
@@ -134,27 +135,46 @@ export function ChannelsTable() {
   })
 
   // Extract filters from column filters
-  const statusFilter =
-    (columnFilters.find((f) => f.id === 'status')?.value as string[]) || []
-  const typeFilter =
-    (columnFilters.find((f) => f.id === 'type')?.value as string[]) || []
-  const groupFilter =
-    (columnFilters.find((f) => f.id === 'group')?.value as string[]) || []
-  const modelFilterFromUrl =
-    (columnFilters.find((f) => f.id === 'model')?.value as string) || ''
+  const statusFilter = useMemo(
+    () =>
+      (columnFilters.find((f) => f.id === 'status')?.value as string[]) || [],
+    [columnFilters]
+  )
+  const typeFilter = useMemo(
+    () => (columnFilters.find((f) => f.id === 'type')?.value as string[]) || [],
+    [columnFilters]
+  )
+  const groupFilter = useMemo(
+    () =>
+      (columnFilters.find((f) => f.id === 'group')?.value as string[]) || [],
+    [columnFilters]
+  )
+  const modelFilterFromUrl = useMemo(
+    () => (columnFilters.find((f) => f.id === 'model')?.value as string) || '',
+    [columnFilters]
+  )
 
   // Local state for immediate input feedback
+  const isModelFilterComposingRef = useRef(false)
   const [modelFilterInput, setModelFilterInput] = useState(modelFilterFromUrl)
-  const debouncedModelFilter = useDebounce(modelFilterInput, 500)
+  const [modelFilterPendingValue, setModelFilterPendingValue] =
+    useState(modelFilterFromUrl)
+  const debouncedModelFilter = useDebounce(modelFilterPendingValue, 500)
 
   // Sync local input with URL when URL changes (e.g., from back/forward navigation)
   useEffect(() => {
-    setModelFilterInput(modelFilterFromUrl)
+    if (!isModelFilterComposingRef.current) {
+      setModelFilterInput(modelFilterFromUrl)
+    }
+    setModelFilterPendingValue(modelFilterFromUrl)
   }, [modelFilterFromUrl])
 
   // Update URL when debounced value changes
   useEffect(() => {
-    if (debouncedModelFilter !== modelFilterFromUrl) {
+    if (
+      debouncedModelFilter === modelFilterPendingValue &&
+      debouncedModelFilter !== modelFilterFromUrl
+    ) {
       onColumnFiltersChange((prev) => {
         const filtered = prev.filter((f) => f.id !== 'model')
         return debouncedModelFilter
@@ -162,7 +182,34 @@ export function ChannelsTable() {
           : filtered
       })
     }
-  }, [debouncedModelFilter, modelFilterFromUrl, onColumnFiltersChange])
+  }, [
+    debouncedModelFilter,
+    modelFilterFromUrl,
+    modelFilterPendingValue,
+    onColumnFiltersChange,
+  ])
+
+  const handleModelFilterChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const value = event.target.value
+    setModelFilterInput(value)
+
+    if (!isModelFilterComposingRef.current) {
+      setModelFilterPendingValue(value)
+    }
+  }
+
+  const handleModelFilterCompositionStart = () => {
+    isModelFilterComposingRef.current = true
+  }
+
+  const handleModelFilterCompositionEnd = (
+    event: CompositionEvent<HTMLInputElement>
+  ) => {
+    isModelFilterComposingRef.current = false
+    const value = event.currentTarget.value
+    setModelFilterInput(value)
+    setModelFilterPendingValue(value)
+  }
 
   const modelFilter = modelFilterFromUrl
 
@@ -408,11 +455,19 @@ export function ChannelsTable() {
       applyHeaderSize
       toolbarProps={{
         searchPlaceholder: t('Filter by name, ID, or key...'),
+        searchDebounceMs: 500,
+        onReset: () => {
+          isModelFilterComposingRef.current = false
+          setModelFilterInput('')
+          setModelFilterPendingValue('')
+        },
         additionalSearch: (
           <Input
             placeholder={t('Filter by model...')}
             value={modelFilterInput}
-            onChange={(e) => setModelFilterInput(e.target.value)}
+            onChange={handleModelFilterChange}
+            onCompositionStart={handleModelFilterCompositionStart}
+            onCompositionEnd={handleModelFilterCompositionEnd}
             className='w-full sm:w-[150px] lg:w-[180px]'
           />
         ),
