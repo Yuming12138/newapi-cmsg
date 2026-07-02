@@ -56,30 +56,60 @@ func TestWaffoPancakeCreateSessionResponseParsesDocumentedPayload(t *testing.T) 
 	require.Empty(t, result.Data.OrderID)
 }
 
-func TestResolveWaffoPancakeTradeNo_UsesWebhookOrderIDWhenLocalOrderExists(t *testing.T) {
+func TestResolveWaffoPancakeTradeNo_UsesMerchantExternalIDWhenLocalOrderExists(t *testing.T) {
 	db := setupWaffoPancakeTestDB(t)
 
 	topUp := &model.TopUp{
-		UserId:        1,
-		Amount:        10,
-		Money:         29,
-		TradeNo:       "ORD_5dXBtmF2HLlHfbPNm0Wcnz",
-		PaymentMethod: model.PaymentMethodWaffoPancake,
-		CreateTime:    time.Now().Unix(),
-		Status:        common.TopUpStatusPending,
+		UserId:          1,
+		Amount:          10,
+		Money:           29,
+		TradeNo:         "WAFFO_PANCAKE-1-123456-abc123",
+		PaymentMethod:   model.PaymentMethodWaffoPancake,
+		PaymentProvider: model.PaymentProviderWaffoPancake,
+		CreateTime:      time.Now().Unix(),
+		Status:          common.TopUpStatusPending,
 	}
 	require.NoError(t, db.Create(topUp).Error)
 
 	tradeNo, err := ResolveWaffoPancakeTradeNo(&waffoPancakeWebhookEvent{
 		Data: waffoPancakeWebhookData{
-			OrderID: "ORD_5dXBtmF2HLlHfbPNm0Wcnz",
+			OrderID:                       "ORD_internal_pancake_id",
+			OrderMerchantExternalID:       topUp.TradeNo,
+			MerchantProvidedBuyerIdentity: WaffoPancakeBuyerIdentityFromUserID(topUp.UserId),
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "ORD_5dXBtmF2HLlHfbPNm0Wcnz", tradeNo)
+	require.Equal(t, topUp.TradeNo, tradeNo)
 }
 
-func TestResolveWaffoPancakeTradeNo_FailsWhenWebhookOrderIDIsUnknown(t *testing.T) {
+func TestResolveWaffoPancakeTradeNo_RejectsBuyerIdentityMismatch(t *testing.T) {
+	db := setupWaffoPancakeTestDB(t)
+
+	topUp := &model.TopUp{
+		UserId:          42,
+		Amount:          10,
+		Money:           29,
+		TradeNo:         "WAFFO_PANCAKE-42-123456-abc123",
+		PaymentMethod:   model.PaymentMethodWaffoPancake,
+		PaymentProvider: model.PaymentProviderWaffoPancake,
+		CreateTime:      time.Now().Unix(),
+		Status:          common.TopUpStatusPending,
+	}
+	require.NoError(t, db.Create(topUp).Error)
+
+	tradeNo, err := ResolveWaffoPancakeTradeNo(&waffoPancakeWebhookEvent{
+		Data: waffoPancakeWebhookData{
+			OrderID:                       "ORD_internal_pancake_id",
+			OrderMerchantExternalID:       topUp.TradeNo,
+			MerchantProvidedBuyerIdentity: WaffoPancakeBuyerIdentityFromUserID(99),
+		},
+	})
+	require.Error(t, err)
+	require.Empty(t, tradeNo)
+	require.Contains(t, err.Error(), "buyer identity mismatch")
+}
+
+func TestResolveWaffoPancakeTradeNo_FailsWhenMerchantExternalIDIsUnknown(t *testing.T) {
 	db := setupWaffoPancakeTestDB(t)
 
 	user := &model.User{
@@ -91,21 +121,24 @@ func TestResolveWaffoPancakeTradeNo_FailsWhenWebhookOrderIDIsUnknown(t *testing.
 	require.NoError(t, db.Create(user).Error)
 
 	topUp := &model.TopUp{
-		UserId:        user.Id,
-		Amount:        10,
-		Money:         29,
-		TradeNo:       "WAFFO_PANCAKE-42-123456-abc123",
-		PaymentMethod: model.PaymentMethodWaffoPancake,
-		CreateTime:    time.Now().Unix(),
-		Status:        common.TopUpStatusPending,
+		UserId:          user.Id,
+		Amount:          10,
+		Money:           29,
+		TradeNo:         "WAFFO_PANCAKE-42-123456-abc123",
+		PaymentMethod:   model.PaymentMethodWaffoPancake,
+		PaymentProvider: model.PaymentProviderWaffoPancake,
+		CreateTime:      time.Now().Unix(),
+		Status:          common.TopUpStatusPending,
 	}
 	require.NoError(t, db.Create(topUp).Error)
 
 	tradeNo, err := ResolveWaffoPancakeTradeNo(&waffoPancakeWebhookEvent{
 		Data: waffoPancakeWebhookData{
-			OrderID:    "ORD_unknown",
-			BuyerEmail: user.Email,
-			Amount:     "29.00",
+			OrderID:                       "ORD_unknown",
+			OrderMerchantExternalID:       "WAFFO_PANCAKE-unknown",
+			MerchantProvidedBuyerIdentity: WaffoPancakeBuyerIdentityFromUserID(user.Id),
+			BuyerEmail:                    user.Email,
+			Amount:                        "29.00",
 		},
 	})
 	require.Error(t, err)
