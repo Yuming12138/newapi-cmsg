@@ -685,6 +685,45 @@ func ClearChannelAffinityForRequest(c *gin.Context, reason string) bool {
 	return deleted
 }
 
+func RetainChannelAffinityForRequest(c *gin.Context, reason string) bool {
+	if c == nil {
+		return false
+	}
+	cacheKey, _, ok := getChannelAffinityContext(c)
+	if !ok || strings.TrimSpace(cacheKey) == "" {
+		return false
+	}
+
+	// The cached affinity is intentionally kept, but this request should still
+	// be able to fall back to normal routing instead of enforcing skip-retry
+	// semantics from the stale affinity hit.
+	c.Set(ginKeyChannelAffinitySkipRetry, false)
+
+	if anyInfo, ok := c.Get(ginKeyChannelAffinityLogInfo); ok {
+		if info, ok := anyInfo.(map[string]interface{}); ok {
+			info["retained"] = true
+			info["retain_reason"] = reason
+			c.Set(ginKeyChannelAffinityLogInfo, info)
+		}
+	}
+	return true
+}
+
+func ShouldKeepChannelAffinityOnChannelDisabled() bool {
+	setting := operation_setting.GetChannelAffinitySetting()
+	if setting == nil {
+		return false
+	}
+	return setting.KeepOnChannelDisabled
+}
+
+func HandleUnusableChannelAffinityForRequest(c *gin.Context, reason string) bool {
+	if ShouldKeepChannelAffinityOnChannelDisabled() {
+		return RetainChannelAffinityForRequest(c, reason)
+	}
+	return ClearChannelAffinityForRequest(c, reason)
+}
+
 func MarkChannelAffinityUsed(c *gin.Context, selectedGroup string, channelID int) {
 	if c == nil || channelID <= 0 {
 		return

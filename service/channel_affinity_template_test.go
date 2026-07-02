@@ -176,6 +176,75 @@ func TestShouldSkipRetryAfterChannelAffinityFailure(t *testing.T) {
 	}
 }
 
+func TestHandleUnusableChannelAffinityForRequestClearsByDefault(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	setting := operation_setting.GetChannelAffinitySetting()
+	oldKeep := setting.KeepOnChannelDisabled
+	setting.KeepOnChannelDisabled = false
+	t.Cleanup(func() {
+		setting.KeepOnChannelDisabled = oldKeep
+	})
+
+	cacheKeySuffix := fmt.Sprintf("codex cli trace:default:clear-unusable-%d", time.Now().UnixNano())
+	cacheKeyFull := channelAffinityCacheNamespace + ":" + cacheKeySuffix
+	cache := getChannelAffinityCache()
+	require.NoError(t, cache.SetWithTTL(cacheKeySuffix, 9527, time.Minute))
+	t.Cleanup(func() {
+		_, _ = cache.DeleteMany([]string{cacheKeySuffix})
+	})
+
+	ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
+		CacheKey:   cacheKeyFull,
+		TTLSeconds: 60,
+		RuleName:   "codex cli trace",
+		SkipRetry:  true,
+	})
+	require.True(t, ShouldSkipRetryAfterChannelAffinityFailure(ctx))
+
+	deleted := HandleUnusableChannelAffinityForRequest(ctx, "preferred channel is disabled")
+	require.True(t, deleted)
+	_, found, err := cache.Get(cacheKeySuffix)
+	require.NoError(t, err)
+	require.False(t, found)
+	require.False(t, ShouldSkipRetryAfterChannelAffinityFailure(ctx))
+}
+
+func TestHandleUnusableChannelAffinityForRequestRetainsWhenConfigured(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	setting := operation_setting.GetChannelAffinitySetting()
+	oldKeep := setting.KeepOnChannelDisabled
+	setting.KeepOnChannelDisabled = true
+	t.Cleanup(func() {
+		setting.KeepOnChannelDisabled = oldKeep
+	})
+
+	cacheKeySuffix := fmt.Sprintf("codex cli trace:default:retain-unusable-%d", time.Now().UnixNano())
+	cacheKeyFull := channelAffinityCacheNamespace + ":" + cacheKeySuffix
+	cache := getChannelAffinityCache()
+	require.NoError(t, cache.SetWithTTL(cacheKeySuffix, 9528, time.Minute))
+	t.Cleanup(func() {
+		_, _ = cache.DeleteMany([]string{cacheKeySuffix})
+	})
+
+	ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
+		CacheKey:   cacheKeyFull,
+		TTLSeconds: 60,
+		RuleName:   "codex cli trace",
+		SkipRetry:  true,
+	})
+	require.True(t, ShouldSkipRetryAfterChannelAffinityFailure(ctx))
+
+	retained := HandleUnusableChannelAffinityForRequest(ctx, "preferred channel is disabled")
+	require.True(t, retained)
+	channelID, found, err := cache.Get(cacheKeySuffix)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, 9528, channelID)
+	require.False(t, ShouldSkipRetryAfterChannelAffinityFailure(ctx))
+}
+
 func TestExtractChannelAffinityValue_RequestHeader(t *testing.T) {
 	rec := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(rec)

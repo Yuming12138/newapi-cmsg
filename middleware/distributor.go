@@ -103,19 +103,19 @@ func Distribute() func(c *gin.Context) {
 				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err != nil || preferred == nil {
-						service.ClearChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer exists", preferredChannelID))
+						service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer exists", preferredChannelID))
 					} else {
 						if preferred.Status != common.ChannelStatusEnabled {
 							service.ExcludeChannelForRequest(c, preferred.Id, "preferred affinity channel disabled")
-							service.ClearChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d is disabled", preferred.Id))
+							service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d is disabled", preferred.Id))
 						} else if blocked, state := model.IsChannelTemporarilyUnschedulable(preferred.Id); blocked {
 							reason := "temporarily unschedulable"
 							if state != nil && strings.TrimSpace(state.Reason) != "" {
 								reason = state.Reason
 							}
-							service.ClearChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d is %s", preferred.Id, reason))
+							service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d is %s", preferred.Id, reason))
 						} else if !channelSupportsRequestPath(preferred, requestPath) {
-							service.ClearChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer satisfies request path", preferred.Id))
+							service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer satisfies request path", preferred.Id))
 						} else if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroup(userGroup)
@@ -131,14 +131,14 @@ func Distribute() func(c *gin.Context) {
 								}
 							}
 							if !matched {
-								service.ClearChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer satisfies auto group/model", preferred.Id))
+								service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer satisfies auto group/model", preferred.Id))
 							}
 						} else if model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
 							channel = preferred
 							selectGroup = usingGroup
 							service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
 						} else {
-							service.ClearChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer satisfies group/model", preferred.Id))
+							service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer satisfies group/model", preferred.Id))
 						}
 					}
 				}
