@@ -301,6 +301,8 @@ function formatCliproxyCPASummary(meta: CliproxyCPAQuotaMeta): string {
 /**
  * Render limited items with "and X more" indicator
  */
+const SENSITIVE_MASK = '••••'
+
 function renderLimitedItems(
   items: React.ReactNode[],
   maxDisplay: number = 2
@@ -501,6 +503,7 @@ function WeightCell({ channel }: { channel: Channel }) {
 function BalanceCell({ channel }: { channel: Channel }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const { sensitiveVisible } = useChannels()
   const isTagRow = isTagAggregateRow(channel)
   const balance = channel.balance || 0
   const usedQuota = channel.used_quota || 0
@@ -515,13 +518,15 @@ function BalanceCell({ channel }: { channel: Channel }) {
 
   const usedDisplay = withSuffix(formatQuotaValue(usedQuota))
   const remainingDisplay = withSuffix(formatBalance(balance))
+  const maskedUsedLabel = `${t('Used:')} ${SENSITIVE_MASK}`
+  const maskedRemainingLabel = `${t('Remaining:')} ${SENSITIVE_MASK}`
   const cliproxyCPAQuota = parseCliproxyCPAQuotaMeta(channel.other_info)
 
   // Tag row: only show cumulative used quota
   if (isTagRow) {
     return (
       <StatusBadge
-        label={`Used: ${usedDisplay}`}
+        label={sensitiveVisible ? `Used: ${usedDisplay}` : maskedUsedLabel}
         variant='neutral'
         size='sm'
         copyable={false}
@@ -580,11 +585,13 @@ function BalanceCell({ channel }: { channel: Channel }) {
             <TooltipTrigger
               render={<span className='text-muted-foreground cursor-help' />}
             >
-              {usedDisplay}
+              {sensitiveVisible ? usedDisplay : SENSITIVE_MASK}
             </TooltipTrigger>
             <TooltipContent>
               <p>
-                {t('Used:')} {usedDisplay}
+                {sensitiveVisible
+                  ? `${t('Used:')} ${usedDisplay}`
+                  : maskedUsedLabel}
               </p>
             </TooltipContent>
           </Tooltip>
@@ -603,17 +610,21 @@ function BalanceCell({ channel }: { channel: Channel }) {
                 />
               }
             >
-              {isUpdating
-                ? 'Updating...'
-                : channel.type === 57
-                  ? t('Account Info')
-                  : remainingDisplay}
+              {sensitiveVisible
+                ? isUpdating
+                  ? 'Updating...'
+                  : channel.type === 57
+                    ? t('Account Info')
+                    : remainingDisplay
+                : SENSITIVE_MASK}
             </TooltipTrigger>
             <TooltipContent>
               <p>
-                {channel.type === 57
-                  ? t('Click to view Codex usage')
-                  : `${t('Remaining:')} ${remainingDisplay}`}
+                {sensitiveVisible
+                  ? channel.type === 57
+                    ? t('Click to view Codex usage')
+                    : `${t('Remaining:')} ${remainingDisplay}`
+                  : maskedRemainingLabel}
               </p>
               {cliproxyCPAQuota && (
                 <>
@@ -708,6 +719,8 @@ function BalanceCell({ channel }: { channel: Channel }) {
         onOpenChange={setCodexUsageOpen}
         channelName={channel.name}
         channelId={channel.id}
+        channelDisplayName={sensitiveVisible ? undefined : SENSITIVE_MASK}
+        channelDisplayId={sensitiveVisible ? undefined : SENSITIVE_MASK}
         response={codexUsageResponse}
         onRefresh={async () => {
           if (isUpdating) return
@@ -739,6 +752,7 @@ function BalanceCell({ channel }: { channel: Channel }) {
  */
 export function useChannelsColumns(): ColumnDef<Channel>[] {
   const { t } = useTranslation()
+  const { sensitiveVisible } = useChannels()
   return [
     // Checkbox column
     {
@@ -781,11 +795,12 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
       ),
       cell: ({ row }) => {
         const id = row.getValue('id') as number
+        const displayId = sensitiveVisible ? String(id) : SENSITIVE_MASK
         return (
           <StatusBadge
-            label={String(id)}
+            label={displayId}
             variant='neutral'
-            copyText={String(id)}
+            copyText={displayId}
             size='sm'
             className='font-mono'
           />
@@ -1193,7 +1208,12 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
         const groupArray = parseGroupsList(group)
 
         const groupBadges = groupArray.map((g) => (
-          <GroupBadge key={g} group={g} size='sm' />
+          <GroupBadge
+            key={g}
+            group={g}
+            label={sensitiveVisible ? undefined : SENSITIVE_MASK}
+            size='sm'
+          />
         ))
 
         return (

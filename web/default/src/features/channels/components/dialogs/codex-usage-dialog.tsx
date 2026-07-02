@@ -88,6 +88,8 @@ type CodexUsageDialogProps = {
   onOpenChange: (open: boolean) => void
   channelName?: string
   channelId?: number
+  channelDisplayName?: string
+  channelDisplayId?: string
   response: CodexUsageDialogData | null
   onRefresh?: () => void
   isRefreshing?: boolean
@@ -349,6 +351,8 @@ export function CodexUsageDialog({
   onOpenChange,
   channelName,
   channelId,
+  channelDisplayName,
+  channelDisplayId,
   response,
   onRefresh,
   isRefreshing,
@@ -421,8 +425,13 @@ export function CodexUsageDialog({
             {t('Codex Account & Usage')}
           </DialogTitle>
           <DialogDescription>
-            {t('Channel:')} <strong>{channelName || '-'}</strong>{' '}
-            {channelId ? `(#${channelId})` : ''}
+            {t('Channel:')}{' '}
+            <strong>{channelDisplayName ?? channelName ?? '-'}</strong>{' '}
+            {channelDisplayId != null
+              ? `(#${channelDisplayId})`
+              : channelId
+                ? `(#${channelId})`
+                : ''}
           </DialogDescription>
         </DialogHeader>
 
