@@ -371,6 +371,9 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			Quota:     params.Quota,
 			CreatedAt: createdAt,
 			TokenUsed: params.PromptTokens + params.CompletionTokens,
+			UseGroup:  params.Group,
+			TokenID:   params.TokenId,
+			ChannelID: params.ChannelId,
 			NodeName:  common.NodeName,
 		})
 	}
@@ -437,6 +440,9 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 			ModelName: params.ModelName,
 			Quota:     params.Quota,
 			CreatedAt: log.CreatedAt,
+			UseGroup:  params.Group,
+			TokenID:   params.TokenId,
+			ChannelID: params.ChannelId,
 			NodeName:  nodeName,
 		})
 	}
