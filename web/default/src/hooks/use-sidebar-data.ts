@@ -34,6 +34,7 @@ import {
   MonitorPlay,
   CreditCard,
   ListTodo,
+  ServerCog,
   Settings,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -158,6 +159,11 @@ export function useSidebarData(): SidebarData {
             title: t('Subscription Management'),
             url: '/subscriptions',
             icon: CreditCard,
+          },
+          {
+            title: t('System Info'),
+            url: '/system-info',
+            icon: ServerCog,
           },
           {
             title: t('System Settings'),

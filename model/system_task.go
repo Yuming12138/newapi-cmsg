@@ -141,6 +141,18 @@ func FindRunnableSystemTasks(taskType string, now int64, limit int) ([]*SystemTa
 	return tasks, err
 }
 
+func ListSystemTasks(limit int) ([]*SystemTask, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	var tasks []*SystemTask
+	err := DB.Order("id desc").Limit(limit).Find(&tasks).Error
+	return tasks, err
+}
+
 func ClaimSystemTask(id int64, taskType string, runnerID string, lockUntil int64) (*SystemTask, bool, error) {
 	now := common.GetTimestamp()
 	result := DB.Model(&SystemTask{}).

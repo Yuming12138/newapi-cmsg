@@ -136,6 +136,12 @@ export type SystemTaskResponse<TData = SystemTask> = {
   data?: TData
 }
 
+export type SystemTaskListResponse = {
+  success: boolean
+  message: string
+  data?: SystemTask[]
+}
+
 export type LogCleanupTaskPayload = {
   target_timestamp: number
   batch_size: number
