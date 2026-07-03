@@ -148,7 +148,7 @@ export function BillingHistoryDialog({
             </div>
 
             {/* Records List */}
-            <div className='h-[calc(100dvh-15rem)] overflow-y-auto pr-1 sm:h-[500px]'>
+            <div className='max-h-[min(54vh,520px)] overflow-y-auto pr-1'>
               {loading ? (
                 <div className='space-y-3'>
                   {Array.from({ length: 5 }).map((_, i) => (
