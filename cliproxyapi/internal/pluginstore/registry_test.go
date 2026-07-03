@@ -102,7 +102,7 @@ func TestValidateRegistryRejectsInvalidEntries(t *testing.T) {
 		{
 			name: "schema version",
 			mutate: func(registry *Registry) {
-				registry.SchemaVersion = 2
+				registry.SchemaVersion = 99
 			},
 			wantErr: "unsupported schema_version",
 		},
