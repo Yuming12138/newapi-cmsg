@@ -290,8 +290,8 @@ func cleanupUnselectedPluginFiles(root string, loaded []pluginFile) error {
 }
 
 // DiscoverPluginFiles returns plugin binaries selected by the current host discovery rules.
-func DiscoverPluginFiles(root string) ([]PluginFileInfo, error) {
-	files, errSelect := selectPluginFiles(root)
+func DiscoverPluginFiles(root string, desiredVersions ...map[string]string) ([]PluginFileInfo, error) {
+	files, errSelect := selectPluginFiles(root, desiredVersions...)
 	if errSelect != nil {
 		return nil, errSelect
 	}

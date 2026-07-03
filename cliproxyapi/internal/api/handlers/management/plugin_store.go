@@ -758,7 +758,7 @@ func (h *Handler) latestPluginVersion(ctx context.Context, client pluginstore.Cl
 
 func pluginLocalStatuses(pluginsEnabled bool, pluginsDir string, configs map[string]config.PluginInstanceConfig, host *pluginhost.Host) (map[string]pluginLocalStatus, error) {
 	statuses := map[string]pluginLocalStatus{}
-	files, errDiscover := pluginhost.DiscoverPluginFiles(pluginsDir)
+	files, errDiscover := pluginhost.DiscoverPluginFiles(pluginsDir, pluginStoreDesiredVersions(configs))
 	if errDiscover != nil {
 		return nil, errDiscover
 	}
@@ -793,6 +793,97 @@ func pluginLocalStatuses(pluginsEnabled bool, pluginsDir string, configs map[str
 		statuses[id] = status
 	}
 	return statuses, nil
+}
+
+func pluginStoreDesiredVersions(configs map[string]config.PluginInstanceConfig) map[string]string {
+	if len(configs) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(configs))
+	for id, item := range configs {
+		id = strings.TrimSpace(id)
+		version := pluginStoreDesiredVersion(item)
+		if id == "" || version == "" {
+			continue
+		}
+		out[id] = version
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func pluginStoreDesiredVersion(item config.PluginInstanceConfig) string {
+	storeNode := pluginStoreConfigNode(item)
+	if storeNode == nil {
+		return ""
+	}
+	if version := pluginStoreNormalizeDesiredVersion(pluginStoreYAMLScalar(pluginStoreYAMLMappingValue(storeNode, "version"))); version != "" {
+		return version
+	}
+	return pluginStoreNormalizeDesiredVersion(pluginStoreYAMLScalar(pluginStoreYAMLMappingValue(storeNode, "release-tag")))
+}
+
+func pluginStoreConfigNode(item config.PluginInstanceConfig) *yaml.Node {
+	if item.Raw.Kind != yaml.MappingNode {
+		return nil
+	}
+	return pluginStoreYAMLMappingValue(&item.Raw, "store")
+}
+
+func pluginStoreYAMLMappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		if node.Content[index] != nil && node.Content[index].Value == key {
+			return node.Content[index+1]
+		}
+	}
+	return nil
+}
+
+func pluginStoreYAMLScalar(node *yaml.Node) string {
+	if node == nil || node.Kind == 0 {
+		return ""
+	}
+	if node.Kind == yaml.ScalarNode {
+		return strings.TrimSpace(node.Value)
+	}
+	var value string
+	if errDecode := node.Decode(&value); errDecode != nil {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func pluginStoreNormalizeDesiredVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if len(version) > 1 && (version[0] == 'v' || version[0] == 'V') {
+		version = version[1:]
+	}
+	if !pluginStoreValidDesiredVersion(version) {
+		return ""
+	}
+	return version
+}
+
+func pluginStoreValidDesiredVersion(version string) bool {
+	if version == "" {
+		return false
+	}
+	for _, segment := range strings.Split(version, ".") {
+		if segment == "" {
+			return false
+		}
+		for _, ch := range segment {
+			if ch < '0' || ch > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func pluginBusy(host *pluginhost.Host, id string) bool {
