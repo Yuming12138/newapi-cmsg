@@ -37,7 +37,7 @@ const logTypeSearchSchema = z
 
 const usageLogsSearchSchema = z.object({
   page: z.number().optional().catch(1),
-  pageSize: z.number().optional().catch(20),
+  pageSize: z.number().optional().catch(undefined),
   type: logTypeSearchSchema.optional(),
   filter: z.string().optional().catch(''),
   model: z.string().optional().catch(''),
@@ -46,6 +46,7 @@ const usageLogsSearchSchema = z.object({
   group: z.string().optional().catch(''),
   username: z.string().optional().catch(''),
   requestId: z.string().optional().catch(''),
+  upstreamRequestId: z.string().optional().catch(''),
   startTime: z.number().optional(),
   endTime: z.number().optional(),
 })
@@ -59,11 +60,10 @@ export const Route = createFileRoute('/_authenticated/usage-logs/$section')({
       })
     }
     // type 仅 common 使用，非 common 时清掉 URL 里的 type
-    if (
-      params.section !== 'common' &&
-      Array.isArray(search?.type) &&
-      (search?.type?.length ?? 0) > 0
-    ) {
+    const hasTypeSearch = Array.isArray(search?.type)
+      ? search.type.length > 0
+      : search?.type != null && search.type !== ''
+    if (params.section !== 'common' && hasTypeSearch) {
       throw redirect({
         to: '/usage-logs/$section',
         params: { section: params.section },
