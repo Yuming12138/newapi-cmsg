@@ -186,16 +186,24 @@ func TestUtlsRoundTripperSaturatedReplacementDrainsDisplacedConn(t *testing.T) {
 	}
 }
 
-func TestUtlsRoundTripperEvictsOnlyPoisonedConn(t *testing.T) {
+func TestUtlsRoundTripperEvictsAndDrainsOnlyPoisonedConn(t *testing.T) {
 	t.Parallel()
 
 	poisoned := newFakeH2Conn("poisoned", -1)
+	poisoned.shutdownStarted = make(chan struct{})
+	poisoned.shutdownRelease = make(chan struct{})
 	sibling := newFakeH2Conn("sibling", -1)
 	rt := newFakeUtlsRoundTripper(2)
-	rt.pools["chatgpt.com"] = &connPool{conns: []h2ClientConn{poisoned, sibling}}
+	pool := &connPool{conns: []h2ClientConn{poisoned, sibling}}
+	rt.pools["chatgpt.com"] = pool
 
 	rt.evictConn("chatgpt.com", poisoned)
-	waitForFakeClose(t, poisoned)
+
+	select {
+	case <-poisoned.shutdownStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for poisoned conn Shutdown to start")
+	}
 
 	rt.mu.Lock()
 	conns := append([]h2ClientConn(nil), rt.pools["chatgpt.com"].conns...)
@@ -206,6 +214,22 @@ func TestUtlsRoundTripperEvictsOnlyPoisonedConn(t *testing.T) {
 	}
 	if got := sibling.closeCalls(); got != 0 {
 		t.Fatalf("sibling close calls = %d, want 0", got)
+	}
+	select {
+	case <-poisoned.closeCh:
+		t.Fatal("poisoned conn was closed before Shutdown returned")
+	default:
+	}
+
+	close(poisoned.shutdownRelease)
+	pool.drainWG.Wait()
+	waitForFakeClose(t, poisoned)
+
+	if got := poisoned.shutdownCalls(); got != 1 {
+		t.Fatalf("poisoned shutdown calls = %d, want 1", got)
+	}
+	if got := poisoned.closeCalls(); got != 1 {
+		t.Fatalf("poisoned close calls = %d, want 1", got)
 	}
 }
 

@@ -284,24 +284,26 @@ func (t *utlsRoundTripper) attempt(req *http.Request, hostname, addr string) (*h
 	return resp, h2Conn, nil
 }
 
-// evictConn removes one poisoned conn from the host pool without touching siblings.
+// evictConn removes one poisoned conn from the host pool without touching
+// siblings. The removed conn is drained instead of closed immediately so other
+// in-flight streams on the same HTTP/2 connection are not force-closed by cpa.
 func (t *utlsRoundTripper) evictConn(hostname string, conn h2ClientConn) {
-	var removed bool
+	var removedFrom *connPool
 	t.mu.Lock()
 	pool := t.pools[hostname]
 	if pool != nil {
 		for i, cached := range pool.conns {
 			if cached == conn {
 				pool.conns = append(pool.conns[:i], pool.conns[i+1:]...)
-				removed = true
+				removedFrom = pool
 				break
 			}
 		}
 	}
 	t.mu.Unlock()
 
-	if removed {
-		go func() { _ = conn.Close() }()
+	if removedFrom != nil {
+		t.startDrain(removedFrom, conn)
 	}
 }
 
