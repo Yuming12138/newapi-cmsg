@@ -1739,6 +1739,10 @@ func readStreamBootstrap(ctx context.Context, ch <-chan cliproxyexecutor.StreamC
 }
 
 func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, resultModel string, headers http.Header, buffered []cliproxyexecutor.StreamChunk, remaining <-chan cliproxyexecutor.StreamChunk, aliasResult OAuthModelAliasResult) *cliproxyexecutor.StreamResult {
+	authID := ""
+	if auth != nil {
+		authID = auth.ID
+	}
 	out := make(chan cliproxyexecutor.StreamChunk)
 	go func() {
 		defer close(out)
@@ -1751,11 +1755,9 @@ func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, re
 		emit := func(chunk cliproxyexecutor.StreamChunk) bool {
 			if chunk.Err != nil && !failed {
 				failed = true
-				rerr := &Error{Message: chunk.Err.Error()}
-				if se, ok := errors.AsType[cliproxyexecutor.StatusError](chunk.Err); ok && se != nil {
-					rerr.HTTPStatus = se.StatusCode()
-				}
-				m.MarkResult(ctx, Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr})
+				rerr := resultErrorFromError(chunk.Err)
+				m.logStreamFailure(ctx, authID, provider, resultModel, false, chunk.Err)
+				m.MarkResult(ctx, Result{AuthID: authID, Provider: provider, Model: resultModel, Success: false, Error: rerr})
 			}
 			if !forward {
 				return false
@@ -1812,7 +1814,7 @@ func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, re
 			}
 		}
 		if !failed {
-			m.MarkResult(ctx, Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: true})
+			m.MarkResult(ctx, Result{AuthID: authID, Provider: provider, Model: resultModel, Success: true})
 		}
 	}()
 	return &cliproxyexecutor.StreamResult{Headers: headers, Chunks: out}
@@ -1835,10 +1837,8 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			if errCtx := ctx.Err(); errCtx != nil {
 				return nil, errCtx
 			}
-			rerr := &Error{Message: errStream.Error()}
-			if se, ok := errors.AsType[cliproxyexecutor.StatusError](errStream); ok && se != nil {
-				rerr.HTTPStatus = se.StatusCode()
-			}
+			rerr := resultErrorFromError(errStream)
+			m.logStreamFailure(ctx, auth.ID, provider, resultModel, true, errStream)
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
 			result.RetryAfter = retryAfterFromError(errStream)
 			m.MarkResult(ctx, result)
@@ -1856,10 +1856,8 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 				return nil, errCtx
 			}
 			if isRequestInvalidError(bootstrapErr) {
-				rerr := &Error{Message: bootstrapErr.Error()}
-				if se, ok := errors.AsType[cliproxyexecutor.StatusError](bootstrapErr); ok && se != nil {
-					rerr.HTTPStatus = se.StatusCode()
-				}
+				rerr := resultErrorFromError(bootstrapErr)
+				m.logStreamFailure(ctx, auth.ID, provider, resultModel, true, bootstrapErr)
 				result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
 				result.RetryAfter = retryAfterFromError(bootstrapErr)
 				m.MarkResult(ctx, result)
@@ -1867,10 +1865,8 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 				return nil, bootstrapErr
 			}
 			if idx < len(execModels)-1 {
-				rerr := &Error{Message: bootstrapErr.Error()}
-				if se, ok := errors.AsType[cliproxyexecutor.StatusError](bootstrapErr); ok && se != nil {
-					rerr.HTTPStatus = se.StatusCode()
-				}
+				rerr := resultErrorFromError(bootstrapErr)
+				m.logStreamFailure(ctx, auth.ID, provider, resultModel, true, bootstrapErr)
 				result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
 				result.RetryAfter = retryAfterFromError(bootstrapErr)
 				m.MarkResult(ctx, result)
@@ -1878,10 +1874,8 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 				lastErr = bootstrapErr
 				continue
 			}
-			rerr := &Error{Message: bootstrapErr.Error()}
-			if se, ok := errors.AsType[cliproxyexecutor.StatusError](bootstrapErr); ok && se != nil {
-				rerr.HTTPStatus = se.StatusCode()
-			}
+			rerr := resultErrorFromError(bootstrapErr)
+			m.logStreamFailure(ctx, auth.ID, provider, resultModel, true, bootstrapErr)
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
 			result.RetryAfter = retryAfterFromError(bootstrapErr)
 			m.MarkResult(ctx, result)
@@ -1891,6 +1885,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 
 		if closed && len(buffered) == 0 {
 			emptyErr := &Error{Code: "empty_stream", Message: "upstream stream closed before first payload", Retryable: true}
+			m.logStreamFailure(ctx, auth.ID, provider, resultModel, true, emptyErr)
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: emptyErr}
 			m.MarkResult(ctx, result)
 			if idx < len(execModels)-1 {
@@ -3869,6 +3864,58 @@ func statusCodeFromError(err error) int {
 		return sc.StatusCode()
 	}
 	return 0
+}
+
+func resultErrorFromError(err error) *Error {
+	if err == nil {
+		return nil
+	}
+	return &Error{Message: err.Error(), HTTPStatus: statusCodeFromError(err)}
+}
+
+func redactStreamFailureError(message string) string {
+	words := strings.Fields(message)
+	for i, word := range words {
+		switch word {
+		case "Authorization", "authorization":
+			words[i] = "[redacted-header]"
+		case "Bearer", "bearer":
+			words[i] = "[redacted-bearer]"
+			if i+1 < len(words) {
+				words[i+1] = "[redacted-token]"
+			}
+		case "api_key", "api-key":
+			words[i] = "[redacted-api-key]"
+		case "access_token":
+			words[i] = "[redacted-access-token]"
+		case "refresh_token":
+			words[i] = "[redacted-refresh-token]"
+		case "id_token":
+			words[i] = "[redacted-id-token]"
+		case "session_key":
+			words[i] = "[redacted-session-key]"
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+func (m *Manager) logStreamFailure(ctx context.Context, authID, provider, model string, bootstrap bool, err error) {
+	if err == nil {
+		return
+	}
+	entry := logEntryWithRequestID(ctx).WithFields(log.Fields{
+		"auth_id":   authID,
+		"provider":  provider,
+		"model":     model,
+		"bootstrap": bootstrap,
+	})
+	if status := statusCodeFromError(err); status > 0 {
+		entry = entry.WithField("status_code", status)
+	}
+	if retryAfter := retryAfterFromError(err); retryAfter != nil {
+		entry = entry.WithField("retry_after_ms", retryAfter.Milliseconds())
+	}
+	entry.WithField("error", redactStreamFailureError(err.Error())).Warn("stream execution failed")
 }
 
 func isUnauthorizedError(err error) bool {

@@ -13,6 +13,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	log "github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus/hooks/test"
 )
 
 type antigravityCreditsFallbackExecutor struct {
@@ -48,6 +49,33 @@ func (e *antigravityCreditsFallbackExecutor) CountTokens(context.Context, *Auth,
 }
 
 func (e *antigravityCreditsFallbackExecutor) HttpRequest(context.Context, *Auth, *http.Request) (*http.Response, error) {
+	return nil, &Error{HTTPStatus: http.StatusNotImplemented, Message: "HttpRequest not implemented"}
+}
+
+type sensitiveBootstrapFailureExecutor struct{}
+
+func (sensitiveBootstrapFailureExecutor) Identifier() string { return "codex" }
+
+func (sensitiveBootstrapFailureExecutor) Execute(context.Context, *Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	return cliproxyexecutor.Response{}, &Error{HTTPStatus: http.StatusNotImplemented, Message: "Execute not implemented"}
+}
+
+func (sensitiveBootstrapFailureExecutor) ExecuteStream(context.Context, *Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+	ch := make(chan cliproxyexecutor.StreamChunk, 1)
+	ch <- cliproxyexecutor.StreamChunk{Err: &Error{HTTPStatus: http.StatusBadGateway, Message: "upstream Authorization Bearer sk-secret api_key access_token failed"}}
+	close(ch)
+	return &cliproxyexecutor.StreamResult{Chunks: ch}, nil
+}
+
+func (sensitiveBootstrapFailureExecutor) Refresh(_ context.Context, auth *Auth) (*Auth, error) {
+	return auth, nil
+}
+
+func (sensitiveBootstrapFailureExecutor) CountTokens(context.Context, *Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	return cliproxyexecutor.Response{}, &Error{HTTPStatus: http.StatusNotImplemented, Message: "CountTokens not implemented"}
+}
+
+func (sensitiveBootstrapFailureExecutor) HttpRequest(context.Context, *Auth, *http.Request) (*http.Response, error) {
 	return nil, &Error{HTTPStatus: http.StatusNotImplemented, Message: "HttpRequest not implemented"}
 }
 
@@ -264,5 +292,75 @@ func TestIsAuthBlockedForModel_KeepsGeminiBlockedWithoutCreditsBypass(t *testing
 	blocked, reason, _ := isAuthBlockedForModel(auth, "gemini-3-flash", time.Now())
 	if !blocked || reason != blockReasonCooldown {
 		t.Fatalf("expected gemini model to remain blocked, got blocked=%v reason=%v", blocked, reason)
+	}
+}
+
+func TestManagerExecuteStream_LogsBootstrapFailureMetadata(t *testing.T) {
+	const model = "gpt-5.5"
+	logger := log.StandardLogger()
+	oldLevel := logger.GetLevel()
+	hook := test.NewLocal(logger)
+	logger.SetLevel(log.WarnLevel)
+	t.Cleanup(func() {
+		logger.SetLevel(oldLevel)
+		hook.Reset()
+	})
+
+	manager := NewManager(nil, nil, nil)
+	manager.RegisterExecutor(sensitiveBootstrapFailureExecutor{})
+	registry.GetGlobalRegistry().RegisterClient("codex-sensitive", "codex", []*registry.ModelInfo{{ID: model}})
+	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient("codex-sensitive") })
+	if _, errRegister := manager.Register(context.Background(), &Auth{ID: "codex-sensitive", Provider: "codex"}); errRegister != nil {
+		t.Fatalf("register auth: %v", errRegister)
+	}
+
+	streamResult, errExecute := manager.ExecuteStream(context.Background(), []string{"codex"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+	if errExecute != nil {
+		t.Fatalf("execute stream: %v", errExecute)
+	}
+	if streamResult == nil || streamResult.Chunks == nil {
+		t.Fatal("expected stream error result")
+	}
+	var streamErr error
+	for chunk := range streamResult.Chunks {
+		if chunk.Err != nil {
+			streamErr = chunk.Err
+			break
+		}
+	}
+	if streamErr == nil {
+		t.Fatal("expected bootstrap failure chunk")
+	}
+
+	entries := hook.AllEntries()
+	var found *log.Entry
+	for _, entry := range entries {
+		if entry.Message == "stream execution failed" {
+			found = entry
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("stream execution failed log not found; entries=%d", len(entries))
+	}
+	if found.Level != log.WarnLevel {
+		t.Fatalf("log level = %s, want warn", found.Level)
+	}
+	if found.Data["auth_id"] != "codex-sensitive" || found.Data["provider"] != "codex" || found.Data["model"] != model {
+		t.Fatalf("log metadata = %#v", found.Data)
+	}
+	if found.Data["bootstrap"] != true || found.Data["status_code"] != http.StatusBadGateway {
+		t.Fatalf("log failure metadata = %#v", found.Data)
+	}
+	errorText, _ := found.Data["error"].(string)
+	for _, secret := range []string{"Authorization", "Bearer", "sk-secret", "api_key", "access_token"} {
+		if strings.Contains(errorText, secret) {
+			t.Fatalf("log error leaked %q in %q", secret, errorText)
+		}
+	}
+	for _, marker := range []string{"[redacted-header]", "[redacted-bearer]", "[redacted-token]", "[redacted-api-key]", "[redacted-access-token]"} {
+		if !strings.Contains(errorText, marker) {
+			t.Fatalf("log error = %q, want marker %q", errorText, marker)
+		}
 	}
 }
