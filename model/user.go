@@ -98,6 +98,21 @@ func (user *User) SetSetting(setting dto.UserSetting) {
 	user.Setting = string(settingBytes)
 }
 
+func UpdateUserSetting(userId int, setting dto.UserSetting) error {
+	if userId == 0 {
+		return errors.New("id 为空！")
+	}
+	settingBytes, err := common.Marshal(setting)
+	if err != nil {
+		return err
+	}
+	settingValue := string(settingBytes)
+	if err = DB.Model(&User{}).Where("id = ?", userId).Update("setting", settingValue).Error; err != nil {
+		return err
+	}
+	return updateUserSettingCache(userId, settingValue)
+}
+
 // 根据用户角色生成默认的边栏配置
 func generateDefaultSidebarConfigForRole(userRole int) string {
 	defaultConfig := map[string]interface{}{}
@@ -252,11 +267,11 @@ func withNormalizedEmailLock(tx *gorm.DB, email string, fn func(tx *gorm.DB) err
 		return fn(tx)
 	}
 	switch {
-	case common.UsingMainDatabase(common.DatabaseTypePostgreSQL):
+	case common.UsingPostgreSQL:
 		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", email).Error; err != nil {
 			return err
 		}
-	case common.UsingMainDatabase(common.DatabaseTypeMySQL):
+	case common.UsingMySQL:
 		var ids []int
 		if err := tx.Raw("SELECT id FROM users WHERE email = ? FOR UPDATE", email).Scan(&ids).Error; err != nil {
 			return err
@@ -509,7 +524,9 @@ func BindEmailToUser(user *User, email string) error {
 				return err
 			}
 			user.Email = email
-			return user.UpdateWithTx(tx, false)
+			return tx.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]interface{}{
+				"email": email,
+			}).Error
 		})
 	}); err != nil {
 		return err
@@ -643,6 +660,13 @@ func (user *User) FinalizeOAuthUserCreation(inviterId int) {
 }
 
 func (user *User) Update(updatePassword bool) error {
+	if err := user.UpdateWithTx(DB, updatePassword); err != nil {
+		return err
+	}
+	return updateUserCache(*user)
+}
+
+func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 	var err error
 	if updatePassword {
 		user.Password, err = common.Password2Hash(user.Password)
@@ -651,16 +675,24 @@ func (user *User) Update(updatePassword bool) error {
 		}
 	}
 	newUser := *user
-	DB.First(&user, user.Id)
-	if err = DB.Model(user).Updates(newUser).Error; err != nil {
+	current := User{}
+	if err = tx.First(&current, user.Id).Error; err != nil {
 		return err
 	}
-
-	// Update cache
-	return updateUserCache(*user)
+	if err = tx.Model(&current).Omit("quota", "used_quota", "request_count").Updates(newUser).Error; err != nil {
+		return err
+	}
+	return tx.First(user, user.Id).Error
 }
 
 func (user *User) Edit(updatePassword bool) error {
+	if err := user.EditWithTx(DB, updatePassword); err != nil {
+		return err
+	}
+	return updateUserCache(*user)
+}
+
+func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
 	var err error
 	if updatePassword {
 		user.Password, err = common.Password2Hash(user.Password)
@@ -680,13 +712,14 @@ func (user *User) Edit(updatePassword bool) error {
 		updates["password"] = newUser.Password
 	}
 
-	DB.First(&user, user.Id)
-	if err = DB.Model(user).Updates(updates).Error; err != nil {
+	current := User{}
+	if err = tx.First(&current, user.Id).Error; err != nil {
 		return err
 	}
-
-	// Update cache
-	return updateUserCache(*user)
+	if err = tx.Model(&current).Updates(updates).Error; err != nil {
+		return err
+	}
+	return tx.First(user, user.Id).Error
 }
 
 func (user *User) ClearBinding(bindingType string) error {
