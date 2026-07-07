@@ -148,6 +148,8 @@ export function SignUpForm({
       }
     }
 
+    if (!validateTurnstile()) return
+
     setIsLoading(true)
     try {
       const res = await register({

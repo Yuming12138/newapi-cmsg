@@ -21,7 +21,7 @@ import { useEffect, useRef } from 'react'
 declare global {
   interface Window {
     turnstile?: {
-      render: (element: HTMLElement, options: Record<string, unknown>) => void
+      render: (element: HTMLElement, options: Record<string, unknown>) => string
     }
   }
 }
@@ -40,10 +40,11 @@ export function Turnstile({
   className,
 }: TurnstileProps) {
   const ref = useRef<HTMLDivElement | null>(null)
+  const renderedRef = useRef(false)
 
   useEffect(() => {
     const render = () => {
-      if (!ref.current || !window.turnstile) return
+      if (!ref.current || !window.turnstile || renderedRef.current) return
       try {
         window.turnstile.render(ref.current, {
           sitekey: siteKey,
@@ -51,6 +52,7 @@ export function Turnstile({
           'error-callback': () => onExpire?.(),
           'expired-callback': () => onExpire?.(),
         })
+        renderedRef.current = true
       } catch {
         /* empty */
       }
@@ -61,7 +63,11 @@ export function Turnstile({
       return
     }
     const scriptId = 'cf-turnstile'
-    if (document.getElementById(scriptId)) return
+    const existingScript = document.getElementById(scriptId)
+    if (existingScript) {
+      existingScript.addEventListener('load', render)
+      return () => existingScript.removeEventListener('load', render)
+    }
     const s = document.createElement('script')
     s.id = scriptId
     s.src =
