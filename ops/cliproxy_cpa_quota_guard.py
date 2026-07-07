@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,7 @@ DEFAULT_CONFIG = {
     "channel_id": 12,
     "env_path": "/opt/new-api/ops/cliproxy_cpa_quota_guard.env",
     "state_path": "/opt/new-api/ops/cliproxy_cpa_quota_guard_state.json",
-    "cpa_base_url": "https://cliproxy.cmsg666.xyz",
+    "cpa_base_url": "http://127.0.0.1:8317",
     "wham_usage_url": "https://chatgpt.com/backend-api/wham/usage",
     "timeout_sec": 30,
     "enabled": True,
@@ -208,12 +209,20 @@ def parse_json_object(value: Any) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def management_headers(env: dict[str, str]) -> dict[str, str]:
+def is_loopback_base_url(base_url: str) -> bool:
+    try:
+        hostname = urllib.parse.urlparse(base_url).hostname or ""
+    except Exception:
+        return False
+    return hostname == "localhost" or hostname == "::1" or hostname.startswith("127.")
+
+
+def management_headers(env: dict[str, str], base_url: str = "") -> dict[str, str]:
     headers = {"Accept": "application/json"}
     key = env.get("CPA_MANAGEMENT_KEY", "").strip()
     username = env.get("CPA_BASIC_USERNAME", "").strip()
     password = env.get("CPA_BASIC_PASSWORD", "")
-    if username and password:
+    if username and password and not (key and is_loopback_base_url(base_url)):
         token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
         headers["Authorization"] = "Basic " + token
         if key:
@@ -446,7 +455,7 @@ def call_wham_usages(config: dict[str, Any], env: dict[str, str]) -> list[dict[s
     base_url = str(config.get("cpa_base_url") or "").rstrip("/")
     if not base_url:
         raise RuntimeError("empty_cpa_base_url")
-    headers = management_headers(env)
+    headers = management_headers(env, base_url)
     if not headers.get("Authorization") and not headers.get("X-Management-Key"):
         raise RuntimeError("missing_cpa_management_credentials")
 
