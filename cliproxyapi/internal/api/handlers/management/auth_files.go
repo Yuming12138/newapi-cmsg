@@ -487,6 +487,17 @@ func (h *Handler) buildAuthFileEntry(auth *coreauth.Auth) gin.H {
 	entry["success"] = auth.Success
 	entry["failed"] = auth.Failed
 	entry["recent_requests"] = auth.RecentRequestsSnapshot(time.Now())
+	scheduleState := deriveAuthScheduleState(auth, time.Now())
+	entry["state"] = scheduleState.State
+	entry["reason"] = scheduleState.Reason
+	entry["retryable"] = scheduleState.Retryable
+	entry["schedulable"] = scheduleState.Schedulable
+	if !scheduleState.ResetAt.IsZero() {
+		entry["reset_at"] = scheduleState.ResetAt
+	}
+	if scheduleState.LastError != nil {
+		entry["last_error"] = scheduleState.LastError
+	}
 	if email := authEmail(auth); email != "" {
 		entry["email"] = email
 	}

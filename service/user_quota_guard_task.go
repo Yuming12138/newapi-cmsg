@@ -280,13 +280,16 @@ func resolveUserQuotaGuardUnlockedQuota(ctx context.Context, cfg *operation_sett
 		return cfg.UnlockedQuotaUSD, "static", nil
 	}
 	switch source {
-	case "asxs_channel_pool", "asxs_pool", "channel_pool":
+	case "asxs_channel_pool", "asxs_pool", "channel_pool", "quota_source_pool", "unified_quota_source_pool":
 		summary, handled, err := RefreshASXSChannelBudgetPoolSummary(ctx)
 		if err != nil {
 			return cfg.UnlockedQuotaUSD, "static", err
 		}
 		if !handled || summary.ChannelCount == 0 {
 			return cfg.UnlockedQuotaUSD, "static", nil
+		}
+		if source == "quota_source_pool" || source == "unified_quota_source_pool" {
+			return summary.RemainingUSD, "quota_source_pool", nil
 		}
 		return summary.RemainingUSD, "asxs_channel_pool", nil
 	default:

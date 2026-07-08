@@ -54,7 +54,11 @@ import {
   dotColorMap,
   textColorMap,
 } from '@/components/status-badge'
-import { consumeCliproxyCPAResetCredit, getCodexUsage } from '../api'
+import {
+  consumeCliproxyCPAResetCredit,
+  getCodexUsage,
+  resetCliproxyCPAQuotaState,
+} from '../api'
 import { CHANNEL_STATUS_CONFIG, MODEL_FETCHABLE_TYPES } from '../constants'
 import {
   formatBalance,
@@ -133,6 +137,7 @@ type CliproxyCPAQuotaAccount = {
   authIndex: string
   label: string
   bucket: string | null
+  state: string | null
   ok: boolean | null
   schedulable: boolean | null
   skipped: boolean | null
@@ -142,6 +147,9 @@ type CliproxyCPAQuotaAccount = {
   disabled: boolean | null
   canExhaust: boolean | null
   reason: string | null
+  retryable: boolean | null
+  resetAt: number | null
+  lastError: string | null
   error: string | null
   planType: string | null
   resetCreditsAvailable: number | null
@@ -247,6 +255,21 @@ function parseCliproxyCPAQuotaWindow(
   }
 }
 
+function quotaSourceWindowsByName(
+  value: unknown
+): Record<string, Record<string, unknown>> {
+  if (!Array.isArray(value)) return {}
+  const result: Record<string, Record<string, unknown>> = {}
+  value.forEach((raw) => {
+    const item = asObject(raw)
+    if (!item || typeof item.name !== 'string' || item.name.trim() === '') {
+      return
+    }
+    result[item.name.trim()] = item
+  })
+  return result
+}
+
 function getCliproxyCPAResetAfter(
   fiveHour: CliproxyCPAQuotaWindow | null,
   weekly: CliproxyCPAQuotaWindow | null
@@ -328,6 +351,18 @@ function cliproxyCPAAccountLabel(
   return authIndex ? `account ${authIndex.slice(-6)}` : 'account'
 }
 
+function cliproxyCPAAccountLastError(value: unknown): string | null {
+  if (typeof value === 'string' && value.trim() !== '') return value
+  const item = asObject(value)
+  if (!item) return null
+  const message = typeof item.message === 'string' ? item.message.trim() : ''
+  const code = typeof item.code === 'string' ? item.code.trim() : ''
+  const httpStatus = numberValue(item.http_status)
+  if (message) return message
+  if (code) return code
+  return httpStatus == null ? null : `HTTP ${httpStatus}`
+}
+
 function parseCliproxyCPAQuotaAccount(
   value: unknown
 ): CliproxyCPAQuotaAccount | null {
@@ -341,6 +376,7 @@ function parseCliproxyCPAQuotaAccount(
     authIndex,
     label: cliproxyCPAAccountLabel(item, authIndex),
     bucket: typeof item.bucket === 'string' ? item.bucket : null,
+    state: typeof item.state === 'string' ? item.state : null,
     ok: booleanValue(item.ok),
     schedulable: booleanValue(item.schedulable),
     skipped: booleanValue(item.skipped),
@@ -353,6 +389,9 @@ function parseCliproxyCPAQuotaAccount(
     disabled: booleanValue(item.disabled),
     canExhaust: booleanValue(item.can_exhaust),
     reason: typeof item.reason === 'string' ? item.reason : null,
+    retryable: booleanValue(item.retryable),
+    resetAt: timestampValue(item.reset_at),
+    lastError: cliproxyCPAAccountLastError(item.last_error),
     error: typeof item.error === 'string' ? item.error : null,
     planType: typeof item.plan_type === 'string' ? item.plan_type : null,
     resetCreditsAvailable: numberValue(item.reset_credits_available),
@@ -389,21 +428,24 @@ function parseCliproxyCPAQuotaMeta(
   if (!otherInfo) return null
   try {
     const parsed = asObject(JSON.parse(otherInfo))
+    const quotaSource = asObject(parsed?.quota_source)
+    const quotaSourceWindows = quotaSourceWindowsByName(quotaSource?.windows)
     const guard = asObject(parsed?.cliproxy_cpa_quota_guard)
     const health = asObject(guard?.health)
     const windows = asObject(health?.windows)
     if (!guard || !health) return null
-    const updatedAt = timestampValue(guard.updated_at)
+    const updatedAt =
+      timestampValue(quotaSource?.updated_at) ?? timestampValue(guard.updated_at)
     const buckets = parseCliproxyCPAQuotaBuckets(health.buckets, updatedAt)
     const accounts = parseCliproxyCPAQuotaAccounts(health.accounts)
 
     const shareLimitPercent = numberValue(health.share_limit_percent)
     const fiveHour = parseCliproxyCPAQuotaWindow(
-      windows?.['5h'],
+      quotaSourceWindows['5h'] ?? windows?.['5h'],
       shareLimitPercent
     )
     const weekly = parseCliproxyCPAQuotaWindow(
-      windows?.['7d'],
+      quotaSourceWindows['7d'] ?? windows?.['7d'],
       shareLimitPercent
     )
     if (!fiveHour && !weekly && buckets.length === 0) return null
@@ -423,7 +465,9 @@ function parseCliproxyCPAQuotaMeta(
     return {
       shareLimitPercent,
       remainingSharePercent: numberValue(health.remaining_share_percent),
-      usableBalanceUnits: numberValue(health.usable_balance_units),
+      usableBalanceUnits:
+        numberValue(quotaSource?.balance) ??
+        numberValue(health.usable_balance_units),
       totalBalanceUnits: numberValue(health.total_balance_units),
       accountCount: numberValue(health.account_count),
       availableAccountCount: numberValue(health.available_account_count),
@@ -492,6 +536,7 @@ function formatResetCreditsAvailable(value: number | null | undefined): string {
 function isCliproxyCPAAccountAvailable(
   account: CliproxyCPAQuotaAccount
 ): boolean {
+  if (account.state) return account.state === 'available'
   if (account.schedulable != null) return account.schedulable
   return (
     account.ok === true &&
@@ -502,6 +547,12 @@ function isCliproxyCPAAccountAvailable(
 }
 
 function getCliproxyCPAAccountIssue(account: CliproxyCPAQuotaAccount): string {
+  if (account.state === 'manual_disabled') return '手动禁用'
+  if (account.state === 'quota_7d_exhausted') return '7d 周额度已用完'
+  if (account.state === 'quota_5h_exhausted') return '5h 额度已用完'
+  if (account.state === 'protected_reserve') return '低水位保护'
+  if (account.state === 'auth_invalid') return '需要重新登录'
+  if (account.state === 'cooldown') return '冷却中'
   if (account.disabled === true) return '已禁用'
   if (
     account.quotaExhaustedWindow === '7d' ||
@@ -524,6 +575,7 @@ function getCliproxyCPAAccountIssue(account: CliproxyCPAQuotaAccount): string {
     return '已跳过'
   }
   if (account.ok === false) return '不可用'
+  if (account.state === 'unknown') return '状态未知'
   return '状态异常'
 }
 
@@ -546,7 +598,11 @@ function getCliproxyCPAAccountIssueDetail(
       return `重置 ${formatShortDuration(quotaWindow.resetAfterSeconds)}`
     }
   }
+  if (account.resetAt != null) return `恢复 ${formatCompactTimestamp(account.resetAt)}`
   if (account.reason === 'protected_reserve_reached') return '保留共享 Pro 余量'
+  if (account.state === 'auth_invalid') return account.lastError || 'OAuth 失效'
+  if (account.state === 'protected_reserve') return '保留共享 Pro 余量'
+  if (account.state === 'cooldown') return account.lastError || account.reason
   if (
     account.reason === 'auth_unavailable' &&
     account.ok === true &&
@@ -554,7 +610,7 @@ function getCliproxyCPAAccountIssueDetail(
   ) {
     return '额度可读，等待 CPA 恢复调度'
   }
-  return account.reason || account.error || null
+  return account.reason || account.lastError || account.error || null
 }
 
 function getCliproxyCPAAccountPlanLabel(
@@ -872,6 +928,53 @@ function CliproxyCPAResetCreditButton({
   )
 }
 
+function CliproxyCPALocalResetButton({
+  channelId,
+  account,
+}: {
+  channelId: number
+  account: CliproxyCPAQuotaAccount
+}) {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const [isResetting, setIsResetting] = useState(false)
+  const disabled = isResetting || account.disabled === true
+
+  const handleClick = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setIsResetting(true)
+    try {
+      const res = await resetCliproxyCPAQuotaState(channelId, account.authIndex)
+      if (!res.success) {
+        throw new Error(res.message || t('Reset request failed'))
+      }
+      toast.success(t('Local CPA cooldown and quota state cleared.'))
+      queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t('Reset request failed')
+      )
+    } finally {
+      setIsResetting(false)
+    }
+  }
+
+  return (
+    <Button
+      type='button'
+      variant='outline'
+      size='xs'
+      disabled={disabled}
+      className='h-6 px-1.5 text-[11px]'
+      onClick={handleClick}
+    >
+      <RotateCcw className='size-3' />
+      {isResetting ? t('Resetting') : t('清本地状态')}
+    </Button>
+  )
+}
+
 function CliproxyCPAAccountRow({
   account,
   channelId,
@@ -913,12 +1016,20 @@ function CliproxyCPAAccountRow({
             </p>
           )}
         </div>
-        {canReset && (
-          <CliproxyCPAResetCreditButton
-            channelId={channelId}
-            account={account}
-          />
-        )}
+        <div className='flex shrink-0 flex-wrap justify-end gap-1'>
+          {unavailable && (
+            <CliproxyCPALocalResetButton
+              channelId={channelId}
+              account={account}
+            />
+          )}
+          {canReset && (
+            <CliproxyCPAResetCreditButton
+              channelId={channelId}
+              account={account}
+            />
+          )}
+        </div>
       </div>
       <CliproxyCPAAccountWindowSummary
         account={account}

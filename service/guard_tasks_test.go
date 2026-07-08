@@ -394,6 +394,101 @@ func TestParseUsageBalanceSelectsDailyRateLimit(t *testing.T) {
 	}
 }
 
+func TestASXSQuotaSourceDailySubscription(t *testing.T) {
+	source := buildASXSQuotaSource(asxsUsageResult{
+		PlanName:     "每日$45",
+		TotalUSD:     45,
+		UsedUSD:      10,
+		RemainingUSD: 35,
+		Unit:         "USD",
+		ResetInfo:    "daily reset",
+		RawItems:     2,
+	}, 35, 1782321700)
+	if source["source_type"] != "daily_subscription_usd" || source["status"] != "available" || source["spendable"] != true {
+		t.Fatalf("source = %+v", source)
+	}
+	windows, ok := source["windows"].([]map[string]interface{})
+	if !ok || len(windows) != 1 || windows[0]["name"] != "1d" || windows[0]["reset_info"] != "daily reset" {
+		t.Fatalf("windows = %#v", source["windows"])
+	}
+}
+
+func TestUsageBalanceQuotaSourcePeriodCapWithDailyLimit(t *testing.T) {
+	raw := []byte(`{
+		"remaining": 1332.3462915,
+		"unit": "USD",
+		"mode": "quota_limited",
+		"planName": "LingDang",
+		"isValid": true,
+		"quota": {"limit": 1350, "remaining": 1332.3462915, "used": 17.6537085, "unit": "USD"},
+		"rate_limits": [
+			{"window": "1d", "limit": 45, "remaining": 27.1415485, "used": 17.8584515, "reset_at": "2026-06-26T00:00:00+08:00"}
+		]
+	}`)
+	balance, source, err := ParseUsageBalanceQuotaSource(raw, 1782321700)
+	if err != nil {
+		t.Fatalf("ParseUsageBalanceQuotaSource() error = %v", err)
+	}
+	if math.Abs(balance-27.1415485) > 0.0000001 || source["source_type"] != "period_cap_with_daily_limit" {
+		t.Fatalf("balance=%v source=%+v", balance, source)
+	}
+	windows, ok := source["windows"].([]map[string]interface{})
+	if !ok || len(windows) != 2 || windows[0]["name"] != "period" || windows[1]["name"] != "1d" {
+		t.Fatalf("windows = %#v", source["windows"])
+	}
+}
+
+func TestNewAPIQuotaSourceStoredValue(t *testing.T) {
+	source := BuildNewAPIStoredValueQuotaSource(999, 499500000, 500000, "USD", 1782321700)
+	if source["source_type"] != "stored_value_usd" || source["balance"] != float64(999) || source["spendable"] != true {
+		t.Fatalf("source = %+v", source)
+	}
+	raw, ok := source["raw_source"].(map[string]interface{})
+	if !ok || raw["source"] != "new_api_user_self" || raw["quota"] != int64(499500000) {
+		t.Fatalf("raw_source = %#v", source["raw_source"])
+	}
+}
+
+func TestCliproxyCPAQuotaSourceProtectedReserve(t *testing.T) {
+	health := map[string]interface{}{
+		"ok": true,
+		"windows": map[string]interface{}{
+			"5h": map[string]interface{}{"remaining_percent": 29.9, "used_percent": 70.1, "reset_after_seconds": 120},
+			"7d": map[string]interface{}{"remaining_percent": 40, "used_percent": 60, "reset_after_seconds": 600},
+		},
+		"buckets": map[string]interface{}{
+			"protected": map[string]interface{}{
+				"can_exhaust":              false,
+				"usable_balance_units":     0,
+				"min_remaining_percent_5h": 30,
+				"min_remaining_percent_7d": 20,
+			},
+		},
+	}
+	source := buildCliproxyCPAQuotaSource(health, 0, 1782321700)
+	if source["source_type"] != "shared_protected_rolling_quota" || source["status"] != "protected_reserve" || source["spendable"] != false {
+		t.Fatalf("source = %+v", source)
+	}
+	policy, ok := source["reserve_policy"].(map[string]interface{})
+	if !ok || policy["min_remaining_percent_5h"] != float64(30) {
+		t.Fatalf("reserve_policy = %#v", source["reserve_policy"])
+	}
+}
+
+func TestCliproxyCPAQuotaSourcePlusWeeklyExhausted(t *testing.T) {
+	health := map[string]interface{}{
+		"ok": true,
+		"windows": map[string]interface{}{
+			"5h": map[string]interface{}{"remaining_percent": 80, "used_percent": 20},
+			"7d": map[string]interface{}{"remaining_percent": 0, "used_percent": 100},
+		},
+	}
+	source := buildCliproxyCPAQuotaSource(health, 10, 1782321700)
+	if source["source_type"] != "rolling_window_quota" || source["status"] != "quota_7d_exhausted" || source["spendable"] != false {
+		t.Fatalf("source = %+v", source)
+	}
+}
+
 func TestComputeNewAPIBalanceAmountUSD(t *testing.T) {
 	got, err := computeNewAPIBalanceAmount(123456789, &newAPIStatusBalanceResponse{
 		Data: struct {

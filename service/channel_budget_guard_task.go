@@ -57,20 +57,15 @@ type asxsUsageItem struct {
 }
 
 type usageBalanceResponse struct {
-	Balance        interface{} `json:"balance"`
-	Remaining      interface{} `json:"remaining"`
-	TotalAvailable interface{} `json:"total_available"`
-	Unit           string      `json:"unit"`
-	Mode           string      `json:"mode"`
-	IsValid        *bool       `json:"isValid"`
-	PlanName       string      `json:"planName"`
-	RateLimits     []struct {
-		Window    string      `json:"window"`
-		Limit     interface{} `json:"limit"`
-		Used      interface{} `json:"used"`
-		Remaining interface{} `json:"remaining"`
-		ResetAt   string      `json:"reset_at"`
-	} `json:"rate_limits"`
+	Balance        interface{}             `json:"balance"`
+	Remaining      interface{}             `json:"remaining"`
+	TotalAvailable interface{}             `json:"total_available"`
+	Unit           string                  `json:"unit"`
+	Mode           string                  `json:"mode"`
+	IsValid        *bool                   `json:"isValid"`
+	PlanName       string                  `json:"planName"`
+	Quota          usageBalanceQuota       `json:"quota"`
+	RateLimits     []usageBalanceRateLimit `json:"rate_limits"`
 }
 
 type newAPIUserSelfBalanceResponse struct {
@@ -300,16 +295,23 @@ func UpdateCliproxyCPAQuotaGuardBalance(channel *model.Channel) (float64, bool, 
 	if health == nil {
 		return channel.Balance, true, nil
 	}
+	nowTs := common.GetTimestamp()
 	if balance, ok := cliproxyCPAUsableBalance(health); ok {
-		channel.Balance = balance
+		if err := UpdateChannelBalanceWithQuotaSource(channel, balance, buildCliproxyCPAQuotaSource(health, balance, nowTs), nowTs); err != nil {
+			return 0, true, err
+		}
 		return balance, true, nil
 	}
 	if balance, ok := guardObjectFloat(health, "balance_units"); ok {
-		channel.Balance = balance
+		if err := UpdateChannelBalanceWithQuotaSource(channel, balance, buildCliproxyCPAQuotaSource(health, balance, nowTs), nowTs); err != nil {
+			return 0, true, err
+		}
 		return balance, true, nil
 	}
 	if balance, ok := guardObjectFloat(health, "remaining_share_percent"); ok {
-		channel.Balance = balance
+		if err := UpdateChannelBalanceWithQuotaSource(channel, balance, buildCliproxyCPAQuotaSource(health, balance, nowTs), nowTs); err != nil {
+			return 0, true, err
+		}
 		return balance, true, nil
 	}
 	return channel.Balance, true, nil
@@ -532,6 +534,14 @@ func addChannelBudgetPoolChannel(summary *ChannelBudgetPoolSummary, quotaPerUSD 
 			updatedAt = value
 		}
 	}
+	if quotaSource, ok := otherInfo[channelQuotaSourceInfoKey].(map[string]interface{}); ok {
+		if value, ok := guardObjectFloat(quotaSource, "balance"); ok {
+			remainingUSD = math.Max(value, 0)
+		}
+		if value, ok := guardObjectInt64(quotaSource, "updated_at"); ok && value > updatedAt {
+			updatedAt = value
+		}
+	}
 
 	if channel.Status == common.ChannelStatusEnabled && remainingUSD > 0 {
 		summary.AvailableChannelCount++
@@ -703,6 +713,7 @@ func applyChannelBudgetGuard(ctx context.Context, cfg *operation_setting.Channel
 		otherInfo["budget_guard"] = buildChannelBudgetInfo(channelCfg, mode, limitUSD, 0, quotaPerUSD, limitUSD, nowTs, "daily_reset", map[string]interface{}{
 			"last_reset_date": today,
 		})
+		otherInfo[channelQuotaSourceInfoKey] = buildInternalQuotaLedgerSource(mode, limitUSD, 0, quotaPerUSD, limitUSD, nowTs, "daily_reset")
 		updates := channelBudgetChannelUpdate{UsedQuota: int64Ptr(0), Balance: float64Ptr(limitUSD), OtherInfo: otherInfo}
 		if state.DisabledByGuard && channel.Status != common.ChannelStatusManuallyDisabled {
 			updates.Status = intPtr(common.ChannelStatusEnabled)
@@ -725,6 +736,7 @@ func applyChannelBudgetGuard(ctx context.Context, cfg *operation_setting.Channel
 		"last_reset_date":   state.LastResetDate,
 		"disabled_by_guard": state.DisabledByGuard,
 	})
+	otherInfo[channelQuotaSourceInfoKey] = buildInternalQuotaLedgerSource(mode, limitUSD, channel.UsedQuota, quotaPerUSD, remainingUSD, nowTs, budgetReason(remainingQuota > 0))
 
 	updates := channelBudgetChannelUpdate{Balance: float64Ptr(remainingUSD), OtherInfo: otherInfo}
 	if remainingQuota <= 0 {
@@ -773,6 +785,7 @@ func applyASXSChannelBudgetGuard(ctx context.Context, cfg *operation_setting.Cha
 		"disabled_by_guard":      state.DisabledByGuard,
 	}
 	otherInfo["budget_guard"] = buildChannelBudgetInfo(channelCfg, "upstream_daily", limitUSD, usedQuota, quotaPerUSD, remainingUSD, nowTs, budgetReason(remainingUSD > 0), budgetExtra)
+	otherInfo[channelQuotaSourceInfoKey] = buildASXSQuotaSource(usage, remainingUSD, nowTs)
 
 	updates := channelBudgetChannelUpdate{UsedQuota: &usedQuota, Balance: float64Ptr(remainingUSD), OtherInfo: otherInfo}
 	statusChanged := false
@@ -925,21 +938,16 @@ func refreshUsageBalanceFallbackChannel(ctx context.Context, channel *model.Chan
 	if baseURL == "" {
 		return 0, fmt.Errorf("usage fallback base_url is empty")
 	}
-	balance, err := fetchUsageBalance(ctx, channel, fmt.Sprintf("%s/v1/usage", baseURL), timeout)
+	result, err := fetchUsageBalance(ctx, channel, fmt.Sprintf("%s/v1/usage", baseURL), timeout)
 	if err != nil {
 		return 0, err
 	}
 	nowTs := common.GetTimestamp()
-	updates := map[string]interface{}{
-		"balance":              balance,
-		"balance_updated_time": nowTs,
-	}
-	if err := model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(updates).Error; err != nil {
+	quotaSource := buildUsageBalanceQuotaSource(result.Response, result.Balance, nowTs)
+	if err := UpdateChannelBalanceWithQuotaSource(channel, result.Balance, quotaSource, nowTs); err != nil {
 		return 0, err
 	}
-	channel.Balance = balance
-	channel.BalanceUpdatedTime = nowTs
-	return balance, nil
+	return result.Balance, nil
 }
 
 func refreshNewAPIBalanceFallbackChannel(ctx context.Context, channel *model.Channel, timeout time.Duration) (float64, error) {
@@ -947,63 +955,58 @@ func refreshNewAPIBalanceFallbackChannel(ctx context.Context, channel *model.Cha
 	if baseURL == "" {
 		return 0, fmt.Errorf("new-api fallback base_url is empty")
 	}
-	balance, err := fetchNewAPIBalance(ctx, channel, baseURL, timeout)
+	result, err := fetchNewAPIBalance(ctx, channel, baseURL, timeout)
 	if err != nil {
 		return 0, err
 	}
 	nowTs := common.GetTimestamp()
-	updates := map[string]interface{}{
-		"balance":              balance,
-		"balance_updated_time": nowTs,
-	}
-	if err := model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(updates).Error; err != nil {
+	quotaSource := buildNewAPIBalanceQuotaSource(result, nowTs)
+	if err := UpdateChannelBalanceWithQuotaSource(channel, result.Balance, quotaSource, nowTs); err != nil {
 		return 0, err
 	}
-	channel.Balance = balance
-	channel.BalanceUpdatedTime = nowTs
-	return balance, nil
+	return result.Balance, nil
 }
 
-func fetchUsageBalance(ctx context.Context, channel *model.Channel, usageURL string, timeout time.Duration) (float64, error) {
+func fetchUsageBalance(ctx context.Context, channel *model.Channel, usageURL string, timeout time.Duration) (usageBalanceResult, error) {
 	if strings.TrimSpace(channel.Key) == "" {
-		return 0, fmt.Errorf("channel key is empty")
+		return usageBalanceResult{}, fmt.Errorf("channel key is empty")
 	}
 	client, err := NewProxyHttpClient(channel.GetSetting().Proxy)
 	if err != nil {
-		return 0, err
+		return usageBalanceResult{}, err
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, usageURL, nil)
 	if err != nil {
-		return 0, err
+		return usageBalanceResult{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(channel.Key))
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "new-api-channel-budget-guard/1.0")
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, err
+		return usageBalanceResult{}, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 65536))
 	if err != nil {
-		return 0, err
+		return usageBalanceResult{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
 		body := common.MaskSensitiveInfo(strings.TrimSpace(string(raw)))
 		if body != "" {
-			return 0, fmt.Errorf("usage balance http %d: %s", resp.StatusCode, body)
+			return usageBalanceResult{}, fmt.Errorf("usage balance http %d: %s", resp.StatusCode, body)
 		}
-		return 0, fmt.Errorf("usage balance http %d", resp.StatusCode)
+		return usageBalanceResult{}, fmt.Errorf("usage balance http %d", resp.StatusCode)
 	}
-	return parseUsageBalance(raw)
+	return parseUsageBalanceResult(raw)
 }
 
-func fetchNewAPIBalance(ctx context.Context, channel *model.Channel, baseURL string, timeout time.Duration) (float64, error) {
+func fetchNewAPIBalance(ctx context.Context, channel *model.Channel, baseURL string, timeout time.Duration) (newAPIBalanceResult, error) {
 	accessToken, userID, err := newAPIBalanceFallbackCredentials(channel)
 	if err != nil {
-		return 0, err
+		return newAPIBalanceResult{}, err
 	}
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer "+accessToken)
@@ -1013,17 +1016,17 @@ func fetchNewAPIBalance(ctx context.Context, channel *model.Channel, baseURL str
 
 	body, err := fetchJSONWithChannelProxy(ctx, channel, http.MethodGet, baseURL+"/api/user/self", headers, timeout)
 	if err != nil {
-		return 0, err
+		return newAPIBalanceResult{}, err
 	}
 	selfResp := newAPIUserSelfBalanceResponse{}
 	if err := common.Unmarshal(body, &selfResp); err != nil {
-		return 0, err
+		return newAPIBalanceResult{}, err
 	}
 	if !selfResp.Success {
 		if strings.TrimSpace(selfResp.Message) != "" {
-			return 0, fmt.Errorf("new-api user self failed: %s", selfResp.Message)
+			return newAPIBalanceResult{}, fmt.Errorf("new-api user self failed: %s", selfResp.Message)
 		}
-		return 0, fmt.Errorf("new-api user self failed")
+		return newAPIBalanceResult{}, fmt.Errorf("new-api user self failed")
 	}
 
 	statusHeaders := http.Header{}
@@ -1031,16 +1034,20 @@ func fetchNewAPIBalance(ctx context.Context, channel *model.Channel, baseURL str
 	statusHeaders.Set("User-Agent", "new-api-channel-budget-guard/1.0")
 	body, err = fetchJSONWithChannelProxy(ctx, channel, http.MethodGet, baseURL+"/api/status", statusHeaders, timeout)
 	if err != nil {
-		return 0, err
+		return newAPIBalanceResult{}, err
 	}
 	statusResp := newAPIStatusBalanceResponse{}
 	if err := common.Unmarshal(body, &statusResp); err != nil {
-		return 0, err
+		return newAPIBalanceResult{}, err
 	}
 	if statusResp.Success == false && strings.TrimSpace(statusResp.Message) != "" {
-		return 0, fmt.Errorf("new-api status failed: %s", statusResp.Message)
+		return newAPIBalanceResult{}, fmt.Errorf("new-api status failed: %s", statusResp.Message)
 	}
-	return computeNewAPIBalanceAmount(selfResp.Data.Quota, &statusResp)
+	balance, err := computeNewAPIBalanceAmount(selfResp.Data.Quota, &statusResp)
+	if err != nil {
+		return newAPIBalanceResult{}, err
+	}
+	return newAPIBalanceResult{Balance: balance, Quota: selfResp.Data.Quota, Status: statusResp}, nil
 }
 
 func fetchJSONWithChannelProxy(ctx context.Context, channel *model.Channel, method, url string, headers http.Header, timeout time.Duration) ([]byte, error) {
@@ -1077,32 +1084,40 @@ func fetchJSONWithChannelProxy(ctx context.Context, channel *model.Channel, meth
 }
 
 func parseUsageBalance(raw []byte) (float64, error) {
-	response := usageBalanceResponse{}
-	if err := common.Unmarshal(raw, &response); err != nil {
+	result, err := parseUsageBalanceResult(raw)
+	if err != nil {
 		return 0, err
 	}
+	return result.Balance, nil
+}
+
+func parseUsageBalanceResult(raw []byte) (usageBalanceResult, error) {
+	response := usageBalanceResponse{}
+	if err := common.Unmarshal(raw, &response); err != nil {
+		return usageBalanceResult{}, err
+	}
 	if response.IsValid != nil && !*response.IsValid {
-		return 0, fmt.Errorf("usage balance account is not valid, plan: %s, mode: %s", response.PlanName, response.Mode)
+		return usageBalanceResult{}, fmt.Errorf("usage balance account is not valid, plan: %s, mode: %s", response.PlanName, response.Mode)
 	}
 	for _, rateLimit := range response.RateLimits {
 		if strings.TrimSpace(rateLimit.Window) != "1d" {
 			continue
 		}
 		if balance, ok := interfaceToFloat64(rateLimit.Remaining); ok {
-			return balance, nil
+			return usageBalanceResult{Balance: balance, Response: response}, nil
 		}
 	}
 	if len(response.RateLimits) > 0 {
 		if balance, ok := interfaceToFloat64(response.RateLimits[0].Remaining); ok {
-			return balance, nil
+			return usageBalanceResult{Balance: balance, Response: response}, nil
 		}
 	}
 	for _, value := range []interface{}{response.Remaining, response.Balance, response.TotalAvailable} {
 		if balance, ok := interfaceToFloat64(value); ok {
-			return balance, nil
+			return usageBalanceResult{Balance: balance, Response: response}, nil
 		}
 	}
-	return 0, fmt.Errorf("usage balance response missing remaining balance")
+	return usageBalanceResult{}, fmt.Errorf("usage balance response missing remaining balance")
 }
 
 func computeNewAPIBalanceAmount(quota int64, status *newAPIStatusBalanceResponse) (float64, error) {

@@ -267,7 +267,11 @@ func updateChannelUpstreamNewAPIBalance(channel *model.Channel, baseURL string, 
 	if err != nil {
 		return 0, err
 	}
-	channel.UpdateBalance(balance)
+	nowTs := common.GetTimestamp()
+	quotaSource := service.BuildNewAPIStoredValueQuotaSource(balance, selfResp.Data.Quota, statusResp.Data.QuotaPerUnit, statusResp.Data.QuotaDisplayType, nowTs)
+	if err := service.UpdateChannelBalanceWithQuotaSource(channel, balance, quotaSource, nowTs); err != nil {
+		return 0, err
+	}
 	return balance, nil
 }
 
@@ -373,36 +377,15 @@ func updateChannelUsageBalance(channel *model.Channel) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	response := XMAPIUsageResponse{}
-	if err := common.Unmarshal(body, &response); err != nil {
+	nowTs := common.GetTimestamp()
+	balance, quotaSource, err := service.ParseUsageBalanceQuotaSource(body, nowTs)
+	if err != nil {
 		return 0, err
 	}
-	if response.IsValid != nil && !*response.IsValid {
-		return 0, fmt.Errorf("usage balance account is not valid, plan: %s, mode: %s", response.PlanName, response.Mode)
+	if err := service.UpdateChannelBalanceWithQuotaSource(channel, balance, quotaSource, nowTs); err != nil {
+		return 0, err
 	}
-	for _, rateLimit := range response.RateLimits {
-		if strings.TrimSpace(rateLimit.Window) == "1d" && rateLimit.Remaining != nil {
-			channel.UpdateBalance(*rateLimit.Remaining)
-			return *rateLimit.Remaining, nil
-		}
-	}
-	if len(response.RateLimits) > 0 && response.RateLimits[0].Remaining != nil {
-		channel.UpdateBalance(*response.RateLimits[0].Remaining)
-		return *response.RateLimits[0].Remaining, nil
-	}
-	var balance *float64
-	switch {
-	case response.Remaining != nil:
-		balance = response.Remaining
-	case response.Balance != nil:
-		balance = response.Balance
-	case response.TotalAvailable != nil:
-		balance = response.TotalAvailable
-	default:
-		return 0, errors.New("usage balance response missing remaining balance")
-	}
-	channel.UpdateBalance(*balance)
-	return *balance, nil
+	return balance, nil
 }
 
 func updateChannelAIProxyBalance(channel *model.Channel) (float64, error) {

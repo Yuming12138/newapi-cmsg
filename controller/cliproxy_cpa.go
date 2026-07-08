@@ -25,6 +25,14 @@ type cliproxyCPAResetCreditRequest struct {
 }
 
 func ConsumeCliproxyCPAResetCredit(c *gin.Context) {
+	proxyCliproxyCPAManagementAuthAction(c, "/v0/management/consume-codex-reset-credit", "reset credit consumed")
+}
+
+func ResetCliproxyCPAQuotaState(c *gin.Context) {
+	proxyCliproxyCPAManagementAuthAction(c, "/v0/management/reset-quota", "local quota state cleared")
+}
+
+func proxyCliproxyCPAManagementAuthAction(c *gin.Context, managementPath string, successMessage string) {
 	channelID, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		common.ApiError(c, fmt.Errorf("invalid channel id: %w", err))
@@ -72,7 +80,7 @@ func ConsumeCliproxyCPAResetCredit(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	endpoint, err := url.JoinPath(strings.TrimRight(baseURL, "/"), "/v0/management/consume-codex-reset-credit")
+	endpoint, err := url.JoinPath(strings.TrimRight(baseURL, "/"), managementPath)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -113,7 +121,7 @@ func ConsumeCliproxyCPAResetCredit(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":         true,
-		"message":         "reset credit consumed",
+		"message":         successMessage,
 		"upstream_status": resp.StatusCode,
 		"data":            upstream,
 	})
