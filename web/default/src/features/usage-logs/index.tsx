@@ -16,9 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import { getRouteApi, useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
+import { useIsAdmin } from '@/hooks/use-admin'
 import { useSidebarConfig } from '@/hooks/use-sidebar-config'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { SectionPageLayout } from '@/components/layout'
@@ -70,6 +71,7 @@ function UsageLogsContent() {
     params.section && isUsageLogsSectionId(params.section)
       ? params.section
       : USAGE_LOGS_DEFAULT_SECTION
+  const isAdmin = useIsAdmin()
   const {
     selectedUserId,
     userInfoDialogOpen,
@@ -100,9 +102,20 @@ function UsageLogsContent() {
         })
         .filter((section): section is UsageLogsSectionId =>
           Boolean(section && isUsageLogsSectionId(section))
-        ),
-    [filteredTabGroups]
+        )
+        .filter((section) => section !== 'trace' || isAdmin),
+    [filteredTabGroups, isAdmin]
   )
+
+  useEffect(() => {
+    if (activeCategory !== 'trace' || isAdmin) return
+    void navigate({
+      to: '/usage-logs/$section',
+      params: { section: 'common' },
+      search: { page: 1 },
+      replace: true,
+    })
+  }, [activeCategory, isAdmin, navigate])
 
   const handleSectionChange = useCallback(
     (section: string) => {

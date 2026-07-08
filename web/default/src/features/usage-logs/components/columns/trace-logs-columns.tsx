@@ -99,6 +99,11 @@ function buildTraceContext(
   const adminInfo = other?.admin_info
   const stream = other?.stream_status
   const context = {
+    context_type: isAdmin ? 'admin_request_trace' : 'request_trace',
+    intended_flow: isAdmin
+      ? 'user reports request id or time to admin; admin copies this trace for AI-assisted debugging'
+      : 'user-facing request summary',
+    redaction: 'prompt content, API keys, and full token values are omitted',
     request_id: log.request_id || undefined,
     log_id: log.id,
     time: formatTimestampToDate(log.created_at),
@@ -480,10 +485,14 @@ export function useTraceLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                     ) : (
                       <Copy className='size-3' />
                     )}
-                    <span>{t('Copy Trace')}</span>
+                    <span>{t('Copy Admin Trace')}</span>
                   </TooltipTrigger>
                   <TooltipContent>
-                    <span>{t('Copy diagnostic context')}</span>
+                    <span>
+                      {t(
+                        'Copy admin diagnostic context for AI-assisted debugging'
+                      )}
+                    </span>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
