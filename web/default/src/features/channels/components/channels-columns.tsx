@@ -651,15 +651,30 @@ function getCliproxyCPAMetaAccountCountLabel(
   return `账号 ${meta.availableAccountCount}/${meta.accountCount}`
 }
 
+function getCliproxyCPASummaryWindowPercent(
+  window: CliproxyCPAQuotaWindow | null | undefined,
+  guardMode: string | null
+): number | null {
+  if (!window) return null
+  const normalizedMode = (guardMode || '').trim().toLowerCase()
+  if (
+    normalizedMode === 'low_watermark' ||
+    normalizedMode === 'bucket_low_watermark'
+  ) {
+    return window.remainingPercent
+  }
+  return window.shareRemainingPercent ?? window.remainingPercent
+}
+
 function formatCliproxyCPASummary(meta: CliproxyCPAQuotaMeta): string {
-  const fiveHourPercent =
-    meta.guardMode === 'low_watermark'
-      ? meta.fiveHour?.remainingPercent
-      : meta.fiveHour?.shareRemainingPercent
-  const weeklyPercent =
-    meta.guardMode === 'low_watermark'
-      ? meta.weekly?.remainingPercent
-      : meta.weekly?.shareRemainingPercent
+  const fiveHourPercent = getCliproxyCPASummaryWindowPercent(
+    meta.fiveHour,
+    meta.guardMode
+  )
+  const weeklyPercent = getCliproxyCPASummaryWindowPercent(
+    meta.weekly,
+    meta.guardMode
+  )
   const parts = [
     `可用 ${formatCliproxyCPAUnits(meta.usableBalanceUnits)}`,
     `5h ${formatPercent(fiveHourPercent)}`,
