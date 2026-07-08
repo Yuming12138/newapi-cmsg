@@ -477,8 +477,14 @@ def call_wham_usages(config: dict[str, Any], env: dict[str, str]) -> list[dict[s
             "unavailable": bool(auth_entry.get("unavailable")),
             "reset_credits_available": None,
         }
-        if auth_is_unavailable(auth_entry):
-            accounts.append({**base_account, "ok": False, "skipped": True, "reason": "auth_unavailable"})
+        if bool(auth_entry.get("disabled")):
+            accounts.append({
+                **base_account,
+                "ok": False,
+                "schedulable": False,
+                "skipped": True,
+                "reason": "auth_disabled",
+            })
             continue
         try:
             usage = call_wham_usage_for_auth(config, base_url, headers, timeout, auth_entry)
@@ -486,7 +492,15 @@ def call_wham_usages(config: dict[str, Any], env: dict[str, str]) -> list[dict[s
             accounts.append(account)
             successful += 1
         except Exception as exc:
-            accounts.append({**base_account, "ok": False, "error": str(exc)[:180]})
+            reason = "auth_unavailable" if bool(auth_entry.get("unavailable")) else "quota_probe_failed"
+            accounts.append({
+                **base_account,
+                "ok": False,
+                "schedulable": False,
+                "skipped": bool(auth_entry.get("unavailable")),
+                "reason": reason,
+                "error": str(exc)[:180],
+            })
 
     if successful == 0 and accounts and all(item.get("skipped") for item in accounts):
         return accounts
@@ -547,6 +561,33 @@ def account_window_remaining(windows: dict[str, dict[str, Any]], key: str) -> fl
     return max(0.0, min(100.0, value))
 
 
+def exhausted_quota_window(windows: dict[str, dict[str, Any]]) -> str | None:
+    for key in ("7d", "5h"):
+        remaining = number(windows.get(key, {}).get("remaining_percent"))
+        if remaining is not None and remaining <= 0.000001:
+            return key
+    return None
+
+
+def account_unschedulable_reason(
+    disabled: bool,
+    runtime_unavailable: bool,
+    can_exhaust: bool,
+    protected_headroom: float,
+    windows: dict[str, dict[str, Any]],
+) -> tuple[str | None, str | None]:
+    if disabled:
+        return "auth_disabled", None
+    exhausted = exhausted_quota_window(windows)
+    if exhausted:
+        return f"quota_{exhausted}_exhausted", exhausted
+    if not can_exhaust and protected_headroom <= 0.000001:
+        return "protected_reserve_reached", None
+    if runtime_unavailable:
+        return "auth_unavailable", None
+    return None, None
+
+
 def evaluate_account_quota(config: dict[str, Any], auth_entry: dict[str, Any], usage: dict[str, Any]) -> dict[str, Any]:
     windows = quota_windows(usage)
     threshold_5h = clamp_percent(config.get("min_remaining_percent_5h"), 30.0)
@@ -566,8 +607,19 @@ def evaluate_account_quota(config: dict[str, Any], auth_entry: dict[str, Any], u
     units_per_percent = float(config.get("balance_units_per_percent") or 1.0)
     balance_units = raw_remaining * units_per_percent
     usable_balance_units = visible_remaining * units_per_percent
+    disabled = bool(auth_entry.get("disabled"))
+    runtime_unavailable = bool(auth_entry.get("unavailable"))
+    reason, exhausted_window = account_unschedulable_reason(
+        disabled,
+        runtime_unavailable,
+        can_exhaust,
+        protected_headroom,
+        windows,
+    )
+    schedulable = reason is None
     return {
         "ok": True,
+        "schedulable": schedulable,
         "auth_index": auth_index,
         "account_id_hash": account_id_hash,
         "account_label": account_label_from_entry(auth_entry),
@@ -581,9 +633,14 @@ def evaluate_account_quota(config: dict[str, Any], auth_entry: dict[str, Any], u
         "balance_units": round(balance_units, 6),
         "usable_balance_units": round(usable_balance_units, 6),
         "plan_type": usage.get("plan_type") or usage.get("planType") or guard_auth.get("plan_type_hint"),
+        "disabled": disabled,
+        "unavailable": runtime_unavailable,
+        "runtime_unavailable": runtime_unavailable,
+        "reason": reason,
         "reset_credits_available": reset_credits_available(usage),
         "windows": windows,
         "rate_limit_reached_type": usage.get("rate_limit_reached_type"),
+        "quota_exhausted_window": exhausted_window,
     }
 
 
@@ -642,6 +699,9 @@ def account_summary(account: dict[str, Any]) -> dict[str, Any]:
         "plan_type",
         "bucket",
         "ok",
+        "schedulable",
+        "runtime_unavailable",
+        "quota_exhausted_window",
         "can_exhaust",
         "disabled",
         "unavailable",
@@ -662,7 +722,10 @@ def bucket_summary(config: dict[str, Any], bucket_key: str, accounts: list[dict[
     summary = empty_bucket(bucket_key, config)
     summary["account_count"] = len(accounts)
     ok_accounts = [account for account in accounts if account.get("ok")]
-    summary["available_account_count"] = len(ok_accounts)
+    schedulable_accounts = [
+        account for account in ok_accounts if account.get("schedulable")
+    ]
+    summary["available_account_count"] = len(schedulable_accounts)
     summary["balance_units"] = round(sum(float(account.get("balance_units") or 0) for account in ok_accounts), 6)
     summary["usable_balance_units"] = round(sum(float(account.get("usable_balance_units") or 0) for account in ok_accounts), 6)
     summary["remaining_share_percent"] = round(sum(float(account.get("remaining_share_percent") or 0) for account in ok_accounts), 6)
@@ -691,6 +754,9 @@ def evaluate_quota(config: dict[str, Any], accounts: list[dict[str, Any]]) -> di
         if bucket_accounts:
             buckets[key] = bucket_summary(config, key, bucket_accounts)
     ok_accounts = [account for account in accounts if account.get("ok")]
+    schedulable_accounts = [
+        account for account in ok_accounts if account.get("schedulable")
+    ]
     usable_balance_units = round(sum(float(account.get("usable_balance_units") or 0) for account in ok_accounts), 6)
     total_balance_units = round(sum(float(account.get("balance_units") or 0) for account in ok_accounts), 6)
     quota_ok = (not enabled) or usable_balance_units > 0
@@ -706,7 +772,7 @@ def evaluate_quota(config: dict[str, Any], accounts: list[dict[str, Any]]) -> di
         "min_remaining_percent_5h": clamp_percent(config.get("min_remaining_percent_5h"), 30.0),
         "min_remaining_percent_7d": clamp_percent(config.get("min_remaining_percent_7d"), 20.0),
         "account_count": len(accounts),
-        "available_account_count": len(ok_accounts),
+        "available_account_count": len(schedulable_accounts),
         "remaining_share_percent": usable_balance_units,
         "balance_units": usable_balance_units,
         "usable_balance_units": usable_balance_units,

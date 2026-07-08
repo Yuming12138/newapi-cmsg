@@ -39,13 +39,13 @@ import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn, truncateText } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Progress } from '@/components/ui/progress'
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { Progress } from '@/components/ui/progress'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { DataTableColumnHeader } from '@/components/data-table/column-header'
 import { GroupBadge } from '@/components/group-badge'
@@ -134,7 +134,10 @@ type CliproxyCPAQuotaAccount = {
   label: string
   bucket: string | null
   ok: boolean | null
+  schedulable: boolean | null
   skipped: boolean | null
+  runtimeUnavailable: boolean | null
+  quotaExhaustedWindow: string | null
   unavailable: boolean | null
   disabled: boolean | null
   canExhaust: boolean | null
@@ -339,7 +342,13 @@ function parseCliproxyCPAQuotaAccount(
     label: cliproxyCPAAccountLabel(item, authIndex),
     bucket: typeof item.bucket === 'string' ? item.bucket : null,
     ok: booleanValue(item.ok),
+    schedulable: booleanValue(item.schedulable),
     skipped: booleanValue(item.skipped),
+    runtimeUnavailable: booleanValue(item.runtime_unavailable),
+    quotaExhaustedWindow:
+      typeof item.quota_exhausted_window === 'string'
+        ? item.quota_exhausted_window
+        : null,
     unavailable: booleanValue(item.unavailable),
     disabled: booleanValue(item.disabled),
     canExhaust: booleanValue(item.can_exhaust),
@@ -483,6 +492,7 @@ function formatResetCreditsAvailable(value: number | null | undefined): string {
 function isCliproxyCPAAccountAvailable(
   account: CliproxyCPAQuotaAccount
 ): boolean {
+  if (account.schedulable != null) return account.schedulable
   return (
     account.ok === true &&
     account.skipped !== true &&
@@ -493,9 +503,24 @@ function isCliproxyCPAAccountAvailable(
 
 function getCliproxyCPAAccountIssue(account: CliproxyCPAQuotaAccount): string {
   if (account.disabled === true) return '已禁用'
-  if (account.unavailable === true) return '不可用'
+  if (
+    account.quotaExhaustedWindow === '7d' ||
+    account.reason === 'quota_7d_exhausted'
+  ) {
+    return '7d 周额度已用完'
+  }
+  if (
+    account.quotaExhaustedWindow === '5h' ||
+    account.reason === 'quota_5h_exhausted'
+  ) {
+    return '5h 额度已用完'
+  }
+  if (account.reason === 'protected_reserve_reached') return '低水位保护'
+  if (account.unavailable === true || account.runtimeUnavailable === true) {
+    return 'CPA 暂停调度'
+  }
   if (account.skipped === true) {
-    if (account.reason === 'auth_unavailable') return '需重新登录'
+    if (account.reason === 'auth_unavailable') return 'CPA 暂停调度'
     return '已跳过'
   }
   if (account.ok === false) return '不可用'
@@ -503,15 +528,40 @@ function getCliproxyCPAAccountIssue(account: CliproxyCPAQuotaAccount): string {
 }
 
 function getCliproxyCPAAccountIssueDetail(
-  account: CliproxyCPAQuotaAccount
+  account: CliproxyCPAQuotaAccount,
+  updatedAt: number | null
 ): string | null {
+  const quotaWindow =
+    account.quotaExhaustedWindow === '7d' ||
+    account.reason === 'quota_7d_exhausted'
+      ? account.weekly
+      : account.quotaExhaustedWindow === '5h' ||
+          account.reason === 'quota_5h_exhausted'
+        ? account.fiveHour
+        : null
+  if (quotaWindow) {
+    const resetAt = getCliproxyCPAResetAt(quotaWindow, updatedAt)
+    if (resetAt != null) return `重置 ${formatCompactTimestamp(resetAt)}`
+    if (quotaWindow.resetAfterSeconds != null) {
+      return `重置 ${formatShortDuration(quotaWindow.resetAfterSeconds)}`
+    }
+  }
+  if (account.reason === 'protected_reserve_reached') return '保留共享 Pro 余量'
+  if (
+    account.reason === 'auth_unavailable' &&
+    account.ok === true &&
+    (account.runtimeUnavailable === true || account.unavailable === true)
+  ) {
+    return '额度可读，等待 CPA 恢复调度'
+  }
   return account.reason || account.error || null
 }
 
 function getCliproxyCPAAccountPlanLabel(
   account: CliproxyCPAQuotaAccount
 ): string | null {
-  if (account.planType && account.planType.trim() !== '') return account.planType
+  if (account.planType && account.planType.trim() !== '')
+    return account.planType
   if (account.canExhaust === true) return '个人池'
   if (account.canExhaust === false) return '共享 Pro'
   return null
@@ -522,9 +572,7 @@ function clampPercent(value: number | null | undefined): number {
   return Math.min(100, Math.max(0, value))
 }
 
-function getCliproxyCPAProgressColor(
-  value: number | null | undefined
-): string {
+function getCliproxyCPAProgressColor(value: number | null | undefined): string {
   const percent = clampPercent(value)
   if (percent <= 10) return '[&_[data-slot=progress-indicator]]:bg-rose-500'
   if (percent <= 30) return '[&_[data-slot=progress-indicator]]:bg-amber-500'
@@ -707,7 +755,7 @@ function CliproxyCPAQuotaProgress({
       <Progress
         value={clampPercent(percent)}
         className={cn(
-          'h-1.5 [&_[data-slot=progress-track]]:bg-foreground/20',
+          '[&_[data-slot=progress-track]]:bg-foreground/20 h-1.5',
           getCliproxyCPAProgressColor(percent)
         )}
       />
@@ -836,8 +884,12 @@ function CliproxyCPAAccountRow({
   unavailable?: boolean
 }) {
   const issue = unavailable ? getCliproxyCPAAccountIssue(account) : null
-  const issueDetail = unavailable ? getCliproxyCPAAccountIssueDetail(account) : null
+  const issueDetail = unavailable
+    ? getCliproxyCPAAccountIssueDetail(account, updatedAt)
+    : null
   const planLabel = getCliproxyCPAAccountPlanLabel(account)
+  const canReset =
+    account.disabled !== true && (account.resetCreditsAvailable ?? 0) > 0
 
   return (
     <div className='bg-muted/30 border-border/80 space-y-1 rounded border p-1.5'>
@@ -861,7 +913,7 @@ function CliproxyCPAAccountRow({
             </p>
           )}
         </div>
-        {!unavailable && (
+        {canReset && (
           <CliproxyCPAResetCreditButton
             channelId={channelId}
             account={account}
@@ -1055,7 +1107,9 @@ function CliproxyCPAQuotaDetails({
             <p className='text-xs font-semibold'>
               不可用账号 · {unavailableAccounts.length}
             </p>
-            <p className='text-foreground/70 text-[11px]'>需在 CPA 侧修复登录</p>
+            <p className='text-foreground/70 text-[11px]'>
+              额度耗尽或 CPA 暂停调度
+            </p>
           </div>
           <div className='space-y-1'>
             {unavailableAccounts.map((account) => (
