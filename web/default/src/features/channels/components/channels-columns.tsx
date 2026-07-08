@@ -643,35 +643,15 @@ function getCliproxyCPABucketAccountCountLabel(
   return `可用 ${bucket.availableAccountCount} / 总 ${bucket.accountCount}`
 }
 
-function formatCliproxyCPABucketSummary(
-  bucket: CliproxyCPAQuotaBucket
-): string {
-  const count = getCliproxyCPABucketAccountCountLabel(bucket)
-  const prefix = count ? `${bucket.label} ${count}` : bucket.label
-  return `${prefix} ${formatCliproxyCPAUnits(bucket.usableBalanceUnits)}`
+function getCliproxyCPAMetaAccountCountLabel(
+  meta: CliproxyCPAQuotaMeta
+): string | null {
+  if (meta.accountCount == null) return null
+  if (meta.availableAccountCount == null) return `账号 ${meta.accountCount}`
+  return `账号 ${meta.availableAccountCount}/${meta.accountCount}`
 }
 
 function formatCliproxyCPASummary(meta: CliproxyCPAQuotaMeta): string {
-  if (meta.buckets.length > 0) {
-    const personal = meta.buckets.find(
-      (bucket) => bucket.key === 'personal' || bucket.canExhaust
-    )
-    const protectedBucket = meta.buckets.find(
-      (bucket) => bucket.key === 'protected' || bucket.canExhaust === false
-    )
-    const otherBuckets = meta.buckets.filter(
-      (bucket) => bucket !== personal && bucket !== protectedBucket
-    )
-    const parts = [personal, protectedBucket, ...otherBuckets]
-      .filter((bucket): bucket is CliproxyCPAQuotaBucket => bucket != null)
-      .map(formatCliproxyCPABucketSummary)
-    if (meta.nextResetAt != null) {
-      parts.push(`next ${formatCompactTimestamp(meta.nextResetAt)}`)
-    } else if (meta.nextResetAfterSeconds != null) {
-      parts.push(`reset ${formatShortDuration(meta.nextResetAfterSeconds)}`)
-    }
-    return parts.join(' · ')
-  }
   const fiveHourPercent =
     meta.guardMode === 'low_watermark'
       ? meta.fiveHour?.remainingPercent
@@ -681,14 +661,12 @@ function formatCliproxyCPASummary(meta: CliproxyCPAQuotaMeta): string {
       ? meta.weekly?.remainingPercent
       : meta.weekly?.shareRemainingPercent
   const parts = [
+    `可用 ${formatCliproxyCPAUnits(meta.usableBalanceUnits)}`,
     `5h ${formatPercent(fiveHourPercent)}`,
     `7d ${formatPercent(weeklyPercent)}`,
   ]
-  if (meta.nextResetAt != null) {
-    parts.push(`next ${formatCompactTimestamp(meta.nextResetAt)}`)
-  } else if (meta.nextResetAfterSeconds != null) {
-    parts.push(`reset ${formatShortDuration(meta.nextResetAfterSeconds)}`)
-  }
+  const accountCount = getCliproxyCPAMetaAccountCountLabel(meta)
+  if (accountCount) parts.push(accountCount)
   return parts.join(' · ')
 }
 
@@ -831,13 +809,13 @@ function CliproxyCPAAccountWindowSummary({
 
   return (
     <div className='text-foreground/70 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] tabular-nums'>
-      <span>5h {formatPercent(account.fiveHour?.remainingPercent)}</span>
+      <span>5h 剩余 {formatPercent(account.fiveHour?.remainingPercent)}</span>
       {fiveHourResetAt != null && (
-        <span>reset {formatCompactTimestamp(fiveHourResetAt)}</span>
+        <span>刷新 {formatCompactTimestamp(fiveHourResetAt)}</span>
       )}
-      <span>7d {formatPercent(account.weekly?.remainingPercent)}</span>
+      <span>7d 剩余 {formatPercent(account.weekly?.remainingPercent)}</span>
       {weeklyResetAt != null && (
-        <span>reset {formatCompactTimestamp(weeklyResetAt)}</span>
+        <span>刷新 {formatCompactTimestamp(weeklyResetAt)}</span>
       )}
     </div>
   )
@@ -949,7 +927,7 @@ function CliproxyCPALocalResetButton({
       if (!res.success) {
         throw new Error(res.message || t('Reset request failed'))
       }
-      toast.success(t('Local CPA cooldown and quota state cleared.'))
+      toast.success(t('已清除 CPA 本地冷却/额度状态，将重新探测。'))
       queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
     } catch (error) {
       toast.error(
@@ -967,10 +945,11 @@ function CliproxyCPALocalResetButton({
       size='xs'
       disabled={disabled}
       className='h-6 px-1.5 text-[11px]'
+      title={t('只清除 CPA 本地冷却/额度状态，不消耗上游重置次数。')}
       onClick={handleClick}
     >
       <RotateCcw className='size-3' />
-      {isResetting ? t('Resetting') : t('清本地状态')}
+      {isResetting ? t('Resetting') : t('重试探测')}
     </Button>
   )
 }
@@ -1077,7 +1056,7 @@ function CliproxyCPABucketDetails({
           </p>
           {bucket.canExhaust === false && (
             <p className='text-foreground/70 text-[11px]'>
-              reserve 5h {formatPercent(bucket.reserveFiveHourPercent)} / 7d{' '}
+              保护水位 5h {formatPercent(bucket.reserveFiveHourPercent)} / 7d{' '}
               {formatPercent(bucket.reserveWeeklyPercent)}
             </p>
           )}
@@ -1086,24 +1065,24 @@ function CliproxyCPABucketDetails({
           <p className='text-xs font-semibold'>
             {formatCliproxyCPAUnits(bucket.usableBalanceUnits)}
           </p>
-          <p className='text-foreground/70 text-[11px]'>usable</p>
+          <p className='text-foreground/70 text-[11px]'>可用额度</p>
         </div>
       </div>
       {rawBalanceVisible && (
         <div className='text-foreground/70 flex justify-between gap-2 text-[11px]'>
-          <span>raw remaining</span>
+          <span>池内剩余</span>
           <span className='tabular-nums'>
             {formatCliproxyCPAUnits(bucket.balanceUnits)}
           </span>
         </div>
       )}
       <CliproxyCPAQuotaProgress
-        label='5h remaining'
+        label='5h 剩余'
         window={bucket.fiveHour}
         updatedAt={updatedAt}
       />
       <CliproxyCPAQuotaProgress
-        label='7d remaining'
+        label='7d 剩余'
         window={bucket.weekly}
         updatedAt={updatedAt}
       />
@@ -1137,17 +1116,11 @@ function CliproxyCPAQuotaDetails({
 
   return (
     <div className='text-foreground w-[360px] max-w-[calc(100vw-2rem)] space-y-2'>
-      <div className='grid grid-cols-3 gap-2'>
+      <div className='grid grid-cols-2 gap-2'>
         <div className='bg-background border-border rounded-md border p-2 shadow-sm'>
-          <p className='text-foreground/70 text-[11px]'>CPA usable</p>
+          <p className='text-foreground/70 text-[11px]'>可用额度</p>
           <p className='text-sm font-semibold tabular-nums'>
             {formatCliproxyCPAUnits(meta.usableBalanceUnits)}
-          </p>
-        </div>
-        <div className='bg-background border-border rounded-md border p-2 shadow-sm'>
-          <p className='text-foreground/70 text-[11px]'>Total</p>
-          <p className='text-sm font-semibold tabular-nums'>
-            {formatCliproxyCPAUnits(meta.totalBalanceUnits)}
           </p>
         </div>
         <div className='bg-background border-border rounded-md border p-2 shadow-sm'>
@@ -1180,7 +1153,7 @@ function CliproxyCPAQuotaDetails({
         <div className='bg-background border-border space-y-2 rounded-md border p-2 shadow-sm'>
           {meta.guardMode !== 'low_watermark' && (
             <div className='text-foreground/70 flex justify-between gap-2 text-[11px]'>
-              <span>CPA share</span>
+              <span>共享额度</span>
               <span className='tabular-nums'>
                 {formatPercent(meta.remainingSharePercent)} /{' '}
                 {formatPercent(meta.shareLimitPercent)}
@@ -1188,18 +1161,18 @@ function CliproxyCPAQuotaDetails({
             </div>
           )}
           <CliproxyCPAQuotaProgress
-            label='5h remaining'
+            label='5h 剩余'
             window={meta.fiveHour}
             updatedAt={meta.updatedAt}
           />
           <CliproxyCPAQuotaProgress
-            label='7d remaining'
+            label='7d 剩余'
             window={meta.weekly}
             updatedAt={meta.updatedAt}
           />
           {meta.accounts.length > 0 && (
             <div className='border-border/70 space-y-1 border-t pt-2'>
-              <p className='text-foreground/70 text-[11px]'>Accounts</p>
+              <p className='text-foreground/70 text-[11px]'>账号状态</p>
               {meta.accounts.map((account) => (
                 <CliproxyCPAAccountRow
                   key={account.authIndex}
@@ -1236,7 +1209,7 @@ function CliproxyCPAQuotaDetails({
         </div>
       )}
       <div className='text-foreground/70 flex justify-between gap-2 text-[11px]'>
-        <span>Next reset</span>
+        <span>最近刷新</span>
         <span className='tabular-nums'>
           {meta.nextResetAt != null
             ? formatCompactTimestamp(meta.nextResetAt)
@@ -1245,7 +1218,7 @@ function CliproxyCPAQuotaDetails({
       </div>
       {meta.updatedAt && (
         <div className='text-foreground/70 flex justify-between gap-2 text-[11px]'>
-          <span>Updated</span>
+          <span>数据更新时间</span>
           <span className='tabular-nums'>
             {formatCompactTimestamp(meta.updatedAt)}
           </span>
@@ -1496,7 +1469,7 @@ function BalanceCell({ channel }: { channel: Channel }) {
                   ? channel.type === 57
                     ? t('Click to view Codex usage')
                     : cliproxyCPAQuota
-                      ? `CPA usable: ${remainingDisplay}`
+                      ? `CPA 可用额度: ${remainingDisplay}`
                       : `${t('Remaining:')} ${remainingDisplay}`
                   : maskedRemainingLabel}
               </p>
