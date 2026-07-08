@@ -28,7 +28,7 @@ import type { UsageLog } from './data/schema'
 /**
  * Log category for different log types
  */
-export type LogCategory = 'common' | 'drawing' | 'task'
+export type LogCategory = 'common' | 'trace' | 'drawing' | 'task'
 
 // ============================================================================
 // Filter Types
@@ -178,6 +178,17 @@ export interface LogOtherData {
     error_count?: number
     end_error?: string
     errors?: string[]
+    received?: number
+    sent?: number
+    chunk_count?: number
+    write_count?: number
+    ping_count?: number
+    duration_ms?: number
+    first_chunk_ms?: number
+    last_chunk_age_ms?: number
+    last_write_age_ms?: number
+    last_ping_age_ms?: number
+    client_gone_after_last_chunk_ms?: number
   }
   // Violation fee fields
   violation_fee?: boolean

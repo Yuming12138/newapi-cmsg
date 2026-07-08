@@ -29,6 +29,13 @@ const USAGE_LOGS_SECTIONS = [
     build: () => null, // Content is rendered directly in the page component
   },
   {
+    id: 'trace',
+    titleKey: 'Request Trace',
+    descriptionKey:
+      'Inspect request routing, timing, stream status, and retry context',
+    build: () => null, // Content is rendered directly in the page component
+  },
+  {
     id: 'drawing',
     titleKey: 'Drawing Logs',
     descriptionKey: 'View and manage your drawing logs',

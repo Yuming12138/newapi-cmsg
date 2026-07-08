@@ -42,7 +42,7 @@ import { DataTableToolbar } from '@/components/data-table'
 import { LOG_TYPES } from '../constants'
 import { buildSearchParams } from '../lib/filter'
 import { getDefaultTimeRange } from '../lib/utils'
-import type { CommonLogFilters } from '../types'
+import type { CommonLogFilters, LogCategory } from '../types'
 import { CommonLogsStats } from './common-logs-stats'
 import { CompactDateTimeRangePicker } from './compact-date-time-range-picker'
 import { useUsageLogsContext } from './usage-logs-provider'
@@ -58,6 +58,7 @@ function isLogTypeValue(value: string): value is LogTypeValue {
 
 interface CommonLogsFilterBarProps<TData> {
   table: Table<TData>
+  logCategory: Extract<LogCategory, 'common' | 'trace'>
 }
 
 export function CommonLogsFilterBar<TData>(
@@ -96,6 +97,8 @@ export function CommonLogsFilterBar<TData>(
     const typeArr = searchParams.type
     if (Array.isArray(typeArr) && typeArr.length === 1) {
       setLogType(typeArr[0])
+    } else {
+      setLogType('')
     }
   }, [
     searchParams.startTime,
@@ -120,7 +123,7 @@ export function CommonLogsFilterBar<TData>(
     const filterParams = buildSearchParams(filters, 'common')
     navigate({
       to: '/usage-logs/$section',
-      params: { section: 'common' },
+      params: { section: props.logCategory },
       search: {
         ...filterParams,
         ...(logType ? { type: [logType] } : {}),
@@ -129,7 +132,7 @@ export function CommonLogsFilterBar<TData>(
     })
     queryClient.invalidateQueries({ queryKey: ['logs'] })
     queryClient.invalidateQueries({ queryKey: ['usage-logs-stats'] })
-  }, [filters, logType, navigate, queryClient])
+  }, [filters, logType, navigate, props.logCategory, queryClient])
 
   const handleReset = useCallback(() => {
     const { start, end } = getDefaultTimeRange()
@@ -139,7 +142,7 @@ export function CommonLogsFilterBar<TData>(
 
     navigate({
       to: '/usage-logs/$section',
-      params: { section: 'common' },
+      params: { section: props.logCategory },
       search: {
         page: 1,
         startTime: start.getTime(),
@@ -148,7 +151,7 @@ export function CommonLogsFilterBar<TData>(
     })
     queryClient.invalidateQueries({ queryKey: ['logs'] })
     queryClient.invalidateQueries({ queryKey: ['usage-logs-stats'] })
-  }, [navigate, queryClient])
+  }, [navigate, props.logCategory, queryClient])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

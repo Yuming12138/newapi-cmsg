@@ -251,7 +251,7 @@ export async function fetchLogsByCategory(
   const { logCategory, isAdmin, page, pageSize, searchParams, columnFilters } =
     config
 
-  if (logCategory === 'common') {
+  if (logCategory === 'common' || logCategory === 'trace') {
     const params = buildApiParams({
       page,
       pageSize,

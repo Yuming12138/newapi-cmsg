@@ -37,7 +37,7 @@ import {
 } from './section-registry'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
-const TASK_LOG_SECTIONS = ['drawing', 'task'] as const
+const LOG_SECTIONS = ['common', 'trace', 'drawing', 'task'] as const
 
 const SECTION_META: Record<
   UsageLogsSectionId,
@@ -46,6 +46,11 @@ const SECTION_META: Record<
   common: {
     titleKey: 'Common Logs',
     descriptionKey: 'View and manage your API usage logs',
+  },
+  trace: {
+    titleKey: 'Request Trace',
+    descriptionKey:
+      'Inspect request routing, timing, stream status, and retry context',
   },
   drawing: {
     titleKey: 'Drawing Logs',
@@ -76,8 +81,8 @@ function UsageLogsContent() {
   const tabNavGroups = useMemo<NavGroup[]>(
     () => [
       {
-        title: 'Task Logs',
-        items: TASK_LOG_SECTIONS.map((section) => ({
+        title: 'Usage Logs',
+        items: LOG_SECTIONS.map((section) => ({
           title: SECTION_META[section].titleKey,
           url: `/usage-logs/${section}`,
         })),
@@ -109,10 +114,8 @@ function UsageLogsContent() {
     [navigate]
   )
 
-  const pageMeta =
-    activeCategory === 'common' ? SECTION_META.common : SECTION_META.task
-  const showTaskSwitcher =
-    activeCategory !== 'common' && visibleSections.length > 1
+  const pageMeta = SECTION_META[activeCategory]
+  const showLogSwitcher = visibleSections.length > 1
 
   return (
     <>
@@ -125,7 +128,7 @@ function UsageLogsContent() {
         </SectionPageLayout.Description>
         <SectionPageLayout.Content>
           <div className='space-y-4'>
-            {showTaskSwitcher && (
+            {showLogSwitcher && (
               <Tabs value={activeCategory} onValueChange={handleSectionChange}>
                 <TabsList className='h-auto max-w-full flex-wrap justify-start'>
                   {visibleSections.map((section) => (

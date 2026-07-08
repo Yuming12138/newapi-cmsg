@@ -59,11 +59,11 @@ export const Route = createFileRoute('/_authenticated/usage-logs/$section')({
         params: { section: USAGE_LOGS_DEFAULT_SECTION },
       })
     }
-    // type 仅 common 使用，非 common 时清掉 URL 里的 type
+    // type 仅 common/trace 使用，任务类日志不使用该筛选。
     const hasTypeSearch = Array.isArray(search?.type)
       ? search.type.length > 0
       : search?.type != null && search.type !== ''
-    if (params.section !== 'common' && hasTypeSearch) {
+    if (!['common', 'trace'].includes(params.section) && hasTypeSearch) {
       throw redirect({
         to: '/usage-logs/$section',
         params: { section: params.section },

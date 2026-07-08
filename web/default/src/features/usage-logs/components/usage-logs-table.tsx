@@ -34,8 +34,8 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { useIsAdmin } from '@/hooks/use-admin'
-import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { useColumnVisibilityStorage } from '@/hooks/use-column-visibility-storage'
+import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { TableCell, TableRow } from '@/components/ui/table'
 import { DataTablePage } from '@/components/data-table'
 import { DEFAULT_LOGS_DATA, LOG_TYPE_ENUM } from '../constants'
@@ -173,7 +173,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     ensurePageInRange(pageCount)
   }, [pageCount, ensurePageInRange])
 
-  const isCommon = logCategory === 'common'
+  const isCommonLog = logCategory === 'common' || logCategory === 'trace'
 
   return (
     <DataTablePage
@@ -188,23 +188,25 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
       skeletonKeyPrefix='usage-log-skeleton'
       tableHeaderClassName='bg-muted/30 sticky top-0 z-10'
       toolbar={
-        isCommon ? (
-          <CommonLogsFilterBar table={table} />
+        isCommonLog ? (
+          <CommonLogsFilterBar table={table} logCategory={logCategory} />
         ) : (
           <TaskLogsFilterBar table={table} logCategory={logCategory} />
         )
       }
       renderRow={(row) => {
         const logType = (row.original as Record<string, unknown>).type as
-          | number
-          | undefined
+          number | undefined
         const tintClass =
-          isCommon && logType != null ? (logTypeRowTint[logType] ?? '') : ''
+          isCommonLog && logType != null ? (logTypeRowTint[logType] ?? '') : ''
 
         return (
           <TableRow key={row.id} className={cn('transition-colors', tintClass)}>
             {row.getVisibleCells().map((cell) => (
-              <TableCell key={cell.id} className={isCommon ? 'py-2' : 'py-3.5'}>
+              <TableCell
+                key={cell.id}
+                className={isCommonLog ? 'py-2' : 'py-3.5'}
+              >
                 {flexRender(cell.column.columnDef.cell, cell.getContext())}
               </TableCell>
             ))}

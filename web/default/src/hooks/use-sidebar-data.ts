@@ -104,6 +104,8 @@ export function useSidebarData(): SidebarData {
           {
             title: t('Usage Logs'),
             url: '/usage-logs/common',
+            activeUrls: ['/usage-logs/trace'],
+            configUrls: ['/usage-logs/common', '/usage-logs/trace'],
             icon: FileText,
           },
           {
