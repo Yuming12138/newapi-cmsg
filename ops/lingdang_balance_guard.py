@@ -119,6 +119,17 @@ def parse_json_object(value: Any) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def number(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
 def proxy_for_urllib(proxy: str) -> urllib.request.OpenerDirector:
     proxy = str(proxy or "").strip()
     if not proxy:
@@ -198,7 +209,99 @@ def fetch_usage(channel: dict[str, Any], usage_path: str, timeout: int) -> dict[
         balance = parse_usage_balance(data)
     except Exception as exc:
         return {"ok": False, "status": status, "reason": str(exc)[:180]}
-    return {"ok": True, "status": status, "reason": "usage_balance_ok", "balance": round(balance, 6)}
+    return {"ok": True, "status": status, "reason": "usage_balance_ok", "balance": round(balance, 6), "usage": data}
+
+
+def quota_source_window(
+    name: str,
+    unit: str,
+    remaining: float,
+    limit: float | None,
+    used: float | None,
+    reset_at: str | None = None,
+) -> dict[str, Any]:
+    window: dict[str, Any] = {
+        "name": name,
+        "unit": unit,
+        "remaining": round(max(remaining, 0.0), 6),
+    }
+    if limit is not None and limit > 0:
+        window["limit"] = round(limit, 6)
+        window["remaining_percent"] = round(max(remaining, 0.0) / limit * 100, 4)
+    if used is not None:
+        window["used"] = round(max(used, 0.0), 6)
+    if reset_at:
+        window["reset_at"] = reset_at
+    return window
+
+
+def build_usage_quota_source(result: dict[str, Any], balance: float, reason: str, now: int) -> dict[str, Any]:
+    usage = result.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    unit = str(usage.get("unit") or "USD").strip() or "USD"
+    windows: list[dict[str, Any]] = []
+
+    quota = usage.get("quota")
+    if isinstance(quota, dict):
+        remaining = number(quota.get("remaining"))
+        if remaining is not None:
+            limit = number(quota.get("limit"))
+            used = number(quota.get("used"))
+            if used is None and limit is not None:
+                used = max(limit - remaining, 0.0)
+            windows.append(
+                quota_source_window(
+                    "period",
+                    str(quota.get("unit") or unit).strip() or unit,
+                    remaining,
+                    limit,
+                    used,
+                    str(quota.get("reset_at") or "").strip() or None,
+                )
+            )
+
+    rate_limits = usage.get("rate_limits")
+    if isinstance(rate_limits, list):
+        for item in rate_limits:
+            if not isinstance(item, dict):
+                continue
+            remaining = number(item.get("remaining"))
+            if remaining is None:
+                continue
+            limit = number(item.get("limit"))
+            used = number(item.get("used"))
+            if used is None and limit is not None:
+                used = max(limit - remaining, 0.0)
+            name = str(item.get("window") or "rate_limit").strip() or "rate_limit"
+            windows.append(
+                quota_source_window(
+                    name,
+                    unit,
+                    remaining,
+                    limit,
+                    used,
+                    str(item.get("reset_at") or "").strip() or None,
+                )
+            )
+
+    spendable = bool(result.get("ok")) and balance > 0
+    source_type = "period_cap_with_daily_limit" if isinstance(rate_limits, list) and rate_limits else "stored_value_usd"
+    return {
+        "source_type": source_type,
+        "unit": unit,
+        "balance": round(max(balance, 0.0), 6),
+        "windows": windows,
+        "spendable": spendable,
+        "status": "available" if spendable else "quota_exhausted" if result.get("ok") else "unknown",
+        "status_reason": reason,
+        "updated_at": now,
+        "raw_source": {
+            "source": "usage_balance",
+            "mode": usage.get("mode"),
+            "plan_name": usage.get("planName"),
+        },
+    }
 
 
 def update_channel(db: DB, channel: dict[str, Any], result: dict[str, Any], dry_run: bool = False) -> str:
@@ -228,6 +331,7 @@ def update_channel(db: DB, channel: dict[str, Any], result: dict[str, Any], dry_
     if manually_disabled:
         guard_info["manual_status_preserved"] = True
     other_info["lingdang_balance_guard"] = guard_info
+    other_info["quota_source"] = build_usage_quota_source(result, balance, reason, now)
 
     status: int | None = None
     abilities_enabled: bool | None = None

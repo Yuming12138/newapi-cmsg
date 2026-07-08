@@ -783,6 +783,138 @@ def evaluate_quota(config: dict[str, Any], accounts: list[dict[str, Any]]) -> di
     }
 
 
+def quota_source_window(name: str, window: dict[str, Any]) -> dict[str, Any]:
+    remaining = number(window.get("remaining_percent"))
+    used = number(window.get("used_percent"))
+    out: dict[str, Any] = {"name": name, "unit": "percent"}
+    if remaining is not None:
+        value = round(max(remaining, 0.0), 6)
+        out["remaining"] = value
+        out["remaining_percent"] = value
+    if used is not None:
+        value = round(max(used, 0.0), 6)
+        out["used"] = value
+        out["used_percent"] = value
+    reset_after = number(window.get("reset_after_seconds"))
+    if reset_after is not None:
+        out["reset_after_seconds"] = int(reset_after)
+    reset_at = number(window.get("reset_at"))
+    if reset_at is not None and reset_at > 0:
+        out["reset_at"] = int(reset_at)
+    return out
+
+
+def quota_source_windows(result: dict[str, Any]) -> list[dict[str, Any]]:
+    windows = result.get("windows")
+    if not isinstance(windows, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    for name in ("5h", "7d"):
+        item = windows.get(name)
+        if isinstance(item, dict):
+            out.append(quota_source_window(name, item))
+    for name, item in windows.items():
+        if name in {"5h", "7d"} or not isinstance(item, dict):
+            continue
+        out.append(quota_source_window(str(name), item))
+    return out
+
+
+def quota_source_reserve_policy(result: dict[str, Any]) -> dict[str, Any] | None:
+    policy: dict[str, Any] = {}
+    min_5h = number(result.get("min_remaining_percent_5h"))
+    min_7d = number(result.get("min_remaining_percent_7d"))
+    if min_5h is not None:
+        policy["min_remaining_percent_5h"] = round(min_5h, 6)
+    if min_7d is not None:
+        policy["min_remaining_percent_7d"] = round(min_7d, 6)
+    buckets = result.get("buckets")
+    if isinstance(buckets, dict):
+        for bucket in buckets.values():
+            if not isinstance(bucket, dict) or bucket.get("can_exhaust") is True:
+                continue
+            min_5h = number(bucket.get("min_remaining_percent_5h"))
+            min_7d = number(bucket.get("min_remaining_percent_7d"))
+            if min_5h is not None:
+                policy["min_remaining_percent_5h"] = round(min_5h, 6)
+            if min_7d is not None:
+                policy["min_remaining_percent_7d"] = round(min_7d, 6)
+    return policy or None
+
+
+def quota_source_has_protected_bucket(result: dict[str, Any]) -> bool:
+    buckets = result.get("buckets")
+    if not isinstance(buckets, dict):
+        return False
+    for bucket in buckets.values():
+        if isinstance(bucket, dict) and bucket.get("can_exhaust") is False:
+            return True
+    return False
+
+
+def quota_source_window_remaining(result: dict[str, Any], name: str) -> float | None:
+    windows = result.get("windows")
+    if not isinstance(windows, dict):
+        return None
+    item = windows.get(name)
+    if not isinstance(item, dict):
+        return None
+    remaining = number(item.get("remaining_percent"))
+    return None if remaining is None else float(remaining)
+
+
+def quota_source_protected_reserve_reached(result: dict[str, Any]) -> bool:
+    buckets = result.get("buckets")
+    if not isinstance(buckets, dict):
+        return False
+    for bucket in buckets.values():
+        if not isinstance(bucket, dict) or bucket.get("can_exhaust") is True:
+            continue
+        usable = number(bucket.get("usable_balance_units"))
+        if usable is not None and usable <= 0.000001:
+            return True
+    return False
+
+
+def build_quota_source(result: dict[str, Any], balance: float, spendable: bool, now: int) -> dict[str, Any]:
+    remaining_7d = quota_source_window_remaining(result, "7d")
+    remaining_5h = quota_source_window_remaining(result, "5h")
+    if not result.get("ok"):
+        status = "unknown"
+        reason = str(result.get("reason") or result.get("error") or "quota_probe_failed")
+    elif quota_source_protected_reserve_reached(result):
+        status = "protected_reserve"
+        reason = "protected_reserve_reached"
+    elif remaining_7d is not None and remaining_7d <= 0.000001:
+        status = "quota_7d_exhausted"
+        reason = "quota_7d_exhausted"
+    elif remaining_5h is not None and remaining_5h <= 0.000001:
+        status = "quota_5h_exhausted"
+        reason = "quota_5h_exhausted"
+    elif not spendable:
+        status = "quota_exhausted"
+        reason = str(result.get("reason") or "no_spendable_balance")
+    else:
+        status = "available"
+        reason = "within_budget"
+
+    source_type = "shared_protected_rolling_quota" if (
+        quota_source_has_protected_bucket(result) or quota_source_reserve_policy(result)
+    ) else "rolling_window_quota"
+    return {
+        "source_type": source_type,
+        "unit": "quota_unit",
+        "balance": round(max(float(balance), 0.0), 6),
+        "windows": quota_source_windows(result),
+        "spendable": bool(spendable and status == "available"),
+        "status": status,
+        "status_reason": reason,
+        "reserve_policy": quota_source_reserve_policy(result),
+        "updated_at": now,
+        "raw_source": {"source": "cliproxy_cpa_quota_guard"},
+    }
+
+
 def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state: dict[str, Any]) -> str:
     now = int(time.time())
     cid = int(channel["id"])
@@ -819,6 +951,11 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
         if not manually_disabled and current_status != STATUS_AUTO_DISABLED:
             status = STATUS_AUTO_DISABLED
             abilities_enabled = False
+
+    quota_source_balance = balance_update
+    if quota_source_balance is None:
+        quota_source_balance = float(first_non_empty(result.get("usable_balance_units"), result.get("balance_units")) or 0)
+    other_info["quota_source"] = build_quota_source(result, quota_source_balance, desired_enabled, now)
 
     statements = ["begin;"]
     sets = ["other_info = " + sql_literal(json.dumps(other_info, ensure_ascii=False, sort_keys=True))]
