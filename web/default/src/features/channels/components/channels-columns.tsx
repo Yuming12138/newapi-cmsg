@@ -533,6 +533,19 @@ function formatResetCreditsAvailable(value: number | null | undefined): string {
   return String(Math.max(0, Math.trunc(value)))
 }
 
+function CliproxyCPAResetCreditsText({
+  value,
+}: {
+  value: number | null | undefined
+}) {
+  return (
+    <span>
+      重置次数{' '}
+      <span className='tabular-nums'>{formatResetCreditsAvailable(value)}</span>
+    </span>
+  )
+}
+
 function isCliproxyCPAAccountAvailable(
   account: CliproxyCPAQuotaAccount
 ): boolean {
@@ -996,17 +1009,23 @@ function CliproxyCPAAccountRow({
             {account.label}
           </p>
           {unavailable ? (
-            <p className='text-destructive text-[10px]'>
-              {issue}
-              {issueDetail ? ` · ${issueDetail}` : ''}
-              {planLabel ? ` · ${planLabel}` : ''}
-            </p>
+            <div className='space-y-0.5'>
+              <p className='text-destructive text-[10px]'>
+                {issue}
+                {issueDetail ? ` · ${issueDetail}` : ''}
+                {planLabel ? ` · ${planLabel}` : ''}
+              </p>
+              <p className='text-foreground/70 text-[10px]'>
+                <CliproxyCPAResetCreditsText
+                  value={account.resetCreditsAvailable}
+                />
+              </p>
+            </div>
           ) : (
             <p className='text-foreground/70 text-[10px]'>
-              reset credits{' '}
-              <span className='tabular-nums'>
-                {formatResetCreditsAvailable(account.resetCreditsAvailable)}
-              </span>
+              <CliproxyCPAResetCreditsText
+                value={account.resetCreditsAvailable}
+              />
             </p>
           )}
         </div>
