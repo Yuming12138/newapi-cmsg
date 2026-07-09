@@ -40,6 +40,8 @@ import { useUpdateOption } from '../hooks/use-update-option'
 const basicAuthSchema = z.object({
   PasswordLoginEnabled: z.boolean(),
   PasswordRegisterEnabled: z.boolean(),
+  RegistrationCodeEnabled: z.boolean(),
+  RegistrationCodes: z.string(),
   EmailVerificationEnabled: z.boolean(),
   RegisterEnabled: z.boolean(),
   EmailDomainRestrictionEnabled: z.boolean(),
@@ -53,6 +55,14 @@ type BasicAuthSectionProps = {
   defaultValues: BasicAuthFormValues
 }
 
+function normalizeRegistrationCodes(value: string) {
+  return value
+    .split(/[\n\r,;，；]+/)
+    .map((code) => code.trim())
+    .filter(Boolean)
+    .join('\n')
+}
+
 export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
@@ -60,6 +70,9 @@ export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
   const formDefaults = useMemo<BasicAuthFormValues>(
     () => ({
       ...defaultValues,
+      RegistrationCodes: normalizeRegistrationCodes(
+        defaultValues.RegistrationCodes
+      ),
       EmailDomainWhitelist: defaultValues.EmailDomainWhitelist.split(',')
         .map((domain) => domain.trim())
         .filter(Boolean)
@@ -88,6 +101,12 @@ export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
           .join(',')
         if (domains !== defaultValues.EmailDomainWhitelist) {
           updates.push({ key, value: domains })
+        }
+      } else if (key === 'RegistrationCodes') {
+        if (typeof value !== 'string') return
+        const codes = normalizeRegistrationCodes(value)
+        if (codes !== formDefaults.RegistrationCodes) {
+          updates.push({ key, value: codes })
         }
       } else if (value !== defaultValues[key as keyof typeof defaultValues]) {
         updates.push({ key, value })
@@ -171,6 +190,54 @@ export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
                     onCheckedChange={field.onChange}
                   />
                 </FormControl>
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='RegistrationCodeEnabled'
+            render={({ field }) => (
+              <FormItem className='flex flex-row items-center justify-between rounded-lg border p-4'>
+                <div className='space-y-0.5'>
+                  <FormLabel className='text-base'>
+                    {t('Registration Code Gate')}
+                  </FormLabel>
+                  <FormDescription>
+                    {t(
+                      'Require a shared registration code for password registration'
+                    )}
+                  </FormDescription>
+                </div>
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='RegistrationCodes'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Allowed Registration Codes')}</FormLabel>
+                <FormControl>
+                  <Textarea
+                    placeholder={t('One code per line')}
+                    rows={3}
+                    {...field}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'One code per line. Users need one of these codes to create an account.'
+                  )}
+                </FormDescription>
+                <FormMessage />
               </FormItem>
             )}
           />

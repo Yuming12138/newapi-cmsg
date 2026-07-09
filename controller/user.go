@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,10 +30,55 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
+type registerRequest struct {
+	model.User
+	RegistrationCode string `json:"registration_code"`
+}
+
 var (
 	errUserPasswordUnset    = errors.New("user password is not set")
 	errOriginalPasswordFail = errors.New("original password is incorrect")
 )
+
+func splitRegistrationCodes(raw string) []string {
+	return strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r' || r == ';' || r == '，' || r == '；'
+	})
+}
+
+func validateRegistrationCode(code string) string {
+	if !common.RegistrationCodeEnabled {
+		return ""
+	}
+
+	code = strings.TrimSpace(code)
+	configured := 0
+	allowedCodes := splitRegistrationCodes(common.RegistrationCodes)
+	for _, allowedCode := range allowedCodes {
+		allowedCode = strings.TrimSpace(allowedCode)
+		if allowedCode == "" {
+			continue
+		}
+		configured++
+	}
+	if configured == 0 {
+		return i18n.MsgUserRegistrationCodeNotConfigured
+	}
+	if code == "" {
+		return i18n.MsgUserRegistrationCodeRequired
+	}
+
+	for _, allowedCode := range allowedCodes {
+		allowedCode = strings.TrimSpace(allowedCode)
+		if allowedCode == "" {
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(code), []byte(allowedCode)) == 1 {
+			return ""
+		}
+	}
+	return i18n.MsgUserRegistrationCodeInvalid
+}
 
 func Login(c *gin.Context) {
 	if !common.PasswordLoginEnabled {
@@ -148,12 +194,17 @@ func Register(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserPasswordRegisterDisabled)
 		return
 	}
-	var user model.User
-	err := json.NewDecoder(c.Request.Body).Decode(&user)
+	var req registerRequest
+	err := json.NewDecoder(c.Request.Body).Decode(&req)
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
+	if msg := validateRegistrationCode(req.RegistrationCode); msg != "" {
+		common.ApiErrorI18n(c, msg)
+		return
+	}
+	user := req.User
 	user.Username = strings.TrimSpace(user.Username)
 	user.Email = model.NormalizeEmail(user.Email)
 	if user.Username == "" {

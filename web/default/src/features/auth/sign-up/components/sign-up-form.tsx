@@ -91,6 +91,7 @@ export function SignUpForm({
     resolver: zodResolver(registerFormSchema),
     defaultValues: {
       username: '',
+      registrationCode: '',
       email: '',
       password: '',
       confirmPassword: '',
@@ -102,6 +103,10 @@ export function SignUpForm({
   const hasUserAgreement = Boolean(status?.user_agreement_enabled)
   const hasPrivacyPolicy = Boolean(status?.privacy_policy_enabled)
   const requiresLegalConsent = hasUserAgreement || hasPrivacyPolicy
+  const registrationCodeEnabled = Boolean(
+    status?.registration_code_enabled ??
+      status?.data?.registration_code_enabled
+  )
   const oauthRegisterEnabled =
     status?.oauth_register_enabled ??
     status?.data?.oauth_register_enabled ??
@@ -148,6 +153,11 @@ export function SignUpForm({
       }
     }
 
+    if (registrationCodeEnabled && !data.registrationCode?.trim()) {
+      toast.error(t('Please enter the registration code'))
+      return
+    }
+
     if (!validateTurnstile()) return
 
     setIsLoading(true)
@@ -157,6 +167,9 @@ export function SignUpForm({
         password: data.password,
         email: data.email || undefined,
         verification_code: verificationCode || undefined,
+        registration_code: registrationCodeEnabled
+          ? data.registrationCode?.trim()
+          : undefined,
         aff: getAffiliateCode(),
         turnstile: turnstileToken,
       })
@@ -237,6 +250,26 @@ export function SignUpForm({
             </FormItem>
           )}
         />
+
+        {registrationCodeEnabled && (
+          <FormField
+            control={form.control}
+            name='registrationCode'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Registration code')}</FormLabel>
+                <FormControl>
+                  <Input
+                    placeholder={t('Enter registration code')}
+                    autoComplete='off'
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        )}
 
         {/* Password Field */}
         <FormField

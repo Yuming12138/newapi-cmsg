@@ -119,6 +119,12 @@ const (
 	MsgUserQuotaChangeZero           = "user.quota_change_zero"
 )
 
+const (
+	MsgUserRegistrationCodeRequired      = "user.registration_code_required"
+	MsgUserRegistrationCodeInvalid       = "user.registration_code_invalid"
+	MsgUserRegistrationCodeNotConfigured = "user.registration_code_not_configured"
+)
+
 // Quota related messages
 const (
 	MsgQuotaNegative        = "quota.negative"
