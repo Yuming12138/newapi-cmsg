@@ -49,6 +49,7 @@ DEFAULT_CONFIG = {
     "protected_plan_keywords": ["pro"],
     "default_account_bucket": "protected",
     "account_bucket_overrides": {},
+    "prefer_cpa_quota_health_endpoint": True,
 }
 
 OPTION_CONFIG_MAP = {
@@ -508,6 +509,51 @@ def call_wham_usages(config: dict[str, Any], env: dict[str, str]) -> list[dict[s
         errors = [str(item.get("error") or item.get("reason") or "unknown") for item in accounts]
         raise RuntimeError("wham_usage_all_accounts_failed: " + "; ".join(errors[:3]))
     return accounts
+
+
+def cpa_quota_health_query(config: dict[str, Any]) -> str:
+    params = {
+        "enabled": "true" if bool_value(config.get("enabled"), True) else "false",
+        "min_remaining_percent_5h": str(clamp_percent(config.get("min_remaining_percent_5h"), 30.0)),
+        "min_remaining_percent_7d": str(clamp_percent(config.get("min_remaining_percent_7d"), 20.0)),
+        "balance_units_per_percent": str(float(config.get("balance_units_per_percent") or 1.0)),
+    }
+    return urllib.parse.urlencode(params)
+
+
+def call_cpa_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
+    timeout = int(config.get("timeout_sec") or 30)
+    base_url = str(config.get("cpa_base_url") or "").rstrip("/")
+    if not base_url:
+        raise RuntimeError("empty_cpa_base_url")
+    headers = management_headers(env, base_url)
+    if not headers.get("Authorization") and not headers.get("X-Management-Key"):
+        raise RuntimeError("missing_cpa_management_credentials")
+
+    payload = request_json(base_url + "/v0/management/quota-health?" + cpa_quota_health_query(config), headers, timeout)
+    if payload.get("guard_mode") != "bucket_low_watermark":
+        raise RuntimeError("cpa_quota_health_invalid_payload")
+    if "ok" not in payload or "accounts" not in payload:
+        raise RuntimeError("cpa_quota_health_incomplete_payload")
+    payload["quota_health_source"] = "cpa_management"
+    return payload
+
+
+def call_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
+    if bool_value(config.get("prefer_cpa_quota_health_endpoint"), True):
+        try:
+            return call_cpa_quota_health(config, env)
+        except Exception as exc:
+            fallback_note = str(exc)[:180]
+    else:
+        fallback_note = ""
+
+    accounts = call_wham_usages(config, env)
+    result = evaluate_quota(config, accounts)
+    result["quota_health_source"] = "python_guard_fallback"
+    if fallback_note:
+        result["quota_health_endpoint_error"] = fallback_note
+    return result
 
 
 def number(value: Any) -> float | None:
@@ -993,8 +1039,7 @@ def main() -> int:
     config = deep_merge(config, load_option_overrides(db))
 
     try:
-        accounts = call_wham_usages(config, env)
-        result = evaluate_quota(config, accounts)
+        result = call_quota_health(config, env)
         state["failure_count"] = 0
         state["last_success_at"] = int(time.time())
         state["last_error"] = None

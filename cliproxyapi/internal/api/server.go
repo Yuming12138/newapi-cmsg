@@ -648,6 +648,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/quota-exceeded/switch-preview-model", s.mgmt.GetSwitchPreviewModel)
 		mgmt.PUT("/quota-exceeded/switch-preview-model", s.mgmt.PutSwitchPreviewModel)
 		mgmt.PATCH("/quota-exceeded/switch-preview-model", s.mgmt.PutSwitchPreviewModel)
+		mgmt.GET("/quota-health", s.mgmt.GetQuotaHealth)
 		mgmt.POST("/reset-quota", s.mgmt.ResetQuota)
 		mgmt.POST("/consume-codex-reset-credit", s.mgmt.ConsumeCodexResetCredit)
 
