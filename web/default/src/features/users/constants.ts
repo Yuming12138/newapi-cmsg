@@ -129,6 +129,7 @@ export const ERROR_MESSAGES = {
   CREATE_FAILED: 'Failed to create user',
   UPDATE_FAILED: 'Failed to update user',
   DELETE_FAILED: 'Failed to delete user',
+  BATCH_DELETE_FAILED: 'Failed to delete users',
 } as const
 
 // ============================================================================

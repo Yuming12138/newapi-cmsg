@@ -103,6 +103,11 @@ export const STATIC_I18N_KEYS = [
   'Failed to create user',
   'Failed to update user',
   'Failed to delete user',
+  'Failed to delete users',
+  'Delete selected users',
+  'Delete {{count}} user(s)?',
+  'Successfully deleted {{count}} user(s)',
+  'You are about to permanently delete {{count}} user(s).',
   'No user selected',
 
   // Redemption codes

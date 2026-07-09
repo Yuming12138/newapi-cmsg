@@ -108,6 +108,16 @@ export async function deleteUser(id: number): Promise<ApiResponse> {
 }
 
 /**
+ * Batch delete multiple users (hard delete)
+ */
+export async function batchDeleteUsers(
+  ids: number[]
+): Promise<ApiResponse<number>> {
+  const res = await api.post('/api/user/batch', { ids })
+  return res.data
+}
+
+/**
  * Manage user (promote, demote, enable, disable, delete)
  */
 export async function manageUser(

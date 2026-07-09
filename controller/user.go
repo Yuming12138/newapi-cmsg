@@ -875,24 +875,85 @@ func DeleteUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	originUser, err := model.GetUserById(id, false)
-	if err != nil {
+	if err := hardDeleteUserAsAdmin(c, id); err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	common.ApiSuccess(c, nil)
+}
+
+type UserBatch struct {
+	Ids []int `json:"ids"`
+}
+
+func DeleteUserBatch(c *gin.Context) {
+	userBatch := UserBatch{}
+	if err := c.ShouldBindJSON(&userBatch); err != nil || len(userBatch.Ids) == 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	if len(userBatch.Ids) > 100 {
+		common.ApiErrorI18n(c, i18n.MsgBatchTooMany, map[string]any{"Max": 100})
+		return
+	}
+
+	seen := make(map[int]struct{}, len(userBatch.Ids))
+	ids := make([]int, 0, len(userBatch.Ids))
+	for _, id := range userBatch.Ids {
+		if id <= 0 {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		if err := validateAdminCanDeleteUser(c, id); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		ids = append(ids, id)
+	}
+
+	deleted := 0
+	for _, id := range ids {
+		if err := hardDeleteUserById(id); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		deleted++
+	}
+
+	common.ApiSuccess(c, deleted)
+}
+
+func hardDeleteUserAsAdmin(c *gin.Context, id int) error {
+	if err := validateAdminCanDeleteUser(c, id); err != nil {
+		return err
+	}
+	return hardDeleteUserById(id)
+}
+
+func validateAdminCanDeleteUser(c *gin.Context, id int) error {
+	originUser, err := model.GetUserById(id, false)
+	if err != nil {
+		return err
+	}
 	myRole := c.GetInt("role")
 	if myRole <= originUser.Role {
-		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
-		return
+		return errors.New(common.TranslateMessage(c, i18n.MsgUserNoPermissionHigherLevel))
 	}
-	err = model.HardDeleteUserById(id)
-	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"message": "",
-		})
-		return
+	return nil
+}
+
+func hardDeleteUserById(id int) error {
+	if err := model.HardDeleteUserById(id); err != nil {
+		return err
 	}
+	if err := model.InvalidateUserTokensCache(id); err != nil {
+		common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", id, err.Error()))
+	}
+	return nil
 }
 
 func DeleteSelf(c *gin.Context) {
