@@ -40,3 +40,12 @@ func TestChannelHasCliproxyCPAGuard(t *testing.T) {
 	}))
 	require.False(t, channelHasCliproxyCPAGuard(nil))
 }
+
+func TestCliproxyCPAManagementURL(t *testing.T) {
+	t.Setenv("CLIPROXY_CPA_BASE_URL", "http://cliproxy-api:8317/")
+
+	endpoint, err := cliproxyCPAManagementURL("/v0/management/dispatch-audits")
+
+	require.NoError(t, err)
+	require.Equal(t, "http://cliproxy-api:8317/v0/management/dispatch-audits", endpoint.String())
+}

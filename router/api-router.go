@@ -261,6 +261,7 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.POST("/:id/codex/oauth/complete", controller.CompleteCodexOAuthForChannel)
 			channelRoute.POST("/:id/codex/refresh", controller.RefreshCodexChannelCredential)
 			channelRoute.GET("/:id/codex/usage", controller.GetCodexChannelUsage)
+			channelRoute.GET("/:id/cpa/dispatch_audits", controller.GetCliproxyCPADispatchAudits)
 			channelRoute.POST("/:id/cpa/reset_credit", controller.ConsumeCliproxyCPAResetCredit)
 			channelRoute.POST("/:id/cpa/reset_quota", controller.ResetCliproxyCPAQuotaState)
 			channelRoute.POST("/ollama/pull", controller.OllamaPullModel)

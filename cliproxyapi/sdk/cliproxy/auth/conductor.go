@@ -259,6 +259,10 @@ type Manager struct {
 	refreshLoop   *authAutoRefreshLoop
 
 	requestPrepareLocks sync.Map
+
+	dispatchAuditMu  sync.Mutex
+	dispatchAuditSeq uint64
+	dispatchAudits   []DispatchAuditRecord
 }
 
 // NewManager constructs a manager with optional custom selector and hook.
@@ -2273,10 +2277,15 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 	if len(normalized) == 0 {
 		return cliproxyexecutor.Response{}, &Error{Code: "provider_not_found", Message: "no provider supplied"}
 	}
+	ctx, audit := m.beginDispatchAudit(ctx, "execute", normalized, req.Model, false, opts)
 
 	_, maxRetryCredentials, maxWait := m.retrySettings()
 
 	var lastErr error
+	var finalErr error
+	defer func() {
+		m.finishDispatchAudit(audit, finalErr == nil, finalErr)
+	}()
 	for attempt := 0; ; attempt++ {
 		resp, errExec := m.executeMixedOnce(ctx, normalized, req, opts, maxRetryCredentials)
 		if errExec == nil {
@@ -2288,20 +2297,24 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 			break
 		}
 		if errWait := waitForCooldown(ctx, wait); errWait != nil {
+			finalErr = errWait
 			return cliproxyexecutor.Response{}, errWait
 		}
 	}
 	if lastErr != nil {
 		if hasAntigravityProvider(normalized) && shouldAttemptAntigravityCreditsFallback(m, lastErr, normalized) {
 			if resp, ok, errCredits := m.tryAntigravityCreditsExecute(ctx, req, opts); errCredits != nil {
+				finalErr = errCredits
 				return cliproxyexecutor.Response{}, errCredits
 			} else if ok {
 				return resp, nil
 			}
 		}
+		finalErr = lastErr
 		return cliproxyexecutor.Response{}, lastErr
 	}
-	return cliproxyexecutor.Response{}, &Error{Code: "auth_not_found", Message: "no auth available"}
+	finalErr = &Error{Code: "auth_not_found", Message: "no auth available"}
+	return cliproxyexecutor.Response{}, finalErr
 }
 
 // It supports multiple providers for the same model and round-robins the starting provider per model.
@@ -2310,10 +2323,15 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 	if len(normalized) == 0 {
 		return cliproxyexecutor.Response{}, &Error{Code: "provider_not_found", Message: "no provider supplied"}
 	}
+	ctx, audit := m.beginDispatchAudit(ctx, "count_tokens", normalized, req.Model, false, opts)
 
 	_, maxRetryCredentials, maxWait := m.retrySettings()
 
 	var lastErr error
+	var finalErr error
+	defer func() {
+		m.finishDispatchAudit(audit, finalErr == nil, finalErr)
+	}()
 	for attempt := 0; ; attempt++ {
 		resp, errExec := m.executeCountMixedOnce(ctx, normalized, req, opts, maxRetryCredentials)
 		if errExec == nil {
@@ -2325,13 +2343,16 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 			break
 		}
 		if errWait := waitForCooldown(ctx, wait); errWait != nil {
+			finalErr = errWait
 			return cliproxyexecutor.Response{}, errWait
 		}
 	}
 	if lastErr != nil {
+		finalErr = lastErr
 		return cliproxyexecutor.Response{}, lastErr
 	}
-	return cliproxyexecutor.Response{}, &Error{Code: "auth_not_found", Message: "no auth available"}
+	finalErr = &Error{Code: "auth_not_found", Message: "no auth available"}
+	return cliproxyexecutor.Response{}, finalErr
 }
 
 // ExecuteStream performs a streaming execution using the configured selector and executor.
@@ -2341,6 +2362,7 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 	if len(normalized) == 0 {
 		return nil, &Error{Code: "provider_not_found", Message: "no provider supplied"}
 	}
+	ctx, audit := m.beginDispatchAudit(ctx, "stream", normalized, req.Model, true, opts)
 
 	_, maxRetryCredentials, maxWait := m.retrySettings()
 
@@ -2348,7 +2370,7 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 	for attempt := 0; ; attempt++ {
 		result, errStream := m.executeStreamMixedOnce(ctx, normalized, req, opts, maxRetryCredentials)
 		if errStream == nil {
-			return result, nil
+			return m.wrapDispatchAuditStreamResult(ctx, audit, result), nil
 		}
 		lastErr = errStream
 		wait, shouldRetry := m.shouldRetryAfterError(errStream, attempt, normalized, req.Model, maxWait)
@@ -2356,24 +2378,29 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 			break
 		}
 		if errWait := waitForCooldown(ctx, wait); errWait != nil {
+			m.finishDispatchAudit(audit, false, errWait)
 			return nil, errWait
 		}
 	}
 	if lastErr != nil {
 		if hasAntigravityProvider(normalized) && shouldAttemptAntigravityCreditsFallback(m, lastErr, normalized) {
 			if result, ok, errCredits := m.tryAntigravityCreditsExecuteStream(ctx, req, opts); errCredits != nil {
+				m.finishDispatchAudit(audit, false, errCredits)
 				return nil, errCredits
 			} else if ok {
-				return result, nil
+				return m.wrapDispatchAuditStreamResult(ctx, audit, result), nil
 			}
 		}
 		var bootstrapErr *streamBootstrapError
 		if errors.As(lastErr, &bootstrapErr) && bootstrapErr != nil {
-			return streamErrorResult(bootstrapErr.Headers(), bootstrapErr.cause), nil
+			return m.wrapDispatchAuditStreamResult(ctx, audit, streamErrorResult(bootstrapErr.Headers(), bootstrapErr.cause)), nil
 		}
+		m.finishDispatchAudit(audit, false, lastErr)
 		return nil, lastErr
 	}
-	return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
+	finalErr := &Error{Code: "auth_not_found", Message: "no auth available"}
+	m.finishDispatchAudit(audit, false, finalErr)
+	return nil, finalErr
 }
 
 type requestToFormatResolver interface {
@@ -2500,6 +2527,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		entry := logEntryWithRequestID(ctx)
 		debugLogAuthSelection(entry, auth, provider, req.Model)
 		publishSelectedAuthMetadata(opts.Metadata, auth.ID)
+		m.recordDispatchAuditSelection(ctx, auth, provider, routeModel)
 
 		tried[auth.ID] = struct{}{}
 		execCtx := ctx
@@ -2602,6 +2630,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		entry := logEntryWithRequestID(ctx)
 		debugLogAuthSelection(entry, auth, provider, req.Model)
 		publishSelectedAuthMetadata(opts.Metadata, auth.ID)
+		m.recordDispatchAuditSelection(ctx, auth, provider, routeModel)
 
 		tried[auth.ID] = struct{}{}
 		execCtx := ctx
@@ -2704,6 +2733,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		entry := logEntryWithRequestID(ctx)
 		debugLogAuthSelection(entry, auth, provider, req.Model)
 		publishSelectedAuthMetadata(opts.Metadata, auth.ID)
+		m.recordDispatchAuditSelection(ctx, auth, provider, routeModel)
 
 		tried[auth.ID] = struct{}{}
 		execCtx := ctx
@@ -3497,6 +3527,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	if result.AuthID == "" {
 		return
 	}
+	m.recordDispatchAuditResult(ctx, result)
 
 	shouldResumeModel := false
 	shouldSuspendModel := false

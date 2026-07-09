@@ -88,6 +88,61 @@ export type CodexCredentialRefreshResponse = {
   }
 }
 
+export type CliproxyCPADispatchAuditError = {
+  code?: string
+  message?: string
+  http_status?: number
+}
+
+export type CliproxyCPADispatchAuditCandidate = {
+  auth_index?: string
+  account?: string
+  provider?: string
+  state?: string
+  reason?: string
+  schedulable?: boolean
+  priority?: number
+  reset_at?: string
+}
+
+export type CliproxyCPADispatchAuditAttempt = {
+  auth_index?: string
+  account?: string
+  provider?: string
+  model?: string
+  started_at?: string
+  finished_at?: string
+  duration_ms?: number
+  success?: boolean
+  error?: CliproxyCPADispatchAuditError
+}
+
+export type CliproxyCPADispatchAuditRecord = {
+  id?: number
+  request_id?: string
+  operation?: string
+  providers?: string[]
+  model?: string
+  stream?: boolean
+  started_at?: string
+  finished_at?: string
+  duration_ms?: number
+  first_payload_ms?: number
+  success?: boolean
+  error?: CliproxyCPADispatchAuditError
+  candidates?: CliproxyCPADispatchAuditCandidate[]
+  attempts?: CliproxyCPADispatchAuditAttempt[]
+}
+
+export type CliproxyCPADispatchAuditsResponse = {
+  success: boolean
+  message?: string
+  upstream_status?: number
+  data?: {
+    dispatches?: CliproxyCPADispatchAuditRecord[]
+  }
+}
+
 // ============================================================================
 // Base Channel CRUD Operations
 // ============================================================================
@@ -316,6 +371,22 @@ export async function getCodexUsage(
     disableDuplicate: true,
   }
   const res = await api.get(`/api/channel/${channelId}/codex/usage`, config)
+  return res.data
+}
+
+export async function getCliproxyCPADispatchAudits(
+  channelId: number,
+  limit = 8
+): Promise<CliproxyCPADispatchAuditsResponse> {
+  const config: ExtendedApiConfig = {
+    skipBusinessError: true,
+    disableDuplicate: true,
+    params: { limit },
+  }
+  const res = await api.get(
+    `/api/channel/${channelId}/cpa/dispatch_audits`,
+    config
+  )
   return res.data
 }
 

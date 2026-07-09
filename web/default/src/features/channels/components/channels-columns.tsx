@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 /* eslint-disable react-refresh/only-export-components */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { type ColumnDef } from '@tanstack/react-table'
 import {
@@ -56,8 +56,10 @@ import {
 } from '@/components/status-badge'
 import {
   consumeCliproxyCPAResetCredit,
+  getCliproxyCPADispatchAudits,
   getCodexUsage,
   resetCliproxyCPAQuotaState,
+  type CliproxyCPADispatchAuditRecord,
 } from '../api'
 import { CHANNEL_STATUS_CONFIG, MODEL_FETCHABLE_TYPES } from '../constants'
 import {
@@ -1118,6 +1120,200 @@ function CliproxyCPABucketDetails({
   )
 }
 
+function formatDispatchAuditMillis(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  if (value < 1000) return `${Math.max(0, Math.round(value))}ms`
+  const seconds = value / 1000
+  return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`
+}
+
+function formatDispatchAuditTimestamp(value: string | null | undefined): string {
+  const timestamp = timestampValue(value)
+  return timestamp == null ? '-' : formatCompactTimestamp(timestamp)
+}
+
+function dispatchAuditErrorLabel(
+  error: CliproxyCPADispatchAuditRecord['error']
+): string | null {
+  if (!error) return null
+  if (error.message && error.message.trim() !== '') return error.message
+  if (error.code && error.code.trim() !== '') return error.code
+  return error.http_status == null ? null : `HTTP ${error.http_status}`
+}
+
+function dispatchAuditStateLabel(
+  state: string | null | undefined,
+  reason: string | null | undefined
+): string {
+  const normalized = (state || reason || '').trim()
+  if (normalized === 'available') return '可用'
+  if (normalized === 'manual_disabled') return '手动禁用'
+  if (normalized === 'quota_7d_exhausted') return '7d 用完'
+  if (normalized === 'quota_5h_exhausted') return '5h 用完'
+  if (normalized === 'protected_reserve') return '低水位保护'
+  if (normalized === 'auth_invalid') return '登录失效'
+  if (normalized === 'cooldown') return '冷却'
+  if (normalized === 'unsupported_model') return '不支持模型'
+  if (normalized === 'free_tier_blocked') return '免费号拦截'
+  if (normalized === 'blocked') return '阻塞'
+  if (normalized === 'skipped') return reason || '跳过'
+  return normalized || '-'
+}
+
+function dispatchAuditAccountLabel(
+  value: { account?: string; auth_index?: string; provider?: string } | undefined
+): string {
+  if (!value) return '-'
+  if (value.account && value.account.trim() !== '') return value.account
+  if (value.auth_index && value.auth_index.trim() !== '') {
+    return `account ${value.auth_index.slice(-6)}`
+  }
+  return value.provider || '-'
+}
+
+function dispatchAuditRequestLabel(audit: CliproxyCPADispatchAuditRecord): string {
+  if (audit.request_id && audit.request_id.trim() !== '') {
+    return audit.request_id.slice(-8)
+  }
+  return audit.id == null ? '-' : `#${audit.id}`
+}
+
+function CliproxyCPADispatchAuditDetails({
+  channelId,
+}: {
+  channelId: number
+}) {
+  const [reloadKey, setReloadKey] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [audits, setAudits] = useState<CliproxyCPADispatchAuditRecord[]>([])
+
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    setError(null)
+    getCliproxyCPADispatchAudits(channelId, 8)
+      .then((res) => {
+        if (!active) return
+        if (!res.success) {
+          throw new Error(res.message || '读取 CPA 调度记录失败')
+        }
+        setAudits(Array.isArray(res.data?.dispatches) ? res.data.dispatches : [])
+      })
+      .catch((err: unknown) => {
+        if (!active) return
+        setError(err instanceof Error ? err.message : '读取 CPA 调度记录失败')
+        setAudits([])
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [channelId, reloadKey])
+
+  return (
+    <div className='bg-background border-border space-y-2 rounded-md border p-2 shadow-sm'>
+      <div className='flex items-center justify-between gap-2'>
+        <div>
+          <p className='text-xs font-semibold'>最近调度</p>
+          <p className='text-foreground/70 text-[11px]'>
+            请求级账号选择与首包耗时
+          </p>
+        </div>
+        <Button
+          type='button'
+          variant='outline'
+          size='xs'
+          disabled={loading}
+          className='h-6 px-1.5 text-[11px]'
+          onClick={(event: React.MouseEvent<HTMLButtonElement>) => {
+            event.preventDefault()
+            event.stopPropagation()
+            setReloadKey((value) => value + 1)
+          }}
+        >
+          {loading ? '读取中' : '刷新'}
+        </Button>
+      </div>
+      {error && <p className='text-destructive text-[11px]'>{error}</p>}
+      {!loading && !error && audits.length === 0 && (
+        <p className='text-foreground/70 text-[11px]'>
+          暂无记录，新的 CPA 请求完成后会显示在这里。
+        </p>
+      )}
+      <div className='space-y-1.5'>
+        {audits.slice(0, 5).map((audit) => {
+          const attempts = audit.attempts ?? []
+          const selected =
+            attempts.find((attempt) => attempt.success === true) ??
+            attempts[attempts.length - 1]
+          const skipped = (audit.candidates ?? [])
+            .filter((candidate) => candidate.schedulable === false)
+            .slice(0, 2)
+          const errorLabel = dispatchAuditErrorLabel(
+            audit.error ?? selected?.error
+          )
+          return (
+            <div
+              key={audit.id ?? audit.request_id ?? `${audit.started_at}-${audit.model}`}
+              className='bg-muted/30 border-border/80 space-y-1 rounded border p-1.5'
+            >
+              <div className='flex items-start justify-between gap-2'>
+                <div className='min-w-0'>
+                  <p className='text-foreground truncate text-[11px] font-medium'>
+                    {audit.model || selected?.model || '-'}
+                  </p>
+                  <p className='text-foreground/70 text-[10px]'>
+                    {formatDispatchAuditTimestamp(audit.started_at)} · req{' '}
+                    {dispatchAuditRequestLabel(audit)}
+                  </p>
+                </div>
+                <div className='shrink-0 text-right text-[10px] tabular-nums'>
+                  <p
+                    className={
+                      audit.success === false
+                        ? 'text-destructive font-semibold'
+                        : 'text-foreground font-semibold'
+                    }
+                  >
+                    首包 {formatDispatchAuditMillis(audit.first_payload_ms)}
+                  </p>
+                  <p className='text-foreground/70'>
+                    总耗时 {formatDispatchAuditMillis(audit.duration_ms)}
+                  </p>
+                </div>
+              </div>
+              <div className='text-foreground/70 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px]'>
+                <span>尝试 {attempts.length}</span>
+                <span>选中 {dispatchAuditAccountLabel(selected)}</span>
+                {selected?.provider && <span>{selected.provider}</span>}
+              </div>
+              {skipped.length > 0 && (
+                <p className='text-foreground/70 text-[10px]'>
+                  跳过{' '}
+                  {skipped
+                    .map(
+                      (candidate) =>
+                        `${dispatchAuditAccountLabel(candidate)} ${dispatchAuditStateLabel(candidate.state, candidate.reason)}`
+                    )
+                    .join('；')}
+                </p>
+              )}
+              {errorLabel && (
+                <p className='text-destructive line-clamp-2 text-[10px]'>
+                  {errorLabel}
+                </p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function CliproxyCPAQuotaDetails({
   meta,
   channelId,
@@ -1223,6 +1419,7 @@ function CliproxyCPAQuotaDetails({
           </div>
         </div>
       )}
+      <CliproxyCPADispatchAuditDetails channelId={channelId} />
       <div className='text-foreground/70 flex justify-between gap-2 text-[11px]'>
         <span>最近刷新</span>
         <span className='tabular-nums'>
