@@ -85,7 +85,7 @@ const (
 	refreshIneffectiveBackoff = 30 * time.Second
 	quotaBackoffBase          = time.Second
 	quotaBackoffMax           = 30 * time.Minute
-	transientErrorCooldown    = time.Minute
+	transientErrorCooldown    = 10 * time.Second
 )
 
 var quotaCooldownDisabled atomic.Bool
@@ -97,7 +97,7 @@ func SetQuotaCooldownDisabled(disable bool) {
 }
 
 // SetTransientErrorCooldownSeconds configures cooldowns for 408/500/502/503/504.
-// 0 keeps the legacy default; negative values disable transient error cooldowns.
+// 0 keeps the default; negative values disable transient error cooldowns.
 func SetTransientErrorCooldownSeconds(seconds int) {
 	transientErrorCooldownSeconds.Store(int64(seconds))
 }
