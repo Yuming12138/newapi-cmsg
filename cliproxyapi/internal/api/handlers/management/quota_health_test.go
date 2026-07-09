@@ -45,7 +45,7 @@ func TestEvaluateQuotaHealthAccountPlusWeeklyExhausted(t *testing.T) {
 		Provider:   "codex",
 		Status:     coreauth.StatusActive,
 		Attributes: map[string]string{"plan_type": "plus"},
-	}, quotaHealthTestUsage(10, 100))
+	}, quotaHealthTestUsage(10, 100), nil)
 	if err != nil {
 		t.Fatalf("evaluateQuotaHealthAccount() error = %v", err)
 	}
@@ -65,7 +65,7 @@ func TestEvaluateQuotaHealthAccountProProtectedHeadroom(t *testing.T) {
 		Provider:   "codex",
 		Status:     coreauth.StatusActive,
 		Attributes: map[string]string{"plan_type": "pro"},
-	}, quotaHealthTestUsage(4.75, 22.0))
+	}, quotaHealthTestUsage(4.75, 22.0), nil)
 	if err != nil {
 		t.Fatalf("evaluateQuotaHealthAccount() error = %v", err)
 	}
@@ -90,7 +90,7 @@ func TestEvaluateQuotaHealthAggregatesBuckets(t *testing.T) {
 		Provider:   "codex",
 		Status:     coreauth.StatusActive,
 		Attributes: map[string]string{"plan_type": "plus"},
-	}, quotaHealthTestUsage(100, 100))
+	}, quotaHealthTestUsage(100, 100), nil)
 	if errPlus != nil {
 		t.Fatalf("plus evaluate error = %v", errPlus)
 	}
@@ -98,7 +98,7 @@ func TestEvaluateQuotaHealthAggregatesBuckets(t *testing.T) {
 		Provider:   "codex",
 		Status:     coreauth.StatusActive,
 		Attributes: map[string]string{"plan_type": "pro"},
-	}, quotaHealthTestUsage(4.75, 22.0))
+	}, quotaHealthTestUsage(4.75, 22.0), nil)
 	if errPro != nil {
 		t.Fatalf("pro evaluate error = %v", errPro)
 	}
@@ -116,6 +116,78 @@ func TestEvaluateQuotaHealthAggregatesBuckets(t *testing.T) {
 	windows, ok := result["windows"].(map[string]any)
 	if !ok || windows["5h"] == nil || windows["7d"] == nil {
 		t.Fatalf("windows = %#v, want 5h and 7d aggregate entries", result["windows"])
+	}
+}
+
+func TestEvaluateQuotaHealthAccountResetCreditsUsesReadOnlyEndpointPayload(t *testing.T) {
+	resetCredits := map[string]any{
+		"available_count":    float64(2),
+		"total_earned_count": float64(5),
+		"credits": []any{
+			map[string]any{
+				"id":         "credit-later-abcdef12",
+				"status":     "available",
+				"reset_type": "codex_rate_limits",
+				"expires_at": "2030-01-03T00:00:00Z",
+			},
+			map[string]any{
+				"id":         "credit-earlier-12345678",
+				"status":     "available",
+				"reset_type": "codex_rate_limits",
+				"expires_at": "2030-01-02T00:00:00Z",
+			},
+			map[string]any{
+				"id":         "credit-redeemed-99999999",
+				"status":     "redeemed",
+				"reset_type": "codex_rate_limits",
+				"expires_at": "2030-01-01T00:00:00Z",
+			},
+		},
+	}
+
+	account, err := (&Handler{}).evaluateQuotaHealthAccount(defaultQuotaHealthTestConfig(), &coreauth.Auth{
+		Provider:   "codex",
+		Status:     coreauth.StatusActive,
+		Attributes: map[string]string{"plan_type": "plus"},
+	}, quotaHealthTestUsage(10, 10), resetCredits)
+	if err != nil {
+		t.Fatalf("evaluateQuotaHealthAccount() error = %v", err)
+	}
+	if got := account["reset_credits_available"]; got != 2 {
+		t.Fatalf("reset_credits_available = %#v, want 2", got)
+	}
+	if got := account["reset_credits_total_earned"]; got != 5 {
+		t.Fatalf("reset_credits_total_earned = %#v, want 5", got)
+	}
+	if got := account["reset_credits_earliest_expires_at"]; got != "2030-01-02T00:00:00Z" {
+		t.Fatalf("reset_credits_earliest_expires_at = %#v", got)
+	}
+	credits, ok := account["reset_credits"].([]map[string]any)
+	if !ok || len(credits) != 2 {
+		t.Fatalf("reset_credits = %#v, want two available credits", account["reset_credits"])
+	}
+	if credits[0]["id_suffix"] != "12345678" || credits[1]["id_suffix"] != "abcdef12" {
+		t.Fatalf("reset_credits sort/id suffix = %#v", credits)
+	}
+}
+
+func TestEvaluateQuotaHealthAccountResetCreditsFallsBackToUsageCount(t *testing.T) {
+	usage := quotaHealthTestUsage(10, 10)
+	usage["rate_limit_reset_credits"] = map[string]any{"available_count": float64(3)}
+
+	account, err := (&Handler{}).evaluateQuotaHealthAccount(defaultQuotaHealthTestConfig(), &coreauth.Auth{
+		Provider:   "codex",
+		Status:     coreauth.StatusActive,
+		Attributes: map[string]string{"plan_type": "plus"},
+	}, usage, nil)
+	if err != nil {
+		t.Fatalf("evaluateQuotaHealthAccount() error = %v", err)
+	}
+	if got := account["reset_credits_available"]; got != 3 {
+		t.Fatalf("reset_credits_available = %#v, want 3", got)
+	}
+	if _, ok := account["reset_credits_earliest_expires_at"]; ok {
+		t.Fatalf("reset_credits_earliest_expires_at should be absent when only usage fallback is available")
 	}
 }
 

@@ -153,6 +153,7 @@ type CliproxyCPAQuotaAccount = {
   error: string | null
   planType: string | null
   resetCreditsAvailable: number | null
+  resetCreditsEarliestExpiresAt: number | null
   balanceUnits: number | null
   usableBalanceUnits: number | null
   fiveHour: CliproxyCPAQuotaWindow | null
@@ -395,6 +396,9 @@ function parseCliproxyCPAQuotaAccount(
     error: typeof item.error === 'string' ? item.error : null,
     planType: typeof item.plan_type === 'string' ? item.plan_type : null,
     resetCreditsAvailable: numberValue(item.reset_credits_available),
+    resetCreditsEarliestExpiresAt: timestampValue(
+      item.reset_credits_earliest_expires_at
+    ),
     balanceUnits: numberValue(item.balance_units),
     usableBalanceUnits: numberValue(item.usable_balance_units),
     fiveHour: parseCliproxyCPAQuotaWindow(windows?.['5h'], null),
@@ -535,13 +539,20 @@ function formatResetCreditsAvailable(value: number | null | undefined): string {
 
 function CliproxyCPAResetCreditsText({
   value,
+  earliestExpiresAt,
 }: {
   value: number | null | undefined
+  earliestExpiresAt?: number | null
 }) {
+  const expiry =
+    earliestExpiresAt != null && Number.isFinite(earliestExpiresAt)
+      ? formatCompactTimestamp(earliestExpiresAt)
+      : null
   return (
     <span>
       重置次数{' '}
       <span className='tabular-nums'>{formatResetCreditsAvailable(value)}</span>
+      {expiry ? <span> · 最早到期 {expiry}</span> : null}
     </span>
   )
 }
@@ -1018,6 +1029,7 @@ function CliproxyCPAAccountRow({
               <p className='text-foreground/70 text-[10px]'>
                 <CliproxyCPAResetCreditsText
                   value={account.resetCreditsAvailable}
+                  earliestExpiresAt={account.resetCreditsEarliestExpiresAt}
                 />
               </p>
             </div>
@@ -1025,6 +1037,7 @@ function CliproxyCPAAccountRow({
             <p className='text-foreground/70 text-[10px]'>
               <CliproxyCPAResetCreditsText
                 value={account.resetCreditsAvailable}
+                earliestExpiresAt={account.resetCreditsEarliestExpiresAt}
               />
             </p>
           )}

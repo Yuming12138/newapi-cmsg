@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,9 +19,10 @@ import (
 )
 
 const (
-	codexQuotaHealthUsageURL = "https://chatgpt.com/backend-api/wham/usage"
-	quotaHealthWindow5h      = 5 * 60 * 60
-	quotaHealthWindow7d      = 7 * 24 * 60 * 60
+	codexQuotaHealthUsageURL        = "https://chatgpt.com/backend-api/wham/usage"
+	codexQuotaHealthResetCreditsURL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+	quotaHealthWindow5h             = 5 * 60 * 60
+	quotaHealthWindow7d             = 7 * 24 * 60 * 60
 )
 
 type quotaHealthConfig struct {
@@ -80,7 +82,8 @@ func (h *Handler) GetQuotaHealth(c *gin.Context) {
 			continue
 		}
 
-		account, errEvaluate := h.evaluateQuotaHealthAccount(cfg, auth, usage)
+		resetCredits, errResetCredits := h.fetchCodexResetCredits(c.Request.Context(), auth)
+		account, errEvaluate := h.evaluateQuotaHealthAccount(cfg, auth, usage, resetCredits)
 		if errEvaluate != nil {
 			base["ok"] = false
 			base["schedulable"] = false
@@ -90,6 +93,9 @@ func (h *Handler) GetQuotaHealth(c *gin.Context) {
 			base["state"] = authScheduleStateUnknown
 			accounts = append(accounts, base)
 			continue
+		}
+		if errResetCredits != nil {
+			account["reset_credits_error"] = trimQuotaHealthError(errResetCredits)
 		}
 		accounts = append(accounts, account)
 		successful++
@@ -189,6 +195,14 @@ func (h *Handler) quotaHealthBaseAccount(auth *coreauth.Auth, cfg quotaHealthCon
 }
 
 func (h *Handler) fetchCodexWhamUsage(ctx context.Context, auth *coreauth.Auth) (map[string]any, error) {
+	return h.fetchCodexWhamJSON(ctx, auth, codexQuotaHealthUsageURL, "wham_usage")
+}
+
+func (h *Handler) fetchCodexResetCredits(ctx context.Context, auth *coreauth.Auth) (map[string]any, error) {
+	return h.fetchCodexWhamJSON(ctx, auth, codexQuotaHealthResetCreditsURL, "reset_credits")
+}
+
+func (h *Handler) fetchCodexWhamJSON(ctx context.Context, auth *coreauth.Auth, endpoint string, label string) (map[string]any, error) {
 	if auth == nil {
 		return nil, fmt.Errorf("auth is required")
 	}
@@ -204,7 +218,7 @@ func (h *Handler) fetchCodexWhamUsage(ctx context.Context, auth *coreauth.Auth) 
 		return nil, fmt.Errorf("auth token not found")
 	}
 
-	req, errReq := http.NewRequestWithContext(ctx, http.MethodGet, codexQuotaHealthUsageURL, nil)
+	req, errReq := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if errReq != nil {
 		return nil, errReq
 	}
@@ -212,6 +226,8 @@ func (h *Handler) fetchCodexWhamUsage(ctx context.Context, auth *coreauth.Auth) 
 	req.Header.Set("Chatgpt-Account-Id", accountID)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("originator", "Codex Desktop")
+	req.Header.Set("OAI-Product-Sku", "CODEX")
 	req.Header.Set("User-Agent", codexResetCreditUserAgent)
 
 	client := &http.Client{Transport: h.apiCallTransport(auth)}
@@ -226,20 +242,20 @@ func (h *Handler) fetchCodexWhamUsage(ctx context.Context, auth *coreauth.Auth) 
 		return nil, errRead
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("wham_usage_http_%d", resp.StatusCode)
+		return nil, fmt.Errorf("%s_http_%d", label, resp.StatusCode)
 	}
 
-	var usage map[string]any
-	if errUnmarshal := json.Unmarshal(body, &usage); errUnmarshal != nil {
-		return nil, fmt.Errorf("wham_usage_invalid_json: %w", errUnmarshal)
+	var payload map[string]any
+	if errUnmarshal := json.Unmarshal(body, &payload); errUnmarshal != nil {
+		return nil, fmt.Errorf("%s_invalid_json: %w", label, errUnmarshal)
 	}
-	if usage == nil {
-		return nil, fmt.Errorf("wham_usage_payload_not_object")
+	if payload == nil {
+		return nil, fmt.Errorf("%s_payload_not_object", label)
 	}
-	return usage, nil
+	return payload, nil
 }
 
-func (h *Handler) evaluateQuotaHealthAccount(cfg quotaHealthConfig, auth *coreauth.Auth, usage map[string]any) (map[string]any, error) {
+func (h *Handler) evaluateQuotaHealthAccount(cfg quotaHealthConfig, auth *coreauth.Auth, usage map[string]any, resetCredits map[string]any) (map[string]any, error) {
 	windows, errWindows := quotaHealthWindows(usage)
 	if errWindows != nil {
 		return nil, errWindows
@@ -279,7 +295,14 @@ func (h *Handler) evaluateQuotaHealthAccount(cfg quotaHealthConfig, auth *coreau
 	if reason != "" {
 		account["reason"] = reason
 	}
-	account["reset_credits_available"] = quotaHealthResetCreditsAvailable(usage)
+	account["reset_credits_available"] = quotaHealthResetCreditsAvailable(resetCredits, usage)
+	if resetCreditItems, earliestExpiresAt := quotaHealthResetCredits(resetCredits); len(resetCreditItems) > 0 {
+		account["reset_credits"] = resetCreditItems
+		account["reset_credits_earliest_expires_at"] = earliestExpiresAt
+	}
+	if totalEarned, ok := quotaHealthNumber(quotaHealthFirstNonEmpty(resetCredits["total_earned_count"], resetCredits["totalEarnedCount"])); ok {
+		account["reset_credits_total_earned"] = int(totalEarned)
+	}
 	account["windows"] = windows
 	account["rate_limit_reached_type"] = quotaHealthFirstNonEmpty(usage["rate_limit_reached_type"], usage["rateLimitReachedType"])
 	account["quota_exhausted_window"] = nil
@@ -549,6 +572,10 @@ func quotaHealthAccountSummaries(accounts []map[string]any) []map[string]any {
 		"remaining_share_percent",
 		"raw_remaining_percent",
 		"reset_credits_available",
+		"reset_credits_earliest_expires_at",
+		"reset_credits_total_earned",
+		"reset_credits",
+		"reset_credits_error",
 		"windows",
 	}
 	out := make([]map[string]any, 0, len(accounts))
@@ -701,8 +728,10 @@ func sumQuotaHealthFloat(accounts []map[string]any, key string) float64 {
 	return sum
 }
 
-func quotaHealthResetCreditsAvailable(usage map[string]any) any {
+func quotaHealthResetCreditsAvailable(resetCredits map[string]any, usage map[string]any) any {
 	credits := quotaHealthFirstNonEmpty(
+		resetCredits["available_count"],
+		resetCredits["availableCount"],
 		quotaHealthNested(usage, "rate_limit_reset_credits", "available_count"),
 		quotaHealthNested(usage, "rateLimitResetCredits", "availableCount"),
 	)
@@ -714,6 +743,62 @@ func quotaHealthResetCreditsAvailable(usage map[string]any) any {
 		return 0
 	}
 	return int(value)
+}
+
+func quotaHealthResetCredits(resetCredits map[string]any) ([]map[string]any, string) {
+	rawCredits, _ := quotaHealthFirstNonEmpty(resetCredits["credits"], resetCredits["Credits"]).([]any)
+	if len(rawCredits) == 0 {
+		return nil, ""
+	}
+	credits := make([]map[string]any, 0, len(rawCredits))
+	for _, raw := range rawCredits {
+		credit := quotaHealthMap(raw)
+		if credit == nil {
+			continue
+		}
+		status := strings.TrimSpace(fmt.Sprint(quotaHealthFirstNonEmpty(credit["status"], credit["Status"])))
+		if !strings.EqualFold(status, "available") {
+			continue
+		}
+		expiresAt := strings.TrimSpace(fmt.Sprint(quotaHealthFirstNonEmpty(credit["expires_at"], credit["expiresAt"])))
+		if expiresAt == "" || expiresAt == "<nil>" {
+			continue
+		}
+		item := map[string]any{
+			"status":     status,
+			"expires_at": expiresAt,
+		}
+		if resetType := strings.TrimSpace(fmt.Sprint(quotaHealthFirstNonEmpty(credit["reset_type"], credit["resetType"]))); resetType != "" && resetType != "<nil>" {
+			item["reset_type"] = resetType
+		}
+		if id := strings.TrimSpace(fmt.Sprint(quotaHealthFirstNonEmpty(credit["id"], credit["ID"]))); id != "" && id != "<nil>" {
+			if len(id) > 8 {
+				item["id_suffix"] = id[len(id)-8:]
+			} else {
+				item["id_suffix"] = id
+			}
+		}
+		credits = append(credits, item)
+	}
+	if len(credits) == 0 {
+		return nil, ""
+	}
+	sort.Slice(credits, func(i, j int) bool {
+		return quotaHealthTimeSortKey(credits[i]["expires_at"]).Before(quotaHealthTimeSortKey(credits[j]["expires_at"]))
+	})
+	earliest, _ := credits[0]["expires_at"].(string)
+	return credits, earliest
+}
+
+func quotaHealthTimeSortKey(value any) time.Time {
+	raw := strings.TrimSpace(fmt.Sprint(value))
+	if raw == "" || raw == "<nil>" {
+		return time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return parsed
+	}
+	return time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
 }
 
 func quotaHealthAccountIdentity(auth *coreauth.Auth) (string, string, string) {
