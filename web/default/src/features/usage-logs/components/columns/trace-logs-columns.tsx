@@ -209,16 +209,10 @@ function CPATraceInline({
 
   const attempts = audit.attempts ?? []
   const selectedLabel = cpaAuditAccountLabel(selected, sensitiveVisible)
-  const skippedText =
-    skipped.length === 0
-      ? '无'
-      : skipped
-          .slice(0, 3)
-          .map(
-            (candidate) =>
-              `${cpaAuditAccountLabel(candidate, sensitiveVisible)} ${cpaAuditStateLabel(candidate.state, candidate.reason)}`
-          )
-          .join('；')
+  const skippedItems = skipped.slice(0, 4).map((candidate) => ({
+    account: cpaAuditAccountLabel(candidate, sensitiveVisible),
+    reason: cpaAuditStateLabel(candidate.state, candidate.reason),
+  }))
   const summary = `CPA 选中 ${selectedLabel} · 尝试 ${attempts.length} · 跳过 ${skipped.length} · 首包 ${msToText(audit.first_payload_ms)}`
 
   return (
@@ -237,18 +231,60 @@ function CPATraceInline({
             {msToText(audit.duration_ms)}
           </div>
         </TooltipTrigger>
-        <TooltipContent className='max-w-[420px] space-y-1 text-xs'>
-          <div className='font-semibold'>CPA Trace</div>
-          <div>request_id: {audit.request_id || '-'}</div>
-          <div>模型: {audit.model || selected?.model || '-'}</div>
-          <div>选中: {selectedLabel}</div>
-          <div>尝试: {attempts.length}</div>
-          <div>跳过: {skippedText}</div>
-          <div>
-            首包: {msToText(audit.first_payload_ms)} · CPA总耗时:{' '}
-            {msToText(audit.duration_ms)} · NewAPI FRT: {msToText(other?.frt)}
+        <TooltipContent
+          side='bottom'
+          align='start'
+          className='block w-[380px] max-w-[calc(100vw-2rem)] space-y-2 whitespace-normal p-3 text-left text-xs leading-relaxed'
+        >
+          <div className='flex items-center justify-between gap-3'>
+            <span className='font-semibold'>CPA Trace</span>
+            <span className='text-background/70 font-mono'>
+              尝试 {attempts.length} / 跳过 {skipped.length}
+            </span>
           </div>
-          {errorLabel && <div className='text-destructive'>{errorLabel}</div>}
+          <div className='grid grid-cols-[72px_minmax(0,1fr)] gap-x-2 gap-y-1'>
+            <span className='text-background/70'>request_id</span>
+            <span className='break-all font-mono'>{audit.request_id || '-'}</span>
+            <span className='text-background/70'>模型</span>
+            <span className='break-words'>{audit.model || selected?.model || '-'}</span>
+            <span className='text-background/70'>选中</span>
+            <span className='break-words'>{selectedLabel}</span>
+            <span className='text-background/70'>耗时</span>
+            <span>
+              首包 {msToText(audit.first_payload_ms)} · CPA{' '}
+              {msToText(audit.duration_ms)} · NewAPI {msToText(other?.frt)}
+            </span>
+          </div>
+          <div className='border-background/20 border-t pt-2'>
+            <div className='text-background/70 mb-1'>跳过账号</div>
+            {skippedItems.length === 0 ? (
+              <div>无</div>
+            ) : (
+              <div className='space-y-1'>
+                {skippedItems.map((item, index) => (
+                  <div
+                    key={`${item.account}-${item.reason}-${index}`}
+                    className='grid grid-cols-[minmax(0,1fr)_auto] gap-2'
+                  >
+                    <span className='break-words'>{item.account}</span>
+                    <span className='text-background/70 whitespace-nowrap'>
+                      {item.reason}
+                    </span>
+                  </div>
+                ))}
+                {skipped.length > skippedItems.length && (
+                  <div className='text-background/70'>
+                    还有 {skipped.length - skippedItems.length} 个
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          {errorLabel && (
+            <div className='text-destructive break-words border-t pt-2'>
+              {errorLabel}
+            </div>
+          )}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
