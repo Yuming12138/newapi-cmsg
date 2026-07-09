@@ -213,20 +213,23 @@ function CPATraceInline({
     account: cpaAuditAccountLabel(candidate, sensitiveVisible),
     reason: cpaAuditStateLabel(candidate.state, candidate.reason),
   }))
-  const summary = `CPA 选中 ${selectedLabel} · 尝试 ${attempts.length} · 跳过 ${skipped.length} · 首包 ${msToText(audit.first_payload_ms)}`
 
   return (
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger
           render={
-            <div className='mt-1 max-w-[220px] cursor-help rounded border border-emerald-500/30 bg-emerald-500/5 px-1.5 py-1 text-[11px] leading-snug' />
+            <div className='mt-1 w-full max-w-[220px] min-w-0 cursor-help overflow-hidden rounded border border-emerald-500/30 bg-emerald-500/5 px-1.5 py-1 text-[11px] leading-snug' />
           }
         >
-          <div className='text-emerald-700 dark:text-emerald-300'>
-            {summary}
+          <div className='truncate text-emerald-700 dark:text-emerald-300'>
+            CPA 选中 {selectedLabel}
           </div>
-          <div className='text-muted-foreground/80'>
+          <div className='truncate text-emerald-700 dark:text-emerald-300'>
+            尝试 {attempts.length} · 跳过 {skipped.length} · 首包{' '}
+            {msToText(audit.first_payload_ms)}
+          </div>
+          <div className='text-muted-foreground/80 truncate'>
             NewAPI FRT {msToText(other?.frt)} / CPA 总耗时{' '}
             {msToText(audit.duration_ms)}
           </div>
