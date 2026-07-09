@@ -56,11 +56,15 @@ func TestGetDispatchAudits(t *testing.T) {
 	if _, errExec := manager.Execute(ctx, []string{"codex"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{}); errExec != nil {
 		t.Fatalf("Execute() error = %v", errExec)
 	}
+	ctxOther := logging.WithRequestID(context.Background(), "req-management-other")
+	if _, errExec := manager.Execute(ctxOther, []string{"codex"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{}); errExec != nil {
+		t.Fatalf("Execute(other) error = %v", errExec)
+	}
 
 	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: t.TempDir()}, manager)
 	rec := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(rec)
-	ginCtx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/dispatch-audits?limit=1", nil)
+	ginCtx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/dispatch-audits?request_id=req-management-audit&limit=1", nil)
 
 	h.GetDispatchAudits(ginCtx)
 

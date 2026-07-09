@@ -5,10 +5,29 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	common2 "github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestApplyUpstreamRequestID(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodPost, "https://example.com/v1/responses", nil)
+	applyUpstreamRequestID(req, &relaycommon.RelayInfo{RequestId: " req-new-api-1 "})
+
+	require.Equal(t, "req-new-api-1", req.Header.Get(common2.RequestIdKey))
+}
+
+func TestApplyUpstreamRequestIDSkipsEmpty(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodPost, "https://example.com/v1/responses", nil)
+	applyUpstreamRequestID(req, &relaycommon.RelayInfo{})
+
+	require.Empty(t, req.Header.Get(common2.RequestIdKey))
+}
 
 func TestProcessHeaderOverride_ChannelTestSkipsPassthroughRules(t *testing.T) {
 	t.Parallel()

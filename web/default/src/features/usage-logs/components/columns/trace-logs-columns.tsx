@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { type ColumnDef } from '@tanstack/react-table'
 import {
   Activity,
@@ -44,6 +45,10 @@ import {
 } from '@/components/ui/tooltip'
 import { DataTableColumnHeader } from '@/components/data-table'
 import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
+import {
+  getCliproxyCPADispatchAudits,
+  type CliproxyCPADispatchAuditRecord,
+} from '@/features/channels/api'
 import type { UsageLog } from '../../data/schema'
 import { formatModelName, parseLogOther } from '../../lib/format'
 import {
@@ -89,6 +94,165 @@ function traceStatusLabel(log: UsageLog, other: LogOtherData | null): string {
 function compactNumber(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '-'
   return value.toLocaleString()
+}
+
+function isCliproxyCPATraceLog(log: UsageLog): boolean {
+  if (!log.request_id || !log.channel) return false
+  const name = (log.channel_name || '').toLowerCase()
+  return name.includes('cliproxy') || name.includes('cpa')
+}
+
+function cpaAuditAccountLabel(
+  value:
+    | { account?: string; auth_index?: string; provider?: string }
+    | null
+    | undefined,
+  sensitiveVisible: boolean
+): string {
+  if (!value) return '-'
+  if (!sensitiveVisible) return '••••'
+  if (value.account && value.account.trim() !== '') return value.account
+  if (value.auth_index && value.auth_index.trim() !== '') {
+    return `account ${value.auth_index.slice(-6)}`
+  }
+  return value.provider || '-'
+}
+
+function cpaAuditStateLabel(
+  state: string | null | undefined,
+  reason: string | null | undefined
+): string {
+  const normalized = (state || reason || '').trim()
+  if (normalized === 'available') return '可用'
+  if (normalized === 'manual_disabled') return '手动禁用'
+  if (normalized === 'quota_7d_exhausted') return '7d 用完'
+  if (normalized === 'quota_5h_exhausted') return '5h 用完'
+  if (normalized === 'protected_reserve') return '低水位保护'
+  if (normalized === 'auth_invalid') return '登录失效'
+  if (normalized === 'cooldown') return '冷却'
+  if (normalized === 'unsupported_model') return '不支持模型'
+  if (normalized === 'free_tier_blocked') return '免费号拦截'
+  if (normalized === 'blocked') return '阻塞'
+  if (normalized === 'skipped') return reason || '跳过'
+  return normalized || '-'
+}
+
+function cpaAuditErrorLabel(
+  error: CliproxyCPADispatchAuditRecord['error']
+): string | null {
+  if (!error) return null
+  if (error.message && error.message.trim() !== '') return error.message
+  if (error.code && error.code.trim() !== '') return error.code
+  return error.http_status == null ? null : `HTTP ${error.http_status}`
+}
+
+function cpaAuditSelectedAttempt(audit: CliproxyCPADispatchAuditRecord) {
+  const attempts = audit.attempts ?? []
+  return (
+    attempts.find((attempt) => attempt.success === true) ??
+    attempts[attempts.length - 1]
+  )
+}
+
+function CPATraceInline({
+  log,
+  other,
+  sensitiveVisible,
+}: {
+  log: UsageLog
+  other: LogOtherData | null
+  sensitiveVisible: boolean
+}) {
+  const enabled = isCliproxyCPATraceLog(log)
+  const { data, isFetching, error } = useQuery({
+    queryKey: ['cliproxy-cpa-dispatch-audit', log.channel, log.request_id],
+    queryFn: () =>
+      getCliproxyCPADispatchAudits(log.channel, 1, log.request_id),
+    enabled,
+    staleTime: 5_000,
+    refetchOnWindowFocus: false,
+  })
+
+  if (!enabled) return null
+  const audit = data?.success ? data.data?.dispatches?.[0] : undefined
+  const selected = audit ? cpaAuditSelectedAttempt(audit) : undefined
+  const skipped = audit
+    ? (audit.candidates ?? []).filter(
+        (candidate) => candidate.schedulable === false
+      )
+    : []
+  const errorLabel = audit ? cpaAuditErrorLabel(audit.error ?? selected?.error) : null
+
+  if (isFetching && !audit) {
+    return (
+      <span className='text-muted-foreground/70 mt-1 text-[11px]'>
+        CPA Trace 读取中...
+      </span>
+    )
+  }
+
+  if (error || data?.success === false) {
+    return (
+      <span className='text-destructive mt-1 text-[11px]'>
+        CPA Trace 读取失败
+      </span>
+    )
+  }
+
+  if (!audit) {
+    return (
+      <span className='text-muted-foreground/70 mt-1 text-[11px]'>
+        CPA Trace 暂无匹配
+      </span>
+    )
+  }
+
+  const attempts = audit.attempts ?? []
+  const selectedLabel = cpaAuditAccountLabel(selected, sensitiveVisible)
+  const skippedText =
+    skipped.length === 0
+      ? '无'
+      : skipped
+          .slice(0, 3)
+          .map(
+            (candidate) =>
+              `${cpaAuditAccountLabel(candidate, sensitiveVisible)} ${cpaAuditStateLabel(candidate.state, candidate.reason)}`
+          )
+          .join('；')
+  const summary = `CPA 选中 ${selectedLabel} · 尝试 ${attempts.length} · 跳过 ${skipped.length} · 首包 ${msToText(audit.first_payload_ms)}`
+
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <div className='mt-1 max-w-[220px] cursor-help rounded border border-emerald-500/30 bg-emerald-500/5 px-1.5 py-1 text-[11px] leading-snug' />
+          }
+        >
+          <div className='text-emerald-700 dark:text-emerald-300'>
+            {summary}
+          </div>
+          <div className='text-muted-foreground/80'>
+            NewAPI FRT {msToText(other?.frt)} / CPA 总耗时{' '}
+            {msToText(audit.duration_ms)}
+          </div>
+        </TooltipTrigger>
+        <TooltipContent className='max-w-[420px] space-y-1 text-xs'>
+          <div className='font-semibold'>CPA Trace</div>
+          <div>request_id: {audit.request_id || '-'}</div>
+          <div>模型: {audit.model || selected?.model || '-'}</div>
+          <div>选中: {selectedLabel}</div>
+          <div>尝试: {attempts.length}</div>
+          <div>跳过: {skippedText}</div>
+          <div>
+            首包: {msToText(audit.first_payload_ms)} · CPA总耗时:{' '}
+            {msToText(audit.duration_ms)} · NewAPI FRT: {msToText(other?.frt)}
+          </div>
+          {errorLabel && <div className='text-destructive'>{errorLabel}</div>}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
 }
 
 function buildTraceContext(
@@ -330,6 +494,11 @@ export function useTraceLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                 {t('Affinity')}: {affinity.rule_name || '-'}
               </span>
             )}
+            <CPATraceInline
+              log={log}
+              other={other}
+              sensitiveVisible={sensitiveVisible}
+            />
           </div>
         )
       },

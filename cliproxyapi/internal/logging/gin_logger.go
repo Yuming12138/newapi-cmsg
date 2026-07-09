@@ -34,6 +34,15 @@ const (
 	creditsUsedKey = "__antigravity_credits_used__"
 )
 
+func requestIDFromHeaders(header http.Header) string {
+	for _, name := range []string{"X-Oneapi-Request-Id", "X-Request-Id", "X-Client-Request-Id"} {
+		if value := strings.TrimSpace(header.Get(name)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 // GinLogrusLogger returns a Gin middleware handler that logs HTTP requests and responses
 // using logrus. It captures request details including method, path, status code, latency,
 // client IP, and any error messages. Request ID is only added for AI API requests.
@@ -52,7 +61,10 @@ func GinLogrusLogger() gin.HandlerFunc {
 		// Only generate request ID for AI API paths
 		var requestID string
 		if isAIAPIPath(path) {
-			requestID = GenerateRequestID()
+			requestID = requestIDFromHeaders(c.Request.Header)
+			if requestID == "" {
+				requestID = GenerateRequestID()
+			}
 			SetGinRequestID(c, requestID)
 			ctx := WithRequestID(c.Request.Context(), requestID)
 			c.Request = c.Request.WithContext(ctx)

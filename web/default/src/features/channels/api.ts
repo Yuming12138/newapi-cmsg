@@ -376,12 +376,13 @@ export async function getCodexUsage(
 
 export async function getCliproxyCPADispatchAudits(
   channelId: number,
-  limit = 8
+  limit = 8,
+  requestId?: string
 ): Promise<CliproxyCPADispatchAuditsResponse> {
   const config: ExtendedApiConfig = {
     skipBusinessError: true,
     disableDuplicate: true,
-    params: { limit },
+    params: { limit, request_id: requestId },
   }
   const res = await api.get(
     `/api/channel/${channelId}/cpa/dispatch_audits`,

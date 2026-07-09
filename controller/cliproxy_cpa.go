@@ -69,6 +69,9 @@ func GetCliproxyCPADispatchAudits(c *gin.Context) {
 	if limit := strings.TrimSpace(c.Query("limit")); limit != "" {
 		values.Set("limit", limit)
 	}
+	if requestID := strings.TrimSpace(c.Query("request_id")); requestID != "" {
+		values.Set("request_id", requestID)
+	}
 	endpoint.RawQuery = values.Encode()
 
 	httpReq, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, endpoint.String(), nil)

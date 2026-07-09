@@ -42,6 +42,13 @@ func applyUpstreamContentLength(req *http.Request, info *common.RelayInfo) {
 	}
 }
 
+func applyUpstreamRequestID(req *http.Request, info *common.RelayInfo) {
+	if req == nil || info == nil || strings.TrimSpace(info.RequestId) == "" {
+		return
+	}
+	req.Header.Set(common2.RequestIdKey, strings.TrimSpace(info.RequestId))
+}
+
 func SetupApiRequestHeader(info *common.RelayInfo, c *gin.Context, req *http.Header) {
 	if info.RelayMode == constant.RelayModeAudioTranscription || info.RelayMode == constant.RelayModeAudioTranslation {
 		// multipart/form-data
@@ -322,6 +329,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if err != nil {
 		return nil, fmt.Errorf("setup request header failed: %w", err)
 	}
+	applyUpstreamRequestID(req, info)
 	// 在 SetupRequestHeader 之后应用 Header Override，确保用户设置优先级最高
 	// 这样可以覆盖默认的 Authorization header 设置
 	headerOverride, err := processHeaderOverride(info, c)
@@ -356,6 +364,7 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	if err != nil {
 		return nil, fmt.Errorf("setup request header failed: %w", err)
 	}
+	applyUpstreamRequestID(req, info)
 	// 在 SetupRequestHeader 之后应用 Header Override，确保用户设置优先级最高
 	// 这样可以覆盖默认的 Authorization header 设置
 	headerOverride, err := processHeaderOverride(info, c)
@@ -379,6 +388,9 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	err = a.SetupRequestHeader(c, &targetHeader, info)
 	if err != nil {
 		return nil, fmt.Errorf("setup request header failed: %w", err)
+	}
+	if strings.TrimSpace(info.RequestId) != "" {
+		targetHeader.Set(common2.RequestIdKey, strings.TrimSpace(info.RequestId))
 	}
 	// 在 SetupRequestHeader 之后应用 Header Override，确保用户设置优先级最高
 	// 这样可以覆盖默认的 Authorization header 设置

@@ -123,3 +123,33 @@ func TestGinLogrusLoggerAddsRequestIDForCodexBackend(t *testing.T) {
 		t.Fatalf("expected Gin request ID %q to match context request ID %q", requestIDFromGin, requestIDFromContext)
 	}
 }
+
+func TestGinLogrusLoggerUsesForwardedRequestID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	engine := gin.New()
+	engine.Use(GinLogrusLogger())
+
+	var requestIDFromContext string
+	var requestIDFromGin string
+	engine.POST("/v1/responses", func(c *gin.Context) {
+		requestIDFromContext = GetRequestID(c.Request.Context())
+		requestIDFromGin = GetGinRequestID(c)
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	req.Header.Set("X-Oneapi-Request-Id", "new-api-request-1")
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", recorder.Code)
+	}
+	if requestIDFromContext != "new-api-request-1" {
+		t.Fatalf("request ID from context = %q, want forwarded ID", requestIDFromContext)
+	}
+	if requestIDFromGin != requestIDFromContext {
+		t.Fatalf("expected Gin request ID %q to match context request ID %q", requestIDFromGin, requestIDFromContext)
+	}
+}

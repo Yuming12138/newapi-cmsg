@@ -22,7 +22,22 @@ func (h *Handler) GetDispatchAudits(c *gin.Context) {
 			limit = parsed
 		}
 	}
+	requestID := strings.TrimSpace(c.Query("request_id"))
+	audits := h.authManager.RecentDispatchAudits(limit)
+	if requestID != "" {
+		audits = h.authManager.RecentDispatchAudits(0)
+		filtered := audits[:0]
+		for _, audit := range audits {
+			if strings.TrimSpace(audit.RequestID) == requestID {
+				filtered = append(filtered, audit)
+			}
+		}
+		audits = filtered
+		if len(audits) > limit {
+			audits = audits[:limit]
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"dispatches": h.authManager.RecentDispatchAudits(limit),
+		"dispatches": audits,
 	})
 }
