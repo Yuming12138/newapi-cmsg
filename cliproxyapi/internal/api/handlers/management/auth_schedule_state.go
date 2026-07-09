@@ -70,9 +70,6 @@ func deriveAuthScheduleState(auth *coreauth.Auth, now time.Time) authScheduleSta
 	if auth.Unavailable {
 		return authScheduleStateInfo{State: authScheduleStateUnknown, Reason: authScheduleReasonUnavailable, LastError: auth.LastError}
 	}
-	if auth.Status == coreauth.StatusError {
-		return authScheduleStateInfo{State: authScheduleStateUnknown, Reason: authScheduleReasonStatusError, LastError: auth.LastError}
-	}
 	if auth.Status == coreauth.StatusUnknown || auth.Status == "" {
 		return authScheduleStateInfo{State: authScheduleStateUnknown, Reason: authScheduleReasonStatusUnknown, LastError: auth.LastError}
 	}

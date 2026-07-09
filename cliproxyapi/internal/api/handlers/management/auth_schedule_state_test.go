@@ -78,6 +78,32 @@ func TestDeriveAuthScheduleStateProtectedReserve(t *testing.T) {
 	}
 }
 
+func TestDeriveAuthScheduleStateRequestScopedStatusErrorIsAvailable(t *testing.T) {
+	lastError := &coreauth.Error{
+		HTTPStatus: http.StatusBadRequest,
+		Code:       "context_too_large",
+		Message:    "input exceeds the context window",
+	}
+	got := deriveAuthScheduleState(&coreauth.Auth{
+		Status:    coreauth.StatusError,
+		LastError: lastError,
+	}, time.Now())
+	if got.State != authScheduleStateAvailable || !got.Schedulable || got.LastError != lastError {
+		t.Fatalf("state = %+v", got)
+	}
+}
+
+func TestDeriveAuthScheduleStateUnavailableStatusErrorIsNotSchedulable(t *testing.T) {
+	got := deriveAuthScheduleState(&coreauth.Auth{
+		Status:      coreauth.StatusError,
+		Unavailable: true,
+		LastError:   &coreauth.Error{HTTPStatus: http.StatusInternalServerError, Message: "upstream failed"},
+	}, time.Now())
+	if got.State != authScheduleStateUnknown || got.Reason != authScheduleReasonUnavailable || got.Schedulable {
+		t.Fatalf("state = %+v", got)
+	}
+}
+
 func TestDeriveAuthScheduleStateAvailable(t *testing.T) {
 	got := deriveAuthScheduleState(&coreauth.Auth{Status: coreauth.StatusActive}, time.Now())
 	if got.State != authScheduleStateAvailable || !got.Schedulable {
