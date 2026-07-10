@@ -100,6 +100,9 @@ var defaultModelRatio = map[string]float64{
 	// OpenAI GPT-5.2+ Standard pricing. Model ratio is input price / ($2 per 1M tokens).
 	"gpt-5.5":               2.5,   // $5 / 1M input tokens; long-context input is $10 / 1M.
 	"gpt-5.5-pro":           15.0,  // $30 / 1M input tokens; long-context input is $60 / 1M.
+	"gpt-5.6-sol":           2.5,   // $5 / 1M input tokens.
+	"gpt-5.6-terra":         1.25,  // $2.5 / 1M input tokens.
+	"gpt-5.6-luna":          0.5,   // $1 / 1M input tokens.
 	"gpt-5.4":               1.25,  // $2.5 / 1M input tokens
 	"gpt-5.4-mini":          0.375, // $0.75 / 1M input tokens
 	"gpt-5.4-nano":          0.1,   // $0.20 / 1M input tokens
@@ -538,6 +541,9 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 		// gpt-5 匹配
 		if strings.HasPrefix(name, "gpt-5") {
 			if strings.HasPrefix(name, "gpt-5.5") {
+				return 6, true
+			}
+			if strings.HasPrefix(name, "gpt-5.6") {
 				return 6, true
 			}
 			if strings.HasPrefix(name, "gpt-5.4") {
