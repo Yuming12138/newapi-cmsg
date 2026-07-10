@@ -1593,6 +1593,13 @@ func (m *Manager) pickViaBuiltinScheduler(ctx context.Context, strategy schedule
 			tried[selected.ID] = struct{}{}
 			continue
 		}
+		if !authAllowedForRequestedReasoning(selected, opts) {
+			if tried == nil {
+				tried = make(map[string]struct{})
+			}
+			tried[selected.ID] = struct{}{}
+			continue
+		}
 		return selected, true, nil
 	}
 }
@@ -1623,6 +1630,10 @@ func (m *Manager) pickViaPluginScheduler(ctx context.Context, scheduler PluginSc
 	}
 	if selected := pickSchedulerAuthByID(candidates, resp.AuthID); selected != nil {
 		return selected, true, nil
+	}
+
+	if shouldUseLegacyForCodexReasoning(providerKey, providers, opts) {
+		return nil, false, nil
 	}
 
 	strategy, okStrategy := builtinSchedulerStrategy(resp.DelegateBuiltin)
@@ -3039,7 +3050,183 @@ func isFreeCodexAuth(auth *Auth) bool {
 	if !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(auth.Attributes["plan_type"]), "free")
+	planType, ok := codexPlanType(auth)
+	return ok && planType == "free"
+}
+
+func codexPlanType(auth *Auth) (string, bool) {
+	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		return "", false
+	}
+	if auth.Attributes != nil {
+		if planType, ok := normalizeCodexPlanType(auth.Attributes["plan_type"]); ok {
+			return planType, true
+		}
+	}
+	if auth.Metadata != nil {
+		if raw, ok := auth.Metadata["plan_type"]; ok && raw != nil {
+			switch value := raw.(type) {
+			case string:
+				if planType, okNormalize := normalizeCodexPlanType(value); okNormalize {
+					return planType, true
+				}
+			case []byte:
+				if planType, okNormalize := normalizeCodexPlanType(string(value)); okNormalize {
+					return planType, true
+				}
+			}
+		}
+	}
+	for _, candidate := range []string{auth.FileName, auth.Label, auth.ID} {
+		if planType, ok := inferCodexPlanTypeFromText(candidate); ok {
+			return planType, true
+		}
+	}
+	return "", false
+}
+
+func normalizeCodexPlanType(planType string) (string, bool) {
+	planType = strings.ToLower(strings.TrimSpace(planType))
+	planType = strings.ReplaceAll(planType, "_", "-")
+	planType = strings.ReplaceAll(planType, " ", "-")
+	switch planType {
+	case "free", "plus", "pro", "team", "business", "enterprise", "edu":
+		return planType, true
+	default:
+		return "", false
+	}
+}
+
+func inferCodexPlanTypeFromText(text string) (string, bool) {
+	text = strings.ToLower(strings.TrimSpace(filepath.Base(text)))
+	if text == "" {
+		return "", false
+	}
+	fields := strings.FieldsFunc(text, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	})
+	for _, field := range fields {
+		if planType, ok := normalizeCodexPlanType(field); ok {
+			return planType, true
+		}
+	}
+	return "", false
+}
+
+func isCodexProCapableAuth(auth *Auth) bool {
+	planType, ok := codexPlanType(auth)
+	if !ok {
+		return false
+	}
+	switch planType {
+	case "pro", "team", "business", "enterprise":
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeReasoningEffort(effort string) string {
+	effort = strings.ToLower(strings.TrimSpace(effort))
+	effort = strings.ReplaceAll(effort, "_", "-")
+	effort = strings.ReplaceAll(effort, " ", "-")
+	switch effort {
+	case "extra-high", "x-high", "extra":
+		return "xhigh"
+	case "maximum":
+		return "max"
+	default:
+		return effort
+	}
+}
+
+func codexReasoningRequiresPro(opts cliproxyexecutor.Options) bool {
+	switch normalizeReasoningEffort(reasoningEffortFromOptions(opts)) {
+	case "xhigh", "max", "pro", "ultra":
+		return true
+	default:
+		return false
+	}
+}
+
+func codexReasoningPrefersNonPro(opts cliproxyexecutor.Options) bool {
+	switch normalizeReasoningEffort(reasoningEffortFromOptions(opts)) {
+	case "minimal", "low", "medium", "high":
+		return true
+	default:
+		return false
+	}
+}
+
+func authAllowedForRequestedReasoning(auth *Auth, opts cliproxyexecutor.Options) bool {
+	if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") {
+		return true
+	}
+	if !codexReasoningRequiresPro(opts) {
+		return true
+	}
+	return isCodexProCapableAuth(auth)
+}
+
+func shouldUseLegacyForCodexReasoning(provider string, providers []string, opts cliproxyexecutor.Options) bool {
+	if strings.TrimSpace(reasoningEffortFromOptions(opts)) == "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(provider), "codex") {
+		return true
+	}
+	for _, candidate := range providers {
+		if strings.EqualFold(strings.TrimSpace(candidate), "codex") {
+			return true
+		}
+	}
+	return false
+}
+
+func filterAuthsForRequestedReasoning(auths []*Auth, opts cliproxyexecutor.Options) []*Auth {
+	if len(auths) == 0 || !codexReasoningRequiresPro(opts) {
+		return auths
+	}
+	filtered := make([]*Auth, 0, len(auths))
+	for _, auth := range auths {
+		if authAllowedForRequestedReasoning(auth, opts) {
+			filtered = append(filtered, auth)
+		}
+	}
+	return filtered
+}
+
+func preferNonProCodexAuthsForReasoning(auths []*Auth, opts cliproxyexecutor.Options) []*Auth {
+	if len(auths) <= 1 || !codexReasoningPrefersNonPro(opts) {
+		return auths
+	}
+	filtered := make([]*Auth, 0, len(auths))
+	for _, auth := range auths {
+		if auth != nil && strings.EqualFold(strings.TrimSpace(auth.Provider), "codex") && isCodexProCapableAuth(auth) {
+			continue
+		}
+		filtered = append(filtered, auth)
+	}
+	if len(filtered) == 0 || len(filtered) == len(auths) {
+		return auths
+	}
+	return filtered
+}
+
+func (m *Manager) availableAuthsForRequestedReasoning(auths []*Auth, provider, routeModel string, opts cliproxyexecutor.Options, now time.Time) ([]*Auth, error) {
+	filtered := filterAuthsForRequestedReasoning(auths, opts)
+	if len(filtered) == 0 {
+		return nil, &Error{Code: "auth_not_found", Message: "no pro-capable Codex auth available for requested reasoning effort"}
+	}
+	if preferred := preferNonProCodexAuthsForReasoning(filtered, opts); len(preferred) < len(filtered) {
+		if available, errAvailable := m.availableAuthsForRouteModel(preferred, provider, routeModel, now); errAvailable == nil && len(available) > 0 {
+			selectorModel := selectionArgForSelector(m.selector, routeModel)
+			if ready, errReady := getAvailableAuths(available, provider, selectorModel, now); errReady == nil && len(ready) > 0 {
+				return ready, nil
+			}
+		}
+	}
+	return m.availableAuthsForRouteModel(filtered, provider, routeModel, now)
 }
 
 func publishSelectedAuthMetadata(meta map[string]any, authID string) {
@@ -4372,7 +4559,7 @@ func (m *Manager) pickNextLegacy(ctx context.Context, provider, model string, op
 		m.mu.RUnlock()
 		return nil, nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	available, errAvailable := m.availableAuthsForRouteModel(candidates, provider, model, time.Now())
+	available, errAvailable := m.availableAuthsForRequestedReasoning(candidates, provider, model, opts, time.Now())
 	if errAvailable != nil {
 		m.mu.RUnlock()
 		return nil, nil, errAvailable
@@ -4411,7 +4598,7 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 		return auth, exec, err
 	}
 
-	if m.hasPluginScheduler() || !m.useSchedulerFastPath() {
+	if m.hasPluginScheduler() || !m.useSchedulerFastPath() || shouldUseLegacyForCodexReasoning(provider, nil, opts) {
 		return m.pickNextLegacy(ctx, provider, model, opts, tried)
 	}
 	if strings.TrimSpace(model) != "" {
@@ -4532,7 +4719,7 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 		m.mu.RUnlock()
 		return nil, nil, "", &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	available, errAvailable := m.availableAuthsForRouteModel(candidates, "mixed", model, time.Now())
+	available, errAvailable := m.availableAuthsForRequestedReasoning(candidates, "mixed", model, opts, time.Now())
 	if errAvailable != nil {
 		m.mu.RUnlock()
 		return nil, nil, "", errAvailable
@@ -4575,7 +4762,7 @@ func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model s
 		return m.pickNextViaHome(ctx, model, opts, tried)
 	}
 
-	if m.hasPluginScheduler() || !m.useSchedulerFastPath() {
+	if m.hasPluginScheduler() || !m.useSchedulerFastPath() || shouldUseLegacyForCodexReasoning("mixed", providers, opts) {
 		return m.pickNextMixedLegacy(ctx, providers, model, opts, tried)
 	}
 
