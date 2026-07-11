@@ -22,39 +22,41 @@ import (
 )
 
 type textQuotaSummary struct {
-	PromptTokens             int
-	CompletionTokens         int
-	TotalTokens              int
-	CacheTokens              int
-	CacheCreationTokens      int
-	CacheCreationTokens5m    int
-	CacheCreationTokens1h    int
-	ImageTokens              int
-	AudioTokens              int
-	ModelName                string
-	TokenName                string
-	UseTimeSeconds           int64
-	CompletionRatio          float64
-	CacheRatio               float64
-	ImageRatio               float64
-	ModelRatio               float64
-	GroupRatio               float64
-	ModelPrice               float64
-	CacheCreationRatio       float64
-	CacheCreationRatio5m     float64
-	CacheCreationRatio1h     float64
-	Quota                    int
-	IsClaudeUsageSemantic    bool
-	UsageSemantic            string
-	WebSearchPrice           float64
-	WebSearchCallCount       int
-	ClaudeWebSearchPrice     float64
-	ClaudeWebSearchCallCount int
-	FileSearchPrice          float64
-	FileSearchCallCount      int
-	AudioInputPrice          float64
-	ImageGenerationCallPrice float64
-	ToolCallSurchargeQuota   decimal.Decimal
+	PromptTokens                  int
+	CompletionTokens              int
+	TotalTokens                   int
+	CacheTokens                   int
+	CacheCreationTokens           int
+	NativeCacheWriteTokens        int
+	CacheReadWriteExclusionTokens int
+	CacheCreationTokens5m         int
+	CacheCreationTokens1h         int
+	ImageTokens                   int
+	AudioTokens                   int
+	ModelName                     string
+	TokenName                     string
+	UseTimeSeconds                int64
+	CompletionRatio               float64
+	CacheRatio                    float64
+	ImageRatio                    float64
+	ModelRatio                    float64
+	GroupRatio                    float64
+	ModelPrice                    float64
+	CacheCreationRatio            float64
+	CacheCreationRatio5m          float64
+	CacheCreationRatio1h          float64
+	Quota                         int
+	IsClaudeUsageSemantic         bool
+	UsageSemantic                 string
+	WebSearchPrice                float64
+	WebSearchCallCount            int
+	ClaudeWebSearchPrice          float64
+	ClaudeWebSearchCallCount      int
+	FileSearchPrice               float64
+	FileSearchCallCount           int
+	AudioInputPrice               float64
+	ImageGenerationCallPrice      float64
+	ToolCallSurchargeQuota        decimal.Decimal
 }
 
 func cacheWriteTokensTotal(summary textQuotaSummary) int {
@@ -186,7 +188,14 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.CompletionTokens = usage.CompletionTokens
 	summary.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	summary.CacheTokens = usage.PromptTokensDetails.CachedTokens
-	summary.CacheCreationTokens = usage.PromptTokensDetails.CachedCreationTokens
+	summary.CacheCreationTokens = usage.PromptTokensDetails.CacheCreationTokensTotal()
+	if usage.HasNativeOpenAICacheWriteTokens() {
+		summary.NativeCacheWriteTokens = usage.PromptTokensDetails.CacheWriteTokens
+	}
+	summary.CacheReadWriteExclusionTokens = usage.CacheReadWriteExclusionTokens
+	if summary.CacheReadWriteExclusionTokens < 0 {
+		summary.CacheReadWriteExclusionTokens = 0
+	}
 	summary.CacheCreationTokens5m = usage.ClaudeCacheCreation5mTokens
 	summary.CacheCreationTokens1h = usage.ClaudeCacheCreation1hTokens
 	summary.ImageTokens = usage.PromptTokensDetails.ImageTokens
@@ -231,10 +240,13 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	var audioInputQuota decimal.Decimal
 	if !relayInfo.PriceData.UsePrice {
 		baseTokens := dPromptTokens
+		separateOpenAICache := !summary.IsClaudeUsageSemantic && !legacyClaudeDerived
+		hasExactCacheExclusion := separateOpenAICache && summary.CacheReadWriteExclusionTokens > 0
+		nativeCacheWrite := separateOpenAICache && !hasExactCacheExclusion && summary.NativeCacheWriteTokens > 0
 
 		var cachedTokensWithRatio decimal.Decimal
 		if !dCacheTokens.IsZero() {
-			if !summary.IsClaudeUsageSemantic && !legacyClaudeDerived {
+			if separateOpenAICache && !nativeCacheWrite && !hasExactCacheExclusion {
 				baseTokens = baseTokens.Sub(dCacheTokens)
 			}
 			cachedTokensWithRatio = dCacheTokens.Mul(dCacheRatio)
@@ -243,8 +255,10 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		var cachedCreationTokensWithRatio decimal.Decimal
 		hasSplitCacheCreationTokens := summary.CacheCreationTokens5m > 0 || summary.CacheCreationTokens1h > 0
 		if !dCachedCreationTokens.IsZero() || hasSplitCacheCreationTokens {
-			if !summary.IsClaudeUsageSemantic && !legacyClaudeDerived {
-				baseTokens = baseTokens.Sub(dCachedCreationTokens)
+			if separateOpenAICache {
+				if !nativeCacheWrite && !hasExactCacheExclusion {
+					baseTokens = baseTokens.Sub(dCachedCreationTokens)
+				}
 				cachedCreationTokensWithRatio = dCachedCreationTokens.Mul(dCacheCreationRatio)
 			} else {
 				remaining := summary.CacheCreationTokens - summary.CacheCreationTokens5m - summary.CacheCreationTokens1h
@@ -255,6 +269,19 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 				cachedCreationTokensWithRatio = cachedCreationTokensWithRatio.Add(decimal.NewFromInt(int64(summary.CacheCreationTokens5m)).Mul(dCacheCreationRatio5m))
 				cachedCreationTokensWithRatio = cachedCreationTokensWithRatio.Add(decimal.NewFromInt(int64(summary.CacheCreationTokens1h)).Mul(dCacheCreationRatio1h))
 			}
+		}
+
+		// OpenAI reports cache read/write as overlapping, unadjusted prefix
+		// counts. When the native cache_write_tokens field is present, exclude
+		// their union from the base input once rather than subtracting both.
+		if hasExactCacheExclusion {
+			baseTokens = baseTokens.Sub(decimal.NewFromInt(int64(summary.CacheReadWriteExclusionTokens)))
+		} else if nativeCacheWrite {
+			cachePrefixTokens := dCacheTokens
+			if dCachedCreationTokens.GreaterThan(cachePrefixTokens) {
+				cachePrefixTokens = dCachedCreationTokens
+			}
+			baseTokens = baseTokens.Sub(cachePrefixTokens)
 		}
 
 		var imageTokensWithRatio decimal.Decimal
@@ -270,6 +297,10 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 				audioInputQuota = decimal.NewFromFloat(summary.AudioInputPrice).
 					Div(decimal.NewFromInt(1000000)).Mul(dAudioTokens).Mul(dGroupRatio).Mul(dQuotaPerUnit)
 			}
+		}
+
+		if baseTokens.IsNegative() {
+			baseTokens = decimal.Zero
 		}
 
 		promptQuota := baseTokens.Add(cachedTokensWithRatio).Add(imageTokensWithRatio).Add(cachedCreationTokensWithRatio)

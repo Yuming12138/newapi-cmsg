@@ -625,12 +625,13 @@ func cacheCreationTokensForOpenAIUsage(usage *dto.Usage) int {
 	if usage == nil {
 		return 0
 	}
+	aggregateCacheCreationTokens := usage.PromptTokensDetails.CacheCreationTokensTotal()
 	splitCacheCreationTokens := usage.ClaudeCacheCreation5mTokens + usage.ClaudeCacheCreation1hTokens
 	if splitCacheCreationTokens == 0 {
-		return usage.PromptTokensDetails.CachedCreationTokens
+		return aggregateCacheCreationTokens
 	}
-	if usage.PromptTokensDetails.CachedCreationTokens > splitCacheCreationTokens {
-		return usage.PromptTokensDetails.CachedCreationTokens
+	if aggregateCacheCreationTokens > splitCacheCreationTokens {
+		return aggregateCacheCreationTokens
 	}
 	return splitCacheCreationTokens
 }
@@ -640,12 +641,14 @@ func buildOpenAIStyleUsageFromClaudeUsage(usage *dto.Usage) dto.Usage {
 		return dto.Usage{}
 	}
 	clone := *usage
+	cacheCreationTokens := cacheCreationTokensForOpenAIUsage(usage)
 	clone.ClaudeCacheCreation5mTokens, clone.ClaudeCacheCreation1hTokens = service.NormalizeCacheCreationSplit(
-		usage.PromptTokensDetails.CachedCreationTokens,
+		cacheCreationTokens,
 		usage.ClaudeCacheCreation5mTokens,
 		usage.ClaudeCacheCreation1hTokens,
 	)
-	cacheCreationTokens := cacheCreationTokensForOpenAIUsage(usage)
+	clone.PromptTokensDetails.CachedCreationTokens = cacheCreationTokens
+	clone.PromptTokensDetails.CacheWriteTokens = cacheCreationTokens
 	totalInputTokens := usage.PromptTokens + usage.PromptTokensDetails.CachedTokens + cacheCreationTokens
 	clone.PromptTokens = totalInputTokens
 	clone.InputTokens = totalInputTokens

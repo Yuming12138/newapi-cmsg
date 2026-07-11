@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/stretchr/testify/assert"
@@ -254,14 +255,24 @@ func TestBuildOpenAIStyleUsageFromClaudeUsage(t *testing.T) {
 	if openAIUsage.UsageSource != "anthropic" {
 		t.Fatalf("UsageSource = %s, want anthropic", openAIUsage.UsageSource)
 	}
+	require.Equal(t, 50, openAIUsage.PromptTokensDetails.CachedCreationTokens)
+	require.Equal(t, 50, openAIUsage.PromptTokensDetails.CacheWriteTokens)
+	require.Equal(t, 50, openAIUsage.PromptTokensDetails.CacheCreationTokensTotal())
+
+	wire, err := common.Marshal(openAIUsage)
+	require.NoError(t, err)
+	require.Contains(t, string(wire), `"cached_creation_tokens":50`)
+	require.Contains(t, string(wire), `"cache_write_tokens":50`)
 }
 
 func TestBuildOpenAIStyleUsageFromClaudeUsagePreservesCacheCreationRemainder(t *testing.T) {
 	tests := []struct {
 		name                    string
 		cachedCreationTokens    int
+		cacheWriteTokens        int
 		cacheCreationTokens5m   int
 		cacheCreationTokens1h   int
+		expectedCacheCreation   int
 		expectedTotalInputToken int
 	}{
 		{
@@ -269,6 +280,7 @@ func TestBuildOpenAIStyleUsageFromClaudeUsagePreservesCacheCreationRemainder(t *
 			cachedCreationTokens:    50,
 			cacheCreationTokens5m:   10,
 			cacheCreationTokens1h:   20,
+			expectedCacheCreation:   50,
 			expectedTotalInputToken: 180,
 		},
 		{
@@ -276,7 +288,17 @@ func TestBuildOpenAIStyleUsageFromClaudeUsagePreservesCacheCreationRemainder(t *
 			cachedCreationTokens:    0,
 			cacheCreationTokens5m:   10,
 			cacheCreationTokens1h:   20,
+			expectedCacheCreation:   30,
 			expectedTotalInputToken: 160,
+		},
+		{
+			name:                    "uses maximum alias without summing",
+			cachedCreationTokens:    40,
+			cacheWriteTokens:        50,
+			cacheCreationTokens5m:   10,
+			cacheCreationTokens1h:   20,
+			expectedCacheCreation:   50,
+			expectedTotalInputToken: 180,
 		},
 	}
 
@@ -288,6 +310,7 @@ func TestBuildOpenAIStyleUsageFromClaudeUsagePreservesCacheCreationRemainder(t *
 				PromptTokensDetails: dto.InputTokenDetails{
 					CachedTokens:         30,
 					CachedCreationTokens: tt.cachedCreationTokens,
+					CacheWriteTokens:     tt.cacheWriteTokens,
 				},
 				ClaudeCacheCreation5mTokens: tt.cacheCreationTokens5m,
 				ClaudeCacheCreation1hTokens: tt.cacheCreationTokens1h,
@@ -302,6 +325,8 @@ func TestBuildOpenAIStyleUsageFromClaudeUsagePreservesCacheCreationRemainder(t *
 			if openAIUsage.InputTokens != tt.expectedTotalInputToken {
 				t.Fatalf("InputTokens = %d, want %d", openAIUsage.InputTokens, tt.expectedTotalInputToken)
 			}
+			require.Equal(t, tt.expectedCacheCreation, openAIUsage.PromptTokensDetails.CachedCreationTokens)
+			require.Equal(t, tt.expectedCacheCreation, openAIUsage.PromptTokensDetails.CacheWriteTokens)
 		})
 	}
 }

@@ -816,6 +816,8 @@ func normalizeResponsesUsage(c *gin.Context, info *relaycommon.RelayInfo, chatRe
 	}
 	usage.InputTokens = usage.PromptTokens
 	usage.OutputTokens = usage.CompletionTokens
+	inputTokenDetails := usage.PromptTokensDetails
+	usage.InputTokensDetails = &inputTokenDetails
 	usage.UsageSource = "mimo_chat"
 	usage.UsageSemantic = "openai"
 	return &usage

@@ -227,15 +227,32 @@ func buildClaudeUsageFromOpenAIUsage(oaiUsage *dto.Usage) *dto.ClaudeUsage {
 	if oaiUsage == nil {
 		return nil
 	}
+	cacheCreationTokens := oaiUsage.PromptTokensDetails.CacheCreationTokensTotal()
 	cacheCreation5m, cacheCreation1h := NormalizeCacheCreationSplit(
-		oaiUsage.PromptTokensDetails.CachedCreationTokens,
+		cacheCreationTokens,
 		oaiUsage.ClaudeCacheCreation5mTokens,
 		oaiUsage.ClaudeCacheCreation1hTokens,
 	)
+	inputTokens := oaiUsage.PromptTokens
+	cachePrefixTokens := 0
+	if oaiUsage.CacheReadWriteExclusionTokens > 0 {
+		cachePrefixTokens = oaiUsage.CacheReadWriteExclusionTokens
+	} else if oaiUsage.HasNativeOpenAICacheWriteTokens() {
+		cachePrefixTokens = oaiUsage.PromptTokensDetails.CachedTokens
+		if cacheCreationTokens > cachePrefixTokens {
+			cachePrefixTokens = cacheCreationTokens
+		}
+	}
+	if cachePrefixTokens > 0 {
+		inputTokens -= cachePrefixTokens
+		if inputTokens < 0 {
+			inputTokens = 0
+		}
+	}
 	usage := &dto.ClaudeUsage{
-		InputTokens:              oaiUsage.PromptTokens,
+		InputTokens:              inputTokens,
 		OutputTokens:             oaiUsage.CompletionTokens,
-		CacheCreationInputTokens: oaiUsage.PromptTokensDetails.CachedCreationTokens,
+		CacheCreationInputTokens: cacheCreationTokens,
 		CacheReadInputTokens:     oaiUsage.PromptTokensDetails.CachedTokens,
 	}
 	if cacheCreation5m > 0 || cacheCreation1h > 0 {

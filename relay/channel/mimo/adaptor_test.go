@@ -151,3 +151,49 @@ func TestValidateResponsesInputRequiresAllPendingToolOutputs(t *testing.T) {
 	_, err := validateResponsesInput(pending, input)
 	require.ErrorContains(t, err, "call_2")
 }
+
+func TestResponsesUsagePropagatesCacheWriteToJSONAndCompletedEvent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	buildRecorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(buildRecorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := testRelayInfo()
+	state := &responsesTurnState{ResponseID: "resp_usage", Request: dto.OpenAIResponsesRequest{}}
+	chatResponse := &dto.OpenAITextResponse{Usage: dto.Usage{
+		PromptTokens:     3619,
+		CompletionTokens: 36,
+		TotalTokens:      3655,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:         2921,
+			CachedCreationTokens: 120,
+			CacheWriteTokens:     3616,
+			TextTokens:           3,
+			ImageTokens:          4,
+			AudioTokens:          5,
+		},
+	}}
+
+	response, _, usage, err := buildResponsesResponse(ctx, info, state, chatResponse)
+	require.NoError(t, err)
+	require.NotNil(t, response.Usage)
+	require.Same(t, usage, response.Usage)
+	require.Equal(t, "mimo_chat", usage.UsageSource)
+	require.Equal(t, "openai", usage.UsageSemantic)
+	require.NotNil(t, usage.InputTokensDetails)
+	require.Equal(t, chatResponse.Usage.PromptTokensDetails, *usage.InputTokensDetails)
+
+	wire, err := common.Marshal(response)
+	require.NoError(t, err)
+	require.Contains(t, string(wire), `"cached_creation_tokens":120`)
+	require.Contains(t, string(wire), `"cache_write_tokens":3616`)
+	require.Contains(t, string(wire), `"text_tokens":3`)
+	require.Contains(t, string(wire), `"image_tokens":4`)
+	require.Contains(t, string(wire), `"audio_tokens":5`)
+
+	streamRecorder := httptest.NewRecorder()
+	streamCtx, _ := gin.CreateTestContext(streamRecorder)
+	streamCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	require.NoError(t, writeResponsesStream(streamCtx, response))
+	require.Contains(t, streamRecorder.Body.String(), "event: response.completed")
+	require.Contains(t, streamRecorder.Body.String(), `"cache_write_tokens":3616`)
+}

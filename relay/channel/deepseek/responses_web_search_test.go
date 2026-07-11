@@ -61,6 +61,57 @@ func TestDeepSeekRootBaseURLTrimsCommonSuffixes(t *testing.T) {
 	require.True(t, strings.HasSuffix(deepSeekAnthropicMessagesURL("https://api.deepseek.com/v1"), "/anthropic/v1/messages"))
 }
 
+func TestAddUsageAccumulatesCacheWriteTokens(t *testing.T) {
+	total := dto.Usage{}
+	addUsage(&total, dto.Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 10,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:         200,
+			CachedCreationTokens: 100,
+			CacheWriteTokens:     300,
+		},
+	})
+	addUsage(&total, dto.Usage{
+		PromptTokens:     100,
+		CompletionTokens: 20,
+		UsageSemantic:    "anthropic",
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:         30,
+			CachedCreationTokens: 50,
+		},
+	})
+	normalizeCombinedUsage(&total)
+
+	require.Equal(t, 1180, total.PromptTokens)
+	require.Equal(t, 30, total.CompletionTokens)
+	require.Equal(t, 1210, total.TotalTokens)
+	require.Equal(t, 1180, total.InputTokens)
+	require.Equal(t, 30, total.OutputTokens)
+	require.Equal(t, 230, total.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 350, total.PromptTokensDetails.CachedCreationTokens)
+	require.Equal(t, 300, total.PromptTokensDetails.CacheWriteTokens)
+	require.Equal(t, 350, total.PromptTokensDetails.CacheCreationTokensTotal())
+	require.Equal(t, 380, total.CacheReadWriteExclusionTokens)
+	require.Equal(t, "openai", total.UsageSemantic)
+	require.Equal(t, "deepseek_chat_web_search", total.UsageSource)
+}
+
+func TestUsageFromClaudeUsageMarksTextOnlyAnthropicSemantics(t *testing.T) {
+	usage := usageFromClaudeUsage(&dto.ClaudeUsage{
+		InputTokens:              100,
+		OutputTokens:             20,
+		CacheReadInputTokens:     30,
+		CacheCreationInputTokens: 50,
+	})
+
+	require.Equal(t, 100, usage.PromptTokens)
+	require.Equal(t, 20, usage.CompletionTokens)
+	require.Equal(t, 30, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 50, usage.PromptTokensDetails.CachedCreationTokens)
+	require.Equal(t, "anthropic", usage.UsageSemantic)
+}
+
 func TestRunDeepSeekInternalWebSearchLoopExecutesSearchAndContinues(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mux := http.NewServeMux()

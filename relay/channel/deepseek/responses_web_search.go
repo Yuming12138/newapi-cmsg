@@ -79,7 +79,8 @@ func deepSeekDoWebSearchTool(tool map[string]any) map[string]any {
 func runDeepSeekInternalWebSearchLoop(c *gin.Context, info *relaycommon.RelayInfo, state *responsesTurnState, first *dto.OpenAITextResponse) (dto.OpenAITextResponse, *types.NewAPIError) {
 	result := *first
 	payload := cloneChatPayload(state.ChatPayload)
-	totalUsage := result.Usage
+	totalUsage := dto.Usage{}
+	addUsage(&totalUsage, result.Usage)
 	searchRoundsSinceQuestion := 0
 	totalSearchRuns := 0
 
@@ -418,7 +419,7 @@ func usageFromClaudeUsage(claudeUsage *dto.ClaudeUsage) dto.Usage {
 		InputTokens:      claudeUsage.InputTokens,
 		OutputTokens:     claudeUsage.OutputTokens,
 		UsageSource:      "deepseek_anthropic_web_search",
-		UsageSemantic:    "openai",
+		UsageSemantic:    "anthropic",
 		PromptTokensDetails: dto.InputTokenDetails{
 			CachedTokens:         claudeUsage.CacheReadInputTokens,
 			CachedCreationTokens: claudeUsage.CacheCreationInputTokens,
@@ -431,14 +432,49 @@ func usageFromClaudeUsage(claudeUsage *dto.ClaudeUsage) dto.Usage {
 }
 
 func addUsage(total *dto.Usage, usage dto.Usage) {
-	total.PromptTokens += usage.PromptTokens
-	total.CompletionTokens += usage.CompletionTokens
-	total.TotalTokens += usage.TotalTokens
-	total.InputTokens += usage.InputTokens
-	total.OutputTokens += usage.OutputTokens
+	if total == nil {
+		return
+	}
+	cacheReadTokens := usage.PromptTokensDetails.CachedTokens
+	if cacheReadTokens < 0 {
+		cacheReadTokens = 0
+	}
+	cacheCreationTokens := usage.PromptTokensDetails.CacheCreationTokensTotal()
+	cacheExclusionTokens := usage.CacheReadWriteExclusionTokens
+	if cacheExclusionTokens <= 0 {
+		cacheExclusionTokens = cacheReadTokens + cacheCreationTokens
+		if usage.HasNativeOpenAICacheWriteTokens() && cacheReadTokens > cacheCreationTokens {
+			cacheExclusionTokens = cacheReadTokens
+		} else if usage.HasNativeOpenAICacheWriteTokens() {
+			cacheExclusionTokens = cacheCreationTokens
+		}
+	}
+	promptTokens := usage.PromptTokens
+	if usage.UsageSemantic == "anthropic" && usage.CacheReadWriteExclusionTokens <= 0 {
+		promptTokens += cacheReadTokens + cacheCreationTokens
+	}
+	if promptTokens < 0 {
+		promptTokens = 0
+	}
+	completionTokens := usage.CompletionTokens
+	if completionTokens < 0 {
+		completionTokens = 0
+	}
+
+	total.PromptTokens += promptTokens
+	total.CompletionTokens += completionTokens
+	total.TotalTokens += promptTokens + completionTokens
+	total.InputTokens += promptTokens
+	total.OutputTokens += completionTokens
 	total.PromptCacheHitTokens += usage.PromptCacheHitTokens
-	total.PromptTokensDetails.CachedTokens += usage.PromptTokensDetails.CachedTokens
-	total.PromptTokensDetails.CachedCreationTokens += usage.PromptTokensDetails.CachedCreationTokens
+	total.CacheReadWriteExclusionTokens += cacheExclusionTokens
+	total.PromptTokensDetails.CachedTokens += cacheReadTokens
+	// Normalize aliases per request before accumulation. Taking max only after
+	// summing each alias separately undercounts mixed native/legacy rounds.
+	total.PromptTokensDetails.CachedCreationTokens += usage.PromptTokensDetails.CacheCreationTokensTotal()
+	if usage.PromptTokensDetails.CacheWriteTokens > 0 {
+		total.PromptTokensDetails.CacheWriteTokens += usage.PromptTokensDetails.CacheWriteTokens
+	}
 	total.PromptTokensDetails.TextTokens += usage.PromptTokensDetails.TextTokens
 	total.PromptTokensDetails.AudioTokens += usage.PromptTokensDetails.AudioTokens
 	total.PromptTokensDetails.ImageTokens += usage.PromptTokensDetails.ImageTokens
@@ -451,15 +487,9 @@ func addUsage(total *dto.Usage, usage dto.Usage) {
 }
 
 func normalizeCombinedUsage(usage *dto.Usage) {
-	if usage.TotalTokens == 0 {
-		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-	}
-	if usage.InputTokens == 0 {
-		usage.InputTokens = usage.PromptTokens
-	}
-	if usage.OutputTokens == 0 {
-		usage.OutputTokens = usage.CompletionTokens
-	}
+	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	usage.InputTokens = usage.PromptTokens
+	usage.OutputTokens = usage.CompletionTokens
 	usage.UsageSource = "deepseek_chat_web_search"
 	usage.UsageSemantic = "openai"
 }
