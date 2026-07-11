@@ -311,14 +311,30 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 	}
 }
 
+func logUpstreamRequestURL(c *gin.Context, fullRequestURL string) {
+	logger.LogDebug(c, "fullRequestURL: %s", common.SanitizeURLForLog(fullRequestURL))
+}
+
+func newWSSDialError(fullRequestURL string, err error) error {
+	return fmt.Errorf(
+		"dial failed to %s: %w",
+		common.SanitizeURLForLog(fullRequestURL),
+		common.SanitizeURLErrorForLog(err),
+	)
+}
+
+func newDoRequestFailedError(c *gin.Context, err error) *types.NewAPIError {
+	sanitizedErr := common.SanitizeURLErrorForLog(err)
+	logger.LogError(c, "do request failed: "+sanitizedErr.Error())
+	return types.NewError(sanitizedErr, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
+}
+
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
 		return nil, fmt.Errorf("get request url failed: %w", err)
 	}
-	if common2.DebugEnabled {
-		println("fullRequestURL:", fullRequestURL)
-	}
+	logUpstreamRequestURL(c, fullRequestURL)
 	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
@@ -349,9 +365,7 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	if err != nil {
 		return nil, fmt.Errorf("get request url failed: %w", err)
 	}
-	if common2.DebugEnabled {
-		println("fullRequestURL:", fullRequestURL)
-	}
+	logUpstreamRequestURL(c, fullRequestURL)
 	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
@@ -404,7 +418,7 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 	targetConn, _, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
 	if err != nil {
-		return nil, fmt.Errorf("dial failed to %s: %w", fullRequestURL, err)
+		return nil, newWSSDialError(fullRequestURL, err)
 	}
 	// send request body
 	//all, err := io.ReadAll(requestBody)
@@ -553,8 +567,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 
 	resp, err := client.Do(req)
 	if err != nil {
-		logger.LogError(c, "do request failed: "+err.Error())
-		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
+		return nil, newDoRequestFailedError(c, err)
 	}
 	if resp == nil {
 		return nil, errors.New("resp is nil")

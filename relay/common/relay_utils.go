@@ -1,8 +1,11 @@
 package common
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -34,6 +37,201 @@ func GetFullRequestURL(baseURL string, requestURL string, channelType int) strin
 		}
 	}
 	return fullRequestURL
+}
+
+// SanitizeURLForLog masks credentials carried in URL query parameters while
+// preserving routing/debug information such as the scheme, host, path and
+// non-sensitive query values.
+func SanitizeURLForLog(rawURL string) string {
+	if rawURL == "" {
+		return rawURL
+	}
+
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return sanitizeMalformedURLForLog(rawURL)
+	}
+	userinfoRemoved := parsedURL.User != nil
+	parsedURL.User = nil
+
+	if parsedURL.RawQuery == "" {
+		if userinfoRemoved {
+			return parsedURL.String()
+		}
+		return rawURL
+	}
+
+	query, err := url.ParseQuery(parsedURL.RawQuery)
+	if err != nil {
+		parsedURL.RawQuery = maskedURLQuery()
+		return parsedURL.String()
+	}
+
+	queryChanged := false
+	for key := range query {
+		if isSensitiveURLQueryKey(key) {
+			query.Set(key, "***masked***")
+			queryChanged = true
+		}
+	}
+	if !queryChanged && !userinfoRemoved {
+		return rawURL
+	}
+
+	if queryChanged {
+		parsedURL.RawQuery = query.Encode()
+	}
+	return parsedURL.String()
+}
+
+func sanitizeMalformedURLForLog(rawURL string) string {
+	queryIndex := strings.IndexByte(rawURL, '?')
+	if queryIndex < 0 {
+		return stripRawURLUserinfo(rawURL)
+	}
+
+	prefix := stripRawURLUserinfo(rawURL[:queryIndex])
+	fragment := ""
+	if fragmentIndex := strings.IndexByte(rawURL[queryIndex+1:], '#'); fragmentIndex >= 0 {
+		fragment = rawURL[queryIndex+1+fragmentIndex:]
+	}
+	return prefix + "?" + maskedURLQuery() + fragment
+}
+
+func stripRawURLUserinfo(rawURL string) string {
+	authorityStart := 0
+	if schemeIndex := strings.Index(rawURL, "://"); schemeIndex >= 0 {
+		authorityStart = schemeIndex + 3
+	}
+	authorityEnd := len(rawURL)
+	if separatorIndex := strings.IndexAny(rawURL[authorityStart:], "/?#"); separatorIndex >= 0 {
+		authorityEnd = authorityStart + separatorIndex
+	}
+	authority := rawURL[authorityStart:authorityEnd]
+	if atIndex := strings.LastIndexByte(authority, '@'); atIndex >= 0 {
+		return rawURL[:authorityStart] + authority[atIndex+1:] + rawURL[authorityEnd:]
+	}
+	return rawURL
+}
+
+func maskedURLQuery() string {
+	return url.Values{"_redacted_": {"***masked***"}}.Encode()
+}
+
+type sanitizedURLErrorLog struct {
+	message string
+	err     error
+}
+
+func (e *sanitizedURLErrorLog) Error() string {
+	return e.message
+}
+
+func (e *sanitizedURLErrorLog) Unwrap() error {
+	return e.err
+}
+
+func (e *sanitizedURLErrorLog) Timeout() bool {
+	var timeoutErr interface{ Timeout() bool }
+	return errors.As(e.err, &timeoutErr) && timeoutErr.Timeout()
+}
+
+func (e *sanitizedURLErrorLog) Temporary() bool {
+	var temporaryErr interface{ Temporary() bool }
+	return errors.As(e.err, &temporaryErr) && temporaryErr.Temporary()
+}
+
+// SanitizeURLErrorForLog returns an error whose Error text contains sanitized
+// URLs while its Unwrap chain retains the complete original error tree. This
+// keeps errors.Is/errors.As behavior for wrapped and joined errors unchanged;
+// errors.As still returns the original url.Error value.
+func SanitizeURLErrorForLog(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	urls := collectErrorURLs(err)
+	if len(urls) == 0 {
+		return err
+	}
+
+	safeMessage := err.Error()
+	changed := false
+	for _, rawURL := range urls {
+		sanitizedURL := SanitizeURLForLog(rawURL)
+		if sanitizedURL == rawURL {
+			continue
+		}
+		changed = true
+		safeMessage = strings.ReplaceAll(safeMessage, strconv.Quote(rawURL), strconv.Quote(sanitizedURL))
+		safeMessage = strings.ReplaceAll(safeMessage, rawURL, sanitizedURL)
+	}
+	if !changed {
+		return err
+	}
+	return &sanitizedURLErrorLog{message: safeMessage, err: err}
+}
+
+func collectErrorURLs(err error) []string {
+	seen := make(map[string]struct{})
+	var walk func(error)
+	walk = func(current error) {
+		if current == nil {
+			return
+		}
+		if urlErr, ok := current.(*url.Error); ok && urlErr.URL != "" {
+			seen[urlErr.URL] = struct{}{}
+		}
+		switch unwrapped := current.(type) {
+		case interface{ Unwrap() []error }:
+			for _, nested := range unwrapped.Unwrap() {
+				walk(nested)
+			}
+		case interface{ Unwrap() error }:
+			walk(unwrapped.Unwrap())
+		}
+	}
+	walk(err)
+
+	urls := make([]string, 0, len(seen))
+	for rawURL := range seen {
+		urls = append(urls, rawURL)
+	}
+	sort.Slice(urls, func(i, j int) bool {
+		return len(urls[i]) > len(urls[j])
+	})
+	return urls
+}
+
+func isSensitiveURLQueryKey(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	switch normalized {
+	case "key",
+		"api_key",
+		"api-key",
+		"apikey",
+		"x-api-key",
+		"access_token",
+		"refresh_token",
+		"id_token",
+		"token",
+		"authorization",
+		"auth",
+		"client_secret",
+		"secret",
+		"password",
+		"passwd",
+		"signature",
+		"sig",
+		"awsaccesskeyid",
+		"x-amz-credential",
+		"x-amz-security-token",
+		"x-amz-signature":
+		return true
+	}
+	return strings.Contains(normalized, "token") ||
+		strings.Contains(normalized, "secret") ||
+		strings.Contains(normalized, "signature")
 }
 
 func GetAPIVersion(c *gin.Context) string {
