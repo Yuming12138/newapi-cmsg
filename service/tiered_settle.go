@@ -22,7 +22,12 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	p := float64(usage.PromptTokens)
 	c := float64(usage.CompletionTokens)
 	cr := float64(usage.PromptTokensDetails.CachedTokens)
-	cc5m := float64(usage.PromptTokensDetails.CachedCreationTokens)
+	cc5m := float64(usage.PromptTokensDetails.CacheCreationTokensTotal())
+	nativeCacheWrite := usage.HasNativeOpenAICacheWriteTokens()
+	exactCacheExclusion := float64(usage.CacheReadWriteExclusionTokens)
+	if exactCacheExclusion < 0 {
+		exactCacheExclusion = 0
+	}
 	cc1h := float64(0)
 
 	if usage.UsageSemantic == "anthropic" {
@@ -44,11 +49,25 @@ func BuildTieredTokenParams(usage *dto.Usage, isClaudeUsageSemantic bool, usedVa
 	}
 
 	if !isClaudeUsageSemantic {
-		if usedVars["cr"] {
-			p -= cr
-		}
-		if usedVars["cc"] {
-			p -= cc5m
+		usesCacheRead := usedVars["cr"]
+		usesCacheWrite := usedVars["cc"]
+		if exactCacheExclusion > 0 && usesCacheRead && usesCacheWrite {
+			p -= exactCacheExclusion
+		} else if nativeCacheWrite && usesCacheRead && usesCacheWrite {
+			// Native OpenAI read/write counts are overlapping prefix lengths.
+			// Exclude their union once when both variables are priced.
+			if cr > cc5m {
+				p -= cr
+			} else {
+				p -= cc5m
+			}
+		} else {
+			if usesCacheRead {
+				p -= cr
+			}
+			if usesCacheWrite {
+				p -= cc5m
+			}
 		}
 		if usedVars["cc1h"] {
 			p -= cc1h

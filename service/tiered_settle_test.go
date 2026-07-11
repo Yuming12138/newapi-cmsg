@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/require"
 )
 
 // Claude Sonnet-style tiered expression: standard vs long-context
@@ -486,6 +487,118 @@ func TestBuildTieredTokenParams_GPT_NoCacheVar(t *testing.T) {
 	if math.Abs(got-want) > 0.01 {
 		t.Fatalf("quota = %f, want %f", got, want)
 	}
+}
+
+func TestBuildTieredTokenParamsNativeCacheWriteOptIn(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     3619,
+		CompletionTokens: 36,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:     2921,
+			CacheWriteTokens: 3616,
+		},
+	}
+
+	tests := []struct {
+		name     string
+		usedVars map[string]bool
+		wantP    float64
+	}{
+		{name: "no cache opt in", usedVars: map[string]bool{}, wantP: 3619},
+		{name: "cache read only", usedVars: map[string]bool{"cr": true}, wantP: 698},
+		{name: "cache write only", usedVars: map[string]bool{"cc": true}, wantP: 3},
+		{name: "read and write use prefix union", usedVars: map[string]bool{"cr": true, "cc": true}, wantP: 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params := BuildTieredTokenParams(usage, false, tt.usedVars)
+			require.Equal(t, tt.wantP, params.P)
+			require.Equal(t, float64(3619), params.Len)
+			require.Equal(t, float64(2921), params.CR)
+			require.Equal(t, float64(3616), params.CC)
+		})
+	}
+}
+
+func TestBuildTieredTokenParamsLegacyCacheCreationKeepsSeparateSubtraction(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens: 1000,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:         200,
+			CachedCreationTokens: 100,
+		},
+	}
+
+	params := BuildTieredTokenParams(usage, false, map[string]bool{"cr": true, "cc": true})
+	require.Equal(t, float64(700), params.P)
+	require.Equal(t, float64(100), params.CC)
+}
+
+func TestBuildTieredTokenParamsAnthropicSourceKeepsSeparateSubtraction(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:  1000,
+		UsageSemantic: "openai",
+		UsageSource:   "anthropic",
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:         200,
+			CachedCreationTokens: 100,
+			CacheWriteTokens:     100,
+		},
+	}
+
+	params := BuildTieredTokenParams(usage, false, map[string]bool{"cr": true, "cc": true})
+	require.Equal(t, float64(700), params.P)
+	require.Equal(t, float64(200), params.CR)
+	require.Equal(t, float64(100), params.CC)
+}
+
+func TestBuildTieredTokenParamsUsesExactAggregateCacheExclusion(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:                  2000,
+		CacheReadWriteExclusionTokens: 450,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:         300,
+			CachedCreationTokens: 350,
+			CacheWriteTokens:     300,
+		},
+	}
+
+	tests := []struct {
+		name     string
+		usedVars map[string]bool
+		wantP    float64
+	}{
+		{name: "no cache opt in", usedVars: map[string]bool{}, wantP: 2000},
+		{name: "cache read only", usedVars: map[string]bool{"cr": true}, wantP: 1700},
+		{name: "cache write only", usedVars: map[string]bool{"cc": true}, wantP: 1650},
+		{name: "read and write use exact aggregate exclusion", usedVars: map[string]bool{"cr": true, "cc": true}, wantP: 1550},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params := BuildTieredTokenParams(usage, false, tt.usedVars)
+			require.Equal(t, tt.wantP, params.P)
+			require.Equal(t, float64(2000), params.Len)
+		})
+	}
+}
+
+func TestBuildTieredTokenParamsClaudeNativeAliasDoesNotReducePrompt(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:  500,
+		UsageSemantic: "anthropic",
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:         200,
+			CachedCreationTokens: 100,
+			CacheWriteTokens:     100,
+		},
+		ClaudeCacheCreation5mTokens: 100,
+	}
+
+	params := BuildTieredTokenParams(usage, true, map[string]bool{"cr": true, "cc": true})
+	require.Equal(t, float64(500), params.P)
+	require.Equal(t, float64(800), params.Len)
 }
 
 func TestBuildTieredTokenParams_GPT_WithImage(t *testing.T) {

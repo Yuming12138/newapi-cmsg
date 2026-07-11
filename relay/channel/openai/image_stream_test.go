@@ -49,7 +49,7 @@ func TestOpenaiImageStreamHandlerForwardsSSEAndUsage(t *testing.T) {
 		`event: image_generation.partial_image`,
 		`data: {"type":"image_generation.partial_image","b64_json":"partial"}`,
 		``,
-		`data: {"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7,"input_tokens_details":{"image_tokens":2,"text_tokens":1}}}`,
+		`data: {"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7,"input_tokens_details":{"cached_tokens":1,"cache_write_tokens":2,"image_tokens":2,"text_tokens":1}}}`,
 		``,
 		`data: [DONE]`,
 		``,
@@ -64,9 +64,11 @@ func TestOpenaiImageStreamHandlerForwardsSSEAndUsage(t *testing.T) {
 	require.Equal(t, 7, usage.TotalTokens)
 	require.Equal(t, 2, usage.PromptTokensDetails.ImageTokens)
 	require.Equal(t, 1, usage.PromptTokensDetails.TextTokens)
+	require.Equal(t, 1, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 2, usage.PromptTokensDetails.CacheWriteTokens)
 	require.Contains(t, recorder.Body.String(), `event: image_generation.partial_image`)
 	require.Contains(t, recorder.Body.String(), `data: {"type":"image_generation.partial_image","b64_json":"partial"}`)
-	require.Contains(t, recorder.Body.String(), `data: {"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7,"input_tokens_details":{"image_tokens":2,"text_tokens":1}}}`)
+	require.Contains(t, recorder.Body.String(), `"cache_write_tokens":2`)
 	require.Contains(t, recorder.Body.String(), `data: [DONE]`)
 	require.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
 }
@@ -78,7 +80,7 @@ func TestOpenaiImageStreamHandlerWrapsJSONResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	t.Cleanup(func() { gin.SetMode(oldMode) })
 
-	body := `{"created":1710000000,"data":[{"b64_json":"final","revised_prompt":"draw a cat"}],"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7,"input_tokens_details":{"image_tokens":2,"text_tokens":1}}}`
+	body := `{"created":1710000000,"data":[{"b64_json":"final","revised_prompt":"draw a cat"}],"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7,"input_tokens_details":{"cached_tokens":1,"cache_write_tokens":2,"image_tokens":2,"text_tokens":1}}}`
 
 	c, recorder, resp, info := newImageTestContext(t, body, "application/json", true)
 
@@ -89,6 +91,8 @@ func TestOpenaiImageStreamHandlerWrapsJSONResponse(t *testing.T) {
 	require.Equal(t, 7, usage.TotalTokens)
 	require.Equal(t, 2, usage.PromptTokensDetails.ImageTokens)
 	require.Equal(t, 1, usage.PromptTokensDetails.TextTokens)
+	require.Equal(t, 1, usage.PromptTokensDetails.CachedTokens)
+	require.Equal(t, 2, usage.PromptTokensDetails.CacheWriteTokens)
 	require.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
 	require.Empty(t, recorder.Header().Get("Content-Length"))
 	require.Contains(t, recorder.Body.String(), `event: image_generation.completed`)

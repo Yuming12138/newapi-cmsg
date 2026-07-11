@@ -207,6 +207,183 @@ func TestCalculateTextQuotaSummaryHandlesLegacyClaudeDerivedOpenAIUsage(t *testi
 	require.Equal(t, 1624, summary.Quota)
 }
 
+func TestCalculateTextQuotaSummaryBillsNativeOpenAICacheWriteTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+
+	relayInfo := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "gpt-5.6-sol",
+		PriceData: types.PriceData{
+			ModelRatio:         1,
+			CompletionRatio:    2,
+			CacheRatio:         0.1,
+			CacheCreationRatio: 1.25,
+			GroupRatioInfo:     types.GroupRatioInfo{GroupRatio: 1},
+		},
+		StartTime: time.Now(),
+	}
+
+	tests := []struct {
+		name       string
+		prompt     int
+		completion int
+		read       int
+		write      int
+		wantQuota  int
+	}{
+		{
+			name:       "real overlapping prefix keeps uncached tail",
+			prompt:     3619,
+			completion: 36,
+			read:       2921,
+			write:      3616,
+			// 3 + 2921*0.1 + 3616*1.25 + 36*2 = 4887.1 => 4887.
+			wantQuota: 4887,
+		},
+		{
+			name:   "read prefix larger than write prefix",
+			prompt: 1000,
+			read:   200,
+			write:  100,
+			// 800 + 200*0.1 + 100*1.25 = 945.
+			wantQuota: 945,
+		},
+		{
+			name:   "read and write prefixes equal",
+			prompt: 1000,
+			read:   200,
+			write:  200,
+			// 800 + 200*0.1 + 200*1.25 = 1070.
+			wantQuota: 1070,
+		},
+		{
+			name:   "write prefix larger than prompt clamps base",
+			prompt: 100,
+			write:  150,
+			// 0 + 150*1.25 = 187.5 => 188.
+			wantQuota: 188,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			usage := &dto.Usage{
+				PromptTokens:     tt.prompt,
+				CompletionTokens: tt.completion,
+				PromptTokensDetails: dto.InputTokenDetails{
+					CachedTokens:     tt.read,
+					CacheWriteTokens: tt.write,
+				},
+			}
+
+			summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+			require.Equal(t, tt.write, summary.CacheCreationTokens)
+			require.Equal(t, tt.write, cacheWriteTokensTotal(summary))
+			require.Equal(t, tt.wantQuota, summary.Quota)
+		})
+	}
+}
+
+func TestCalculateTextQuotaSummaryUsesMaximumCacheCreationAlias(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-5.6-sol",
+		PriceData: types.PriceData{
+			ModelRatio:         1,
+			CompletionRatio:    1,
+			CacheRatio:         0.1,
+			CacheCreationRatio: 1.25,
+			GroupRatioInfo:     types.GroupRatioInfo{GroupRatio: 1},
+		},
+		StartTime: time.Now(),
+	}
+	usage := &dto.Usage{
+		PromptTokens: 1000,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:         200,
+			CachedCreationTokens: 300,
+			CacheWriteTokens:     250,
+		},
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+	require.Equal(t, 300, summary.CacheCreationTokens)
+	// Native field marks overlapping prefix semantics, while max(alias)=300:
+	// 700 + 200*0.1 + 300*1.25 = 1095.
+	require.Equal(t, 1095, summary.Quota)
+}
+
+func TestCalculateTextQuotaSummaryAnthropicSourceKeepsSeparateCacheCategories(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+	relayInfo := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "claude-derived-openai-wire",
+		PriceData: types.PriceData{
+			ModelRatio:         1,
+			CompletionRatio:    1,
+			CacheRatio:         0.1,
+			CacheCreationRatio: 1.25,
+			GroupRatioInfo:     types.GroupRatioInfo{GroupRatio: 1},
+		},
+		StartTime: time.Now(),
+	}
+	usage := &dto.Usage{
+		PromptTokens:  1000,
+		UsageSemantic: "openai",
+		UsageSource:   "anthropic",
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:         200,
+			CachedCreationTokens: 100,
+			CacheWriteTokens:     100,
+		},
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+
+	require.Zero(t, summary.NativeCacheWriteTokens)
+	// Claude-derived aliases are disjoint categories: 700 + 200*0.1 + 100*1.25 = 845.
+	require.Equal(t, 845, summary.Quota)
+}
+
+func TestCalculateTextQuotaSummaryUsesExactAggregateCacheExclusion(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+	relayInfo := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		OriginModelName: "deepseek-chat-web-search-aggregate",
+		PriceData: types.PriceData{
+			ModelRatio:         1,
+			CompletionRatio:    1,
+			CacheRatio:         0.1,
+			CacheCreationRatio: 1.25,
+			GroupRatioInfo:     types.GroupRatioInfo{GroupRatio: 1},
+		},
+		StartTime: time.Now(),
+	}
+	usage := &dto.Usage{
+		PromptTokens:                  2000,
+		CacheReadWriteExclusionTokens: 450,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:         300,
+			CachedCreationTokens: 350,
+			CacheWriteTokens:     300,
+		},
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+
+	require.Equal(t, 450, summary.CacheReadWriteExclusionTokens)
+	// 1550 + 300*0.1 + 350*1.25 = 2017.5 => 2018.
+	require.Equal(t, 2018, summary.Quota)
+}
+
 func TestCalculateTextQuotaSummarySeparatesOpenRouterCacheReadFromPromptBilling(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

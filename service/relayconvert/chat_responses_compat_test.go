@@ -445,6 +445,55 @@ func TestChatCompletionsResponseToResponsesPreservesTextToolCallsAndUsage(t *tes
 	assert.Equal(t, `"{\"q\":\"x\"}"`, string(resp.Output[1].Arguments))
 }
 
+func TestChatAndResponsesUsagePreserveCacheWriteTokens(t *testing.T) {
+	chatUsage := &dto.Usage{
+		PromptTokens:                  3619,
+		CompletionTokens:              36,
+		TotalTokens:                   3655,
+		UsageSemantic:                 "openai",
+		UsageSource:                   "anthropic",
+		CacheReadWriteExclusionTokens: 3616,
+		PromptTokensDetails: dto.InputTokenDetails{
+			CachedTokens:         2921,
+			CachedCreationTokens: 120,
+			CacheWriteTokens:     3616,
+			TextTokens:           3,
+		},
+		ClaudeCacheCreation5mTokens: 120,
+	}
+
+	responsesUsage := UsageFromChatUsage(chatUsage)
+	require.NotNil(t, responsesUsage.InputTokensDetails)
+	assert.Equal(t, 2921, responsesUsage.InputTokensDetails.CachedTokens)
+	assert.Equal(t, 120, responsesUsage.InputTokensDetails.CachedCreationTokens)
+	assert.Equal(t, 3616, responsesUsage.InputTokensDetails.CacheWriteTokens)
+	assert.Equal(t, 3, responsesUsage.InputTokensDetails.TextTokens)
+	assert.Equal(t, "openai", responsesUsage.UsageSemantic)
+	assert.Equal(t, "anthropic", responsesUsage.UsageSource)
+	assert.Equal(t, 120, responsesUsage.ClaudeCacheCreation5mTokens)
+	assert.Equal(t, 3616, responsesUsage.CacheReadWriteExclusionTokens)
+	assert.False(t, responsesUsage.HasNativeOpenAICacheWriteTokens())
+
+	roundTrip := UsageFromResponsesUsage(responsesUsage)
+	assert.Equal(t, 2921, roundTrip.PromptTokensDetails.CachedTokens)
+	assert.Equal(t, 120, roundTrip.PromptTokensDetails.CachedCreationTokens)
+	assert.Equal(t, 3616, roundTrip.PromptTokensDetails.CacheWriteTokens)
+	assert.Equal(t, 3, roundTrip.PromptTokensDetails.TextTokens)
+	assert.Equal(t, "openai", roundTrip.UsageSemantic)
+	assert.Equal(t, "anthropic", roundTrip.UsageSource)
+	assert.Equal(t, 120, roundTrip.ClaudeCacheCreation5mTokens)
+	assert.Equal(t, 3616, roundTrip.CacheReadWriteExclusionTokens)
+	assert.False(t, roundTrip.HasNativeOpenAICacheWriteTokens())
+}
+
+func TestUsageFromChatUsageKeepsCacheWriteOnlyDetails(t *testing.T) {
+	usage := UsageFromChatUsage(&dto.Usage{
+		PromptTokensDetails: dto.InputTokenDetails{CacheWriteTokens: 42},
+	})
+	require.NotNil(t, usage.InputTokensDetails)
+	assert.Equal(t, 42, usage.InputTokensDetails.CacheWriteTokens)
+}
+
 func TestChatCompletionsResponseToResponsesMapsIncompleteFinishReasons(t *testing.T) {
 	tests := []struct {
 		name         string

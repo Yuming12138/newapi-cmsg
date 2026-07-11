@@ -227,6 +227,11 @@ type Usage struct {
 	PromptCacheHitTokens int    `json:"prompt_cache_hit_tokens,omitempty"`
 	UsageSemantic        string `json:"usage_semantic,omitempty"`
 	UsageSource          string `json:"usage_source,omitempty"`
+	// CacheReadWriteExclusionTokens stores the exact number of base input
+	// tokens to exclude when both cache read and creation are priced. It is
+	// internal-only and is needed for multi-request aggregates where
+	// max(sum(read), sum(write)) differs from sum(per-request exclusions).
+	CacheReadWriteExclusionTokens int `json:"-"`
 
 	PromptTokensDetails    InputTokenDetails  `json:"prompt_tokens_details"`
 	CompletionTokenDetails OutputTokenDetails `json:"completion_tokens_details"`
@@ -242,6 +247,17 @@ type Usage struct {
 	Cost any `json:"cost,omitempty"`
 }
 
+// HasNativeOpenAICacheWriteTokens reports whether cache_write_tokens came
+// from a native OpenAI-style usage payload. Claude-derived OpenAI wire usage
+// also exposes this compatibility alias, but keeps read/creation categories
+// disjoint instead of using OpenAI's overlapping cache-prefix semantics.
+func (u *Usage) HasNativeOpenAICacheWriteTokens() bool {
+	return u != nil &&
+		u.PromptTokensDetails.CacheWriteTokens > 0 &&
+		u.UsageSemantic != "anthropic" &&
+		u.UsageSource != "anthropic"
+}
+
 type OpenAIVideoResponse struct {
 	Id        string `json:"id" example:"file-abc123"`
 	Object    string `json:"object" example:"file"`
@@ -255,9 +271,28 @@ type OpenAIVideoResponse struct {
 type InputTokenDetails struct {
 	CachedTokens         int `json:"cached_tokens"`
 	CachedCreationTokens int `json:"cached_creation_tokens,omitempty"`
-	TextTokens           int `json:"text_tokens"`
-	AudioTokens          int `json:"audio_tokens"`
-	ImageTokens          int `json:"image_tokens"`
+	// CacheWriteTokens is OpenAI's native cache-write count, reported as
+	// prompt_tokens_details.cache_write_tokens (Chat Completions) or
+	// input_tokens_details.cache_write_tokens (Responses and Images).
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	TextTokens       int `json:"text_tokens"`
+	AudioTokens      int `json:"audio_tokens"`
+	ImageTokens      int `json:"image_tokens"`
+}
+
+// CacheCreationTokensTotal normalizes the legacy/Claude-derived
+// cached_creation_tokens field and OpenAI's native cache_write_tokens field.
+// They describe the same billable cache-creation category, so the larger
+// non-negative value wins rather than summing aliases and double charging.
+func (d InputTokenDetails) CacheCreationTokensTotal() int {
+	total := d.CachedCreationTokens
+	if d.CacheWriteTokens > total {
+		total = d.CacheWriteTokens
+	}
+	if total < 0 {
+		return 0
+	}
+	return total
 }
 
 type OutputTokenDetails struct {
