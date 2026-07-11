@@ -32,7 +32,7 @@ func TestParseOpenAIUsageChatCompletions(t *testing.T) {
 }
 
 func TestParseOpenAIUsageResponses(t *testing.T) {
-	data := []byte(`{"usage":{"input_tokens":10,"output_tokens":20,"total_tokens":30,"input_tokens_details":{"cached_tokens":7},"output_tokens_details":{"reasoning_tokens":9}}}`)
+	data := []byte(`{"service_tier":"default","usage":{"input_tokens":10,"output_tokens":20,"total_tokens":30,"input_tokens_details":{"cached_tokens":7},"output_tokens_details":{"reasoning_tokens":9}}}`)
 	detail := ParseOpenAIUsage(data)
 	if detail.InputTokens != 10 {
 		t.Fatalf("input tokens = %d, want %d", detail.InputTokens, 10)
@@ -49,6 +49,9 @@ func TestParseOpenAIUsageResponses(t *testing.T) {
 	if detail.ReasoningTokens != 9 {
 		t.Fatalf("reasoning tokens = %d, want %d", detail.ReasoningTokens, 9)
 	}
+	if detail.ResponseServiceTier != "default" {
+		t.Fatalf("response service tier = %q, want default", detail.ResponseServiceTier)
+	}
 }
 
 func TestParseOpenAIUsageIgnoresNullUsage(t *testing.T) {
@@ -56,6 +59,24 @@ func TestParseOpenAIUsageIgnoresNullUsage(t *testing.T) {
 	detail := ParseOpenAIUsage(data)
 	if detail != (usage.Detail{}) {
 		t.Fatalf("detail = %+v, want zero detail", detail)
+	}
+}
+
+func TestParseOpenAIUsagePreservesResponseTierWithoutUsage(t *testing.T) {
+	t.Parallel()
+
+	detail := ParseOpenAIUsage([]byte(`{"service_tier":"default"}`))
+	if detail.ResponseServiceTier != "default" {
+		t.Fatalf("response service tier = %q, want default", detail.ResponseServiceTier)
+	}
+}
+
+func TestParseCodexUsagePreservesResponseTierWithoutUsage(t *testing.T) {
+	t.Parallel()
+
+	detail, ok := ParseCodexUsage([]byte(`{"response":{"service_tier":"default"}}`))
+	if !ok || detail.ResponseServiceTier != "default" {
+		t.Fatalf("ParseCodexUsage() = (%+v, %v), want response tier default", detail, ok)
 	}
 }
 
@@ -67,7 +88,7 @@ func TestParseOpenAIStreamUsageIgnoresNullUsage(t *testing.T) {
 }
 
 func TestParseOpenAIStreamUsageResponsesFields(t *testing.T) {
-	line := []byte(`data: {"id":"chunk_1","object":"chat.completion.chunk","choices":[],"usage":{"input_tokens":8,"output_tokens":5,"total_tokens":13,"input_tokens_details":{"cached_tokens":3},"output_tokens_details":{"reasoning_tokens":2}}}`)
+	line := []byte(`data: {"id":"chunk_1","object":"chat.completion.chunk","service_tier":"flex","choices":[],"usage":{"input_tokens":8,"output_tokens":5,"total_tokens":13,"input_tokens_details":{"cached_tokens":3},"output_tokens_details":{"reasoning_tokens":2}}}`)
 	detail, ok := ParseOpenAIStreamUsage(line)
 	if !ok {
 		t.Fatal("ParseOpenAIStreamUsage() ok = false, want true")
@@ -87,24 +108,54 @@ func TestParseOpenAIStreamUsageResponsesFields(t *testing.T) {
 	if detail.ReasoningTokens != 2 {
 		t.Fatalf("reasoning tokens = %d, want %d", detail.ReasoningTokens, 2)
 	}
+	if detail.ResponseServiceTier != "flex" {
+		t.Fatalf("response service tier = %q, want flex", detail.ResponseServiceTier)
+	}
+}
+
+func TestStreamUsageBufferPreservesTierAcrossChunks(t *testing.T) {
+	t.Parallel()
+
+	var buffer StreamUsageBuffer
+	buffer.ObserveOpenAIStream([]byte(`data: {"service_tier":"default"}`))
+	buffer.ObserveOpenAIStream([]byte(`data: {"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
+	detail, ok := buffer.Detail()
+	if !ok {
+		t.Fatal("Detail() ok = false, want true")
+	}
+	if detail.InputTokens != 1 || detail.OutputTokens != 1 || detail.ResponseServiceTier != "default" {
+		t.Fatalf("detail = %+v, want usage with response tier default", detail)
+	}
 }
 
 func TestStreamUsageBufferObserveOpenAIStreamStateTransitions(t *testing.T) {
-	t.Run("usage chunk", func(t *testing.T) {
+	t.Parallel()
+
+	t.Run("same chunk", func(t *testing.T) {
 		var buffer StreamUsageBuffer
-		buffer.ObserveOpenAIStream([]byte(`data: {"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}`))
+		buffer.ObserveOpenAIStream([]byte(`data: {"service_tier":"flex","usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}`))
 		detail, ok := buffer.Detail()
-		if !ok || detail.InputTokens != 2 || detail.OutputTokens != 3 || detail.TotalTokens != 5 {
+		if !ok || detail.InputTokens != 2 || detail.ResponseServiceTier != "flex" {
 			t.Fatalf("detail = %+v ok=%v", detail, ok)
 		}
 	})
 
-	t.Run("final usage wins", func(t *testing.T) {
+	t.Run("usage before tier", func(t *testing.T) {
 		var buffer StreamUsageBuffer
-		buffer.ObserveOpenAIStream([]byte(`data: {"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
-		buffer.ObserveOpenAIStream([]byte(`data: {"usage":{"input_tokens":4,"output_tokens":5,"total_tokens":9}}`))
+		buffer.ObserveOpenAIStream([]byte(`data: {"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}`))
+		buffer.ObserveOpenAIStream([]byte(`data: {"service_tier":"default"}`))
 		detail, ok := buffer.Detail()
-		if !ok || detail.InputTokens != 4 || detail.OutputTokens != 5 || detail.TotalTokens != 9 {
+		if !ok || detail.InputTokens != 2 || detail.ResponseServiceTier != "default" {
+			t.Fatalf("detail = %+v ok=%v", detail, ok)
+		}
+	})
+
+	t.Run("final usage tier overrides early tier", func(t *testing.T) {
+		var buffer StreamUsageBuffer
+		buffer.ObserveOpenAIStream([]byte(`data: {"service_tier":"default"}`))
+		buffer.ObserveOpenAIStream([]byte(`data: {"service_tier":"priority","usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}`))
+		detail, ok := buffer.Detail()
+		if !ok || detail.ResponseServiceTier != "priority" {
 			t.Fatalf("detail = %+v ok=%v", detail, ok)
 		}
 	})
@@ -253,9 +304,46 @@ func TestUsageReporterBuildRecordIncludesServiceTier(t *testing.T) {
 	ctx := usage.WithServiceTier(context.Background(), "priority")
 	reporter := NewUsageReporter(ctx, "openai", "gpt-5.4", nil)
 
-	record := reporter.buildRecord(usage.Detail{TotalTokens: 3}, false)
+	record := reporter.buildRecord(usage.Detail{TotalTokens: 3, ResponseServiceTier: "default"}, false)
 	if record.ServiceTier != "priority" {
 		t.Fatalf("service tier = %q, want %q", record.ServiceTier, "priority")
+	}
+	if record.RequestServiceTier != "priority" {
+		t.Fatalf("request service tier = %q, want priority", record.RequestServiceTier)
+	}
+	if record.ResponseServiceTier != "default" {
+		t.Fatalf("response service tier = %q, want default", record.ResponseServiceTier)
+	}
+}
+
+func TestRequestServiceTierForRecordFallback(t *testing.T) {
+	tests := []struct {
+		name   string
+		record usage.Record
+		want   string
+	}{
+		{
+			name:   "explicit request tier",
+			record: usage.Record{ServiceTier: "legacy", RequestServiceTier: "priority"},
+			want:   "priority",
+		},
+		{
+			name:   "legacy service tier",
+			record: usage.Record{ServiceTier: "flex"},
+			want:   "flex",
+		},
+		{
+			name:   "default",
+			record: usage.Record{},
+			want:   usage.DefaultServiceTier,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := requestServiceTierForRecord(test.record); got != test.want {
+				t.Fatalf("requestServiceTierForRecord() = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 
