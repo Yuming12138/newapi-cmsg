@@ -754,11 +754,8 @@ func buildResponsesResponse(c *gin.Context, info *relaycommon.RelayInfo, state *
 	if state.Request.TopP != nil {
 		response.TopP = *state.Request.TopP
 	}
-	if len(state.Request.ParallelToolCalls) > 0 {
-		var parallel bool
-		if err := common.Unmarshal(state.Request.ParallelToolCalls, &parallel); err == nil {
-			response.ParallelToolCalls = parallel
-		}
+	if state.Request.ParallelToolCalls != nil {
+		response.ParallelToolCalls = *state.Request.ParallelToolCalls
 	}
 	if len(state.Request.Store) > 0 {
 		var store bool

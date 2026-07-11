@@ -55,6 +55,8 @@ func TestOpenAIResponsesRequestPreserveExplicitZeroValues(t *testing.T) {
 		"model":"gpt-4.1",
 		"max_output_tokens":0,
 		"max_tool_calls":0,
+		"parallel_tool_calls":false,
+		"service_tier":"",
 		"stream":false,
 		"top_p":0
 	}`)
@@ -68,8 +70,34 @@ func TestOpenAIResponsesRequestPreserveExplicitZeroValues(t *testing.T) {
 
 	require.True(t, gjson.GetBytes(encoded, "max_output_tokens").Exists())
 	require.True(t, gjson.GetBytes(encoded, "max_tool_calls").Exists())
+	require.True(t, gjson.GetBytes(encoded, "parallel_tool_calls").Exists())
+	require.False(t, gjson.GetBytes(encoded, "parallel_tool_calls").Bool())
+	require.True(t, gjson.GetBytes(encoded, "service_tier").Exists())
+	require.Equal(t, "", gjson.GetBytes(encoded, "service_tier").String())
 	require.True(t, gjson.GetBytes(encoded, "stream").Exists())
 	require.True(t, gjson.GetBytes(encoded, "top_p").Exists())
+}
+
+func TestOpenAIResponsesRequestPreservesCodexMetadataAndReasoningFields(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-5.6-sol",
+		"client_metadata":{"session":"session-1"},
+		"reasoning":{
+			"effort":"high",
+			"mode":"adaptive",
+			"context":{"turn":"turn-1"}
+		}
+	}`)
+
+	var req OpenAIResponsesRequest
+	require.NoError(t, common.Unmarshal(raw, &req))
+	require.NotNil(t, req.Reasoning)
+
+	encoded, err := common.Marshal(req)
+	require.NoError(t, err)
+	require.Equal(t, "session-1", gjson.GetBytes(encoded, "client_metadata.session").String())
+	require.Equal(t, "adaptive", gjson.GetBytes(encoded, "reasoning.mode").String())
+	require.Equal(t, "turn-1", gjson.GetBytes(encoded, "reasoning.context.turn").String())
 }
 
 func TestGeneralOpenAIRequestGetSystemRoleName(t *testing.T) {

@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -19,6 +21,24 @@ func buildChannelAffinityTemplateContextForTest(meta channelAffinityMeta) *gin.C
 	ctx, _ := gin.CreateTestContext(rec)
 	setChannelAffinityContext(ctx, meta)
 	return ctx
+}
+
+func updateChannelAffinitySettingForTest(t *testing.T, values map[string]string) {
+	t.Helper()
+	setting := config.GlobalConfig.Get("channel_affinity_setting")
+	require.NotNil(t, setting)
+
+	original, err := config.ConfigToMap(setting)
+	require.NoError(t, err)
+	restore := make(map[string]string, len(values))
+	for key := range values {
+		restore[key] = original[key]
+	}
+
+	require.NoError(t, config.UpdateConfigFromMap(setting, values))
+	t.Cleanup(func() {
+		require.NoError(t, config.UpdateConfigFromMap(setting, restore))
+	})
 }
 
 func TestApplyChannelAffinityOverrideTemplate_NoTemplate(t *testing.T) {
@@ -179,12 +199,7 @@ func TestShouldSkipRetryAfterChannelAffinityFailure(t *testing.T) {
 func TestHandleUnusableChannelAffinityForRequestClearsByDefault(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	setting := operation_setting.GetChannelAffinitySetting()
-	oldKeep := setting.KeepOnChannelDisabled
-	setting.KeepOnChannelDisabled = false
-	t.Cleanup(func() {
-		setting.KeepOnChannelDisabled = oldKeep
-	})
+	updateChannelAffinitySettingForTest(t, map[string]string{"keep_on_channel_disabled": "false"})
 
 	cacheKeySuffix := fmt.Sprintf("codex cli trace:default:clear-unusable-%d", time.Now().UnixNano())
 	cacheKeyFull := channelAffinityCacheNamespace + ":" + cacheKeySuffix
@@ -213,12 +228,7 @@ func TestHandleUnusableChannelAffinityForRequestClearsByDefault(t *testing.T) {
 func TestHandleUnusableChannelAffinityForRequestRetainsWhenConfigured(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	setting := operation_setting.GetChannelAffinitySetting()
-	oldKeep := setting.KeepOnChannelDisabled
-	setting.KeepOnChannelDisabled = true
-	t.Cleanup(func() {
-		setting.KeepOnChannelDisabled = oldKeep
-	})
+	updateChannelAffinitySettingForTest(t, map[string]string{"keep_on_channel_disabled": "true"})
 
 	cacheKeySuffix := fmt.Sprintf("codex cli trace:default:retain-unusable-%d", time.Now().UnixNano())
 	cacheKeyFull := channelAffinityCacheNamespace + ":" + cacheKeySuffix
@@ -283,11 +293,10 @@ func TestGetPreferredChannelByAffinity_RequestHeaderKeySource(t *testing.T) {
 	})
 
 	setting := operation_setting.GetChannelAffinitySetting()
-	originalRules := setting.Rules
-	setting.Rules = append([]operation_setting.ChannelAffinityRule{rule}, originalRules...)
-	t.Cleanup(func() {
-		setting.Rules = originalRules
-	})
+	rules := append([]operation_setting.ChannelAffinityRule{rule}, setting.Rules...)
+	rulesJSON, err := common.Marshal(rules)
+	require.NoError(t, err)
+	updateChannelAffinitySettingForTest(t, map[string]string{"rules": string(rulesJSON)})
 
 	rec := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(rec)

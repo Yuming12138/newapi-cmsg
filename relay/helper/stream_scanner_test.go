@@ -111,6 +111,34 @@ func TestStreamScannerHandler_EmptyBody(t *testing.T) {
 	assert.False(t, called.Load(), "handler should not be called for empty body")
 }
 
+func TestStreamScannerHandler_CopiesAllowedCodexHeaders(t *testing.T) {
+	c, resp, info := setupStreamTest(t, strings.NewReader("data: [DONE]\n"))
+	resp.Header = make(http.Header)
+	resp.Header.Add("X-Reasoning-Included", "true")
+	resp.Header.Add("X-Codex-Turn-State", "turn-one")
+	resp.Header.Add("X-Codex-Turn-State", "turn-two")
+	resp.Header.Set("X-Unrelated-Upstream-Header", "must-not-pass")
+
+	StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {})
+
+	assert.Equal(t, "true", c.Writer.Header().Get("X-Reasoning-Included"))
+	assert.Equal(t, []string{"turn-one", "turn-two"}, c.Writer.Header().Values("X-Codex-Turn-State"))
+	assert.Empty(t, c.Writer.Header().Get("X-Unrelated-Upstream-Header"))
+}
+
+func TestCopyCodexSSEHeadersRejectsLineBreaks(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	resp := &http.Response{Header: http.Header{
+		"X-Codex-Turn-State": []string{"safe", "unsafe\r\nX-Injected: true"},
+	}}
+
+	copyCodexSSEHeaders(c, resp)
+
+	assert.Equal(t, []string{"safe"}, c.Writer.Header().Values("X-Codex-Turn-State"))
+	assert.Empty(t, c.Writer.Header().Get("X-Injected"))
+}
+
 func TestStreamScannerHandler_1000Chunks(t *testing.T) {
 	t.Parallel()
 

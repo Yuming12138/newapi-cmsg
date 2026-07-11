@@ -350,11 +350,6 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 		}
 	}
 
-	var parallelToolCallsRaw json.RawMessage
-	if req.ParallelTooCalls != nil {
-		parallelToolCallsRaw, _ = common.Marshal(*req.ParallelTooCalls)
-	}
-
 	textRaw := convertChatResponseFormatToResponsesText(req.ResponseFormat)
 
 	maxOutputTokens := lo.FromPtrOr(req.MaxTokens, uint(0))
@@ -383,7 +378,7 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 		Tools:             toolsRaw,
 		TopP:              topP,
 		User:              req.User,
-		ParallelToolCalls: parallelToolCallsRaw,
+		ParallelToolCalls: req.ParallelTooCalls,
 		Store:             req.Store,
 		Metadata:          req.Metadata,
 	}

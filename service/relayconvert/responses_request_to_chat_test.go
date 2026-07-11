@@ -17,6 +17,7 @@ func TestResponsesRequestToChatCompletionsRequestInstructionsAndScalarInput(t *t
 	topP := 0.9
 	maxOutputTokens := uint(128)
 	parallelToolCalls := true
+	serviceTier := "priority"
 
 	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
 		Model:                "gpt-test",
@@ -30,10 +31,11 @@ func TestResponsesRequestToChatCompletionsRequestInstructionsAndScalarInput(t *t
 		User:                 mustRawMessage(t, "user-1"),
 		Store:                mustRawMessage(t, false),
 		Metadata:             mustRawMessage(t, map[string]any{"trace": "abc"}),
-		ParallelToolCalls:    mustRawMessage(t, parallelToolCalls),
+		ParallelToolCalls:    &parallelToolCalls,
 		PromptCacheKey:       mustRawMessage(t, "cache-key"),
 		PromptCacheRetention: mustRawMessage(t, "24h"),
 		Reasoning:            &dto.Reasoning{Effort: "medium"},
+		ServiceTier:          &serviceTier,
 	})
 	require.NoError(t, err)
 
@@ -50,6 +52,7 @@ func TestResponsesRequestToChatCompletionsRequestInstructionsAndScalarInput(t *t
 	assert.True(t, lo.FromPtr(got.ParallelTooCalls))
 	assert.Equal(t, "cache-key", got.PromptCacheKey)
 	assert.Equal(t, "medium", got.ReasoningEffort)
+	assert.JSONEq(t, `"priority"`, string(got.ServiceTier))
 	assert.Equal(t, `"user-1"`, string(got.User))
 	assert.Equal(t, `false`, string(got.Store))
 	assert.Equal(t, "abc", gjson.GetBytes(got.Metadata, "trace").String())
