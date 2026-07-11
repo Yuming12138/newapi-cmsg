@@ -103,6 +103,9 @@ func UsageFromChatUsage(src *dto.Usage) *dto.Usage {
 	usage.CacheReadWriteExclusionTokens = src.CacheReadWriteExclusionTokens
 	usage.ClaudeCacheCreation5mTokens = src.ClaudeCacheCreation5mTokens
 	usage.ClaudeCacheCreation1hTokens = src.ClaudeCacheCreation1hTokens
+	// Keep canonical Chat details for internal settlement while also exposing
+	// the Responses-compatible input_tokens_details wire shape below.
+	usage.PromptTokensDetails = src.PromptTokensDetails
 	if src.PromptTokens != 0 {
 		usage.PromptTokens = src.PromptTokens
 		usage.InputTokens = src.PromptTokens

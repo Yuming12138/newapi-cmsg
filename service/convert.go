@@ -235,7 +235,9 @@ func buildClaudeUsageFromOpenAIUsage(oaiUsage *dto.Usage) *dto.ClaudeUsage {
 	)
 	inputTokens := oaiUsage.PromptTokens
 	cachePrefixTokens := 0
-	if oaiUsage.CacheReadWriteExclusionTokens > 0 {
+	if oaiUsage.CacheReadWriteExclusionTokens > 0 &&
+		oaiUsage.UsageSemantic != "anthropic" &&
+		oaiUsage.UsageSource != "anthropic" {
 		cachePrefixTokens = oaiUsage.CacheReadWriteExclusionTokens
 	} else if oaiUsage.HasNativeOpenAICacheWriteTokens() {
 		cachePrefixTokens = oaiUsage.PromptTokensDetails.CachedTokens

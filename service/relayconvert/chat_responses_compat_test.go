@@ -492,6 +492,8 @@ func TestUsageFromChatUsageKeepsCacheWriteOnlyDetails(t *testing.T) {
 	})
 	require.NotNil(t, usage.InputTokensDetails)
 	assert.Equal(t, 42, usage.InputTokensDetails.CacheWriteTokens)
+	assert.Equal(t, 42, usage.PromptTokensDetails.CacheWriteTokens)
+	assert.True(t, usage.HasNativeOpenAICacheWriteTokens())
 }
 
 func TestChatCompletionsResponseToResponsesMapsIncompleteFinishReasons(t *testing.T) {

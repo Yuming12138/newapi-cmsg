@@ -82,3 +82,33 @@ func TestBuildClaudeUsageUsesExactAggregateCacheExclusion(t *testing.T) {
 	require.Equal(t, 300, usage.CacheReadInputTokens)
 	require.Equal(t, 350, usage.CacheCreationInputTokens)
 }
+
+func TestBuildClaudeUsageDoesNotApplyExactExclusionToAnthropicUsage(t *testing.T) {
+	tests := []struct {
+		name     string
+		semantic string
+		source   string
+	}{
+		{name: "anthropic semantic", semantic: "anthropic"},
+		{name: "anthropic source", semantic: "openai", source: "anthropic"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			usage := buildClaudeUsageFromOpenAIUsage(&dto.Usage{
+				PromptTokens:                  100,
+				UsageSemantic:                 tt.semantic,
+				UsageSource:                   tt.source,
+				CacheReadWriteExclusionTokens: 80,
+				PromptTokensDetails: dto.InputTokenDetails{
+					CachedTokens:         30,
+					CachedCreationTokens: 50,
+					CacheWriteTokens:     50,
+				},
+			})
+
+			require.NotNil(t, usage)
+			require.Equal(t, 100, usage.InputTokens)
+		})
+	}
+}

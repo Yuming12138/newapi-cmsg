@@ -65,3 +65,10 @@ func TestUsageHasNativeOpenAICacheWriteTokens(t *testing.T) {
 		})
 	}
 }
+
+func TestUsageInternalCacheExclusionIsNotSerialized(t *testing.T) {
+	wire, err := common.Marshal(Usage{CacheReadWriteExclusionTokens: 123})
+	require.NoError(t, err)
+	require.NotContains(t, string(wire), "CacheReadWriteExclusionTokens")
+	require.NotContains(t, string(wire), "cache_read_write_exclusion_tokens")
+}
