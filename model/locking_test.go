@@ -10,41 +10,34 @@ import (
 	"gorm.io/gorm/utils/tests"
 )
 
+type namedDialector struct {
+	tests.DummyDialector
+	name string
+}
+
+func (d namedDialector) Name() string {
+	return d.name
+}
+
 // lockForUpdate must emit FOR UPDATE on databases that support row locking and
 // skip it on SQLite, where the syntax is invalid.
 //
-// The dummy dialector is intentional: SQLite's GORM dialector strips locking
-// clauses while building SQL, which would hide whether this helper added one.
+// Named dummy dialectors are intentional: they exercise the helper's dialect
+// selection without opening real database connections, while retaining a SQL
+// builder that exposes whether the locking clause was added.
 func TestLockForUpdateEmitsSupportedDialectClause(t *testing.T) {
-	dummyDB, err := gorm.Open(tests.DummyDialector{}, &gorm.Config{DryRun: true})
-	require.NoError(t, err)
-
-	buildSQL := func() string {
+	buildSQL := func(dialectName string) string {
+		db, err := gorm.Open(namedDialector{name: dialectName}, &gorm.Config{DryRun: true})
+		require.NoError(t, err)
 		var rows []Redemption
-		return lockForUpdate(dummyDB).Where("id = ?", 1).Find(&rows).Statement.SQL.String()
+		return lockForUpdate(db).Where("id = ?", 1).Find(&rows).Statement.SQL.String()
 	}
 
-	previousSQLite := common.UsingSQLite
-	previousMySQL := common.UsingMySQL
-	previousPostgreSQL := common.UsingPostgreSQL
-	t.Cleanup(func() {
-		common.UsingSQLite = previousSQLite
-		common.UsingMySQL = previousMySQL
-		common.UsingPostgreSQL = previousPostgreSQL
-	})
-
-	common.UsingSQLite = false
-	common.UsingMySQL = true
-	common.UsingPostgreSQL = false
-	assert.Contains(t, buildSQL(), "FOR UPDATE")
-
-	common.UsingMySQL = false
-	common.UsingPostgreSQL = true
-	assert.Contains(t, buildSQL(), "FOR UPDATE")
-
-	common.UsingSQLite = true
-	common.UsingPostgreSQL = false
-	assert.NotContains(t, buildSQL(), "FOR UPDATE")
+	// TestMain leaves common.UsingSQLite=true. The recognized transaction
+	// dialector must take precedence over that stale global value.
+	assert.Contains(t, buildSQL(common.DatabaseTypeMySQL), "FOR UPDATE")
+	assert.Contains(t, buildSQL(common.DatabaseTypePostgreSQL), "FOR UPDATE")
+	assert.NotContains(t, buildSQL(common.DatabaseTypeSQLite), "FOR UPDATE")
 }
 
 func TestLockForUpdateHandlesNilTransaction(t *testing.T) {

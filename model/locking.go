@@ -17,8 +17,31 @@ import (
 // provide the write serialization, while flows that can otherwise double-apply
 // a state transition must also use a compare-and-swap update.
 func lockForUpdate(tx *gorm.DB) *gorm.DB {
-	if tx == nil || common.UsingSQLite || (tx.Dialector != nil && tx.Dialector.Name() == common.DatabaseTypeSQLite) {
+	if tx == nil {
 		return tx
 	}
-	return tx.Clauses(clause.Locking{Strength: "UPDATE"})
+
+	// Prefer the transaction's own dialector. Global database flags can remain
+	// stale in tests, during initialization, or when a caller supplies a scoped
+	// DB, and must not make a real MySQL/PostgreSQL transaction skip its lock.
+	if tx.Dialector != nil {
+		switch tx.Dialector.Name() {
+		case common.DatabaseTypeSQLite:
+			return tx
+		case common.DatabaseTypeMySQL, common.DatabaseTypePostgreSQL:
+			return tx.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+	}
+
+	// Unknown/custom dialectors fall back to the configured main database type.
+	// If neither source is recognizable, skip the clause rather than emitting
+	// syntax that the database may not support.
+	switch {
+	case common.UsingSQLite:
+		return tx
+	case common.UsingMySQL || common.UsingPostgreSQL:
+		return tx.Clauses(clause.Locking{Strength: "UPDATE"})
+	default:
+		return tx
+	}
 }
