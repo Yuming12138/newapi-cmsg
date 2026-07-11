@@ -20,6 +20,7 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/net/http/httpguts"
 )
 
 const (
@@ -40,6 +41,25 @@ func NewStreamScanner(reader io.Reader) *bufio.Scanner {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, InitialScannerBufferSize), getScannerBufferSize())
 	return scanner
+}
+
+var codexSSEPassThroughHeaders = []string{
+	"X-Reasoning-Included",
+	"X-Codex-Turn-State",
+}
+
+func copyCodexSSEHeaders(c *gin.Context, resp *http.Response) {
+	if c == nil || c.Writer == nil || resp == nil {
+		return
+	}
+	for _, name := range codexSSEPassThroughHeaders {
+		for _, value := range resp.Header.Values(name) {
+			if strings.TrimSpace(value) == "" || !httpguts.ValidHeaderFieldValue(value) {
+				continue
+			}
+			c.Writer.Header().Add(name, value)
+		}
+	}
 }
 
 func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, dataHandler func(data string, sr *StreamResult)) {
@@ -118,6 +138,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	}()
 
 	scanner.Split(bufio.ScanLines)
+	copyCodexSSEHeaders(c, resp)
 	SetEventStreamHeaders(c)
 
 	ctx, cancel := context.WithCancel(context.Background())

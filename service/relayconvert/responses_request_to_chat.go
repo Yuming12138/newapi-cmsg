@@ -70,14 +70,12 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 	if req.Reasoning != nil {
 		out.ReasoningEffort = req.Reasoning.Effort
 	}
-	if req.ServiceTier != "" {
-		out.ServiceTier, _ = common.Marshal(req.ServiceTier)
+	if req.ServiceTier != nil {
+		out.ServiceTier, _ = common.Marshal(*req.ServiceTier)
 	}
-	if len(req.ParallelToolCalls) > 0 && common.GetJsonType(req.ParallelToolCalls) == "boolean" {
-		var parallelToolCalls bool
-		if err := common.Unmarshal(req.ParallelToolCalls, &parallelToolCalls); err == nil {
-			out.ParallelTooCalls = &parallelToolCalls
-		}
+	if req.ParallelToolCalls != nil {
+		parallelToolCalls := *req.ParallelToolCalls
+		out.ParallelTooCalls = &parallelToolCalls
 	}
 	if len(req.PromptCacheKey) > 0 && common.GetJsonType(req.PromptCacheKey) == "string" {
 		var promptCacheKey string

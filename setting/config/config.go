@@ -18,6 +18,10 @@ type ConfigManager struct {
 
 var GlobalConfig = NewConfigManager()
 
+type configMapUpdater interface {
+	UpdateConfigFromMap(configMap map[string]string) error
+}
+
 func NewConfigManager() *ConfigManager {
 	return &ConfigManager{
 		configs: make(map[string]interface{}),
@@ -163,6 +167,13 @@ func configToMap(config interface{}) (map[string]string, error) {
 
 // 辅助函数：从map更新配置对象
 func updateConfigFromMap(config interface{}, configMap map[string]string) error {
+	if updater, ok := config.(configMapUpdater); ok {
+		return updater.UpdateConfigFromMap(configMap)
+	}
+	return updateConfigFromMapDefault(config, configMap)
+}
+
+func updateConfigFromMapDefault(config interface{}, configMap map[string]string) error {
 	val := reflect.ValueOf(config)
 	if val.Kind() != reflect.Ptr {
 		return nil
