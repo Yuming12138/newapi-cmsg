@@ -757,13 +757,51 @@ func TestWebsocketJSONPayloadsFromPlainJSONChunk(t *testing.T) {
 func TestResponseCompletedOutputFromPayload(t *testing.T) {
 	payload := []byte(`{"type":"response.completed","response":{"id":"resp-1","output":[{"type":"message","id":"out-1"}]}}`)
 
-	output := responseCompletedOutputFromPayload(payload)
+	output := responseCompletedOutputFromPayload(payload, nil, nil)
 	items := gjson.ParseBytes(output).Array()
 	if len(items) != 1 {
 		t.Fatalf("output len = %d, want 1", len(items))
 	}
 	if items[0].Get("id").String() != "out-1" {
 		t.Fatalf("unexpected output id: %s", items[0].Get("id").String())
+	}
+}
+
+func TestRestoreResponsesWebsocketCompletionOutputPreservesNonEmptyOutput(t *testing.T) {
+	payload := []byte(`{"type":"response.completed","response":{"id":"resp-1","output":[{"type":"message","id":"out-1"}]}}`)
+	collector := map[int64][]byte{0: []byte(`{"type":"function_call","id":"call-1","call_id":"call-1"}`)}
+
+	restored := restoreResponsesWebsocketCompletionOutput(payload, collector, nil)
+	if string(restored) != string(payload) {
+		t.Fatalf("non-empty completion output was overwritten: %s", restored)
+	}
+}
+
+func TestResponsesWebsocketOutputCollectorRestoresCompletedOutput(t *testing.T) {
+	outputItemsByIndex := make(map[int64][]byte)
+	var outputItemsFallback [][]byte
+	for _, payload := range [][]byte{
+		[]byte(`{"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"reply-1","role":"assistant"}}`),
+		[]byte(`{"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"summary-1","summary":[]}}`),
+		[]byte(`{"type":"response.output_item.done","item":{"type":"function_call","id":"call-1","call_id":"call-1"}}`),
+	} {
+		collectResponsesWebsocketOutputItem(payload, outputItemsByIndex, &outputItemsFallback)
+	}
+
+	output := responseCompletedOutputFromPayload(
+		[]byte(`{"type":"response.completed","response":{"id":"resp-1","output":[]}}`),
+		outputItemsByIndex,
+		outputItemsFallback,
+	)
+	items := gjson.ParseBytes(output).Array()
+	if len(items) != 3 {
+		t.Fatalf("collected output len = %d, want 3: %s", len(items), output)
+	}
+	wantIDs := []string{"summary-1", "reply-1", "call-1"}
+	for i, wantID := range wantIDs {
+		if got := items[i].Get("id").String(); got != wantID {
+			t.Fatalf("output[%d].id = %q, want %q: %s", i, got, wantID, output)
+		}
 	}
 }
 
@@ -1232,6 +1270,94 @@ func TestForwardResponsesWebsocketPreservesCompletedEvent(t *testing.T) {
 	}
 	if strings.Contains(string(payload), "response.done") {
 		t.Fatalf("payload unexpectedly rewrote completed event: %s", payload)
+	}
+
+	if errServer := <-serverErrCh; errServer != nil {
+		t.Fatalf("server error: %v", errServer)
+	}
+}
+
+func TestForwardResponsesWebsocketRestoresCompletedOutput(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	serverErrCh := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := responsesWebsocketUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErrCh <- err
+			return
+		}
+		defer func() {
+			if errClose := conn.Close(); errClose != nil {
+				serverErrCh <- errClose
+			}
+		}()
+
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Request = r
+
+		data := make(chan []byte, 2)
+		errCh := make(chan *interfaces.ErrorMessage)
+		data <- []byte(`{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"call-1","call_id":"call-1","name":"lookup","arguments":"{}"}}`)
+		data <- []byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-1\",\"output\":[]}}\n\n")
+		close(data)
+		close(errCh)
+
+		timelineLog := newInMemoryWebsocketTimelineLog()
+		completedOutput, completedResponseID, pendingToolCallIDs, errMsg, err := (*OpenAIResponsesAPIHandler)(nil).forwardResponsesWebsocket(
+			ctx,
+			conn,
+			func(...interface{}) {},
+			data,
+			errCh,
+			timelineLog,
+			"session-1",
+		)
+		if err != nil {
+			serverErrCh <- err
+			return
+		}
+		if errMsg != nil {
+			serverErrCh <- fmt.Errorf("unexpected websocket error message: %v", errMsg.Error)
+			return
+		}
+		if gjson.GetBytes(completedOutput, "0.id").String() != "call-1" {
+			serverErrCh <- errors.New("completed output not restored")
+			return
+		}
+		if completedResponseID != "resp-1" {
+			serverErrCh <- fmt.Errorf("completed response id = %q, want resp-1", completedResponseID)
+			return
+		}
+		if len(pendingToolCallIDs) != 1 || pendingToolCallIDs[0] != "call-1" {
+			serverErrCh <- fmt.Errorf("pending tool call ids = %v, want [call-1]", pendingToolCallIDs)
+			return
+		}
+		serverErrCh <- nil
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	_, outputItemPayload, errReadMessage := conn.ReadMessage()
+	if errReadMessage != nil {
+		t.Fatalf("read output item websocket message: %v", errReadMessage)
+	}
+	if got := gjson.GetBytes(outputItemPayload, "type").String(); got != "response.output_item.done" {
+		t.Fatalf("output item payload type = %s, want response.output_item.done", got)
+	}
+
+	_, payload, errReadMessage := conn.ReadMessage()
+	if errReadMessage != nil {
+		t.Fatalf("read completion websocket message: %v", errReadMessage)
+	}
+	if got := gjson.GetBytes(payload, "response.output.0.id").String(); got != "call-1" {
+		t.Fatalf("downstream completion output id = %q, want call-1; payload=%s", got, payload)
 	}
 
 	if errServer := <-serverErrCh; errServer != nil {
@@ -2295,7 +2421,6 @@ func TestResponsesWebsocketPinsOnlyWebsocketCapableAuth(t *testing.T) {
 	}
 }
 
-
 func TestShouldReleaseResponsesWebsocketPinnedAuth(t *testing.T) {
 	cases := []struct {
 		name string
@@ -2410,7 +2535,6 @@ func TestResponsesWebsocketReleasesPinnedAuthAfterQuotaError(t *testing.T) {
 		t.Fatalf("auth-b replay input missing expected transcript items: %s", authBInput)
 	}
 }
-
 
 type websocketPinnedPrematureCloseExecutor struct {
 	mu       sync.Mutex

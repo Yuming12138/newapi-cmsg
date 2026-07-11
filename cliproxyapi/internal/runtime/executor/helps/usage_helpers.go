@@ -513,6 +513,60 @@ func resolveUsageAuthType(auth *cliproxyauth.Auth) string {
 	return auth.AuthKind()
 }
 
+// StreamUsageBuffer keeps the latest usage detail observed in a stream.
+type StreamUsageBuffer struct {
+	detail usage.Detail
+	ok     bool
+}
+
+var openAIStreamUsageMarker = []byte(`"usage"`)
+
+// Observe records detail when ok is true, allowing the final stream usage to win.
+func (b *StreamUsageBuffer) Observe(detail usage.Detail, ok bool) {
+	if b == nil || !ok {
+		return
+	}
+	b.detail = detail
+	b.ok = true
+}
+
+// ObserveOpenAIStream records the latest usage from an OpenAI-style stream while
+// avoiding JSON parsing for chunks that cannot contain usage metadata.
+func (b *StreamUsageBuffer) ObserveOpenAIStream(line []byte) {
+	if b == nil {
+		return
+	}
+	payload := jsonPayload(line)
+	if len(payload) == 0 || !bytes.Contains(payload, openAIStreamUsageMarker) {
+		return
+	}
+	if !gjson.ValidBytes(payload) {
+		return
+	}
+	usageNode := gjson.GetBytes(payload, "usage")
+	if !hasOpenAIStyleUsageTokenFields(usageNode) {
+		return
+	}
+	b.Observe(parseOpenAIStyleUsageNode(usageNode), true)
+}
+
+// Publish emits the latest observed usage detail, if any.
+func (b *StreamUsageBuffer) Publish(ctx context.Context, reporter *UsageReporter) bool {
+	if b == nil || !b.ok || reporter == nil {
+		return false
+	}
+	reporter.Publish(ctx, b.detail)
+	return true
+}
+
+// Detail returns the latest observed usage detail.
+func (b *StreamUsageBuffer) Detail() (usage.Detail, bool) {
+	if b == nil || !b.ok {
+		return usage.Detail{}, false
+	}
+	return b.detail, true
+}
+
 func ParseCodexUsage(data []byte) (usage.Detail, bool) {
 	usageNode := gjson.ParseBytes(data).Get("response.usage")
 	if !hasOpenAIStyleUsageTokenFields(usageNode) {

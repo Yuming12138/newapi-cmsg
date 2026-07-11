@@ -89,6 +89,46 @@ func TestParseOpenAIStreamUsageResponsesFields(t *testing.T) {
 	}
 }
 
+func TestStreamUsageBufferObserveOpenAIStreamStateTransitions(t *testing.T) {
+	t.Run("usage chunk", func(t *testing.T) {
+		var buffer StreamUsageBuffer
+		buffer.ObserveOpenAIStream([]byte(`data: {"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}`))
+		detail, ok := buffer.Detail()
+		if !ok || detail.InputTokens != 2 || detail.OutputTokens != 3 || detail.TotalTokens != 5 {
+			t.Fatalf("detail = %+v ok=%v", detail, ok)
+		}
+	})
+
+	t.Run("final usage wins", func(t *testing.T) {
+		var buffer StreamUsageBuffer
+		buffer.ObserveOpenAIStream([]byte(`data: {"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
+		buffer.ObserveOpenAIStream([]byte(`data: {"usage":{"input_tokens":4,"output_tokens":5,"total_tokens":9}}`))
+		detail, ok := buffer.Detail()
+		if !ok || detail.InputTokens != 4 || detail.OutputTokens != 5 || detail.TotalTokens != 9 {
+			t.Fatalf("detail = %+v ok=%v", detail, ok)
+		}
+	})
+
+	t.Run("irrelevant and invalid chunks do not change state", func(t *testing.T) {
+		var buffer StreamUsageBuffer
+		buffer.ObserveOpenAIStream([]byte(`data: {"choices":[{"delta":{"content":"hello"}}]}`))
+		buffer.ObserveOpenAIStream([]byte(`data: {"content":"the word \"usage\" appears here"}`))
+		buffer.ObserveOpenAIStream([]byte(`data: {"usage":`))
+		buffer.ObserveOpenAIStream([]byte(`data: {"usage":null}`))
+		if detail, ok := buffer.Detail(); ok {
+			t.Fatalf("detail = %+v ok=true, want empty buffer", detail)
+		}
+	})
+
+	t.Run("zero token usage is retained", func(t *testing.T) {
+		var buffer StreamUsageBuffer
+		buffer.ObserveOpenAIStream([]byte(`data: {"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}`))
+		if _, ok := buffer.Detail(); !ok {
+			t.Fatal("Detail() ok = false, want true")
+		}
+	})
+}
+
 func TestParseClaudeUsageIncludesCacheTokensInTotal(t *testing.T) {
 	data := []byte(`{"usage":{"input_tokens":3085,"output_tokens":253,"cache_read_input_tokens":7,"cache_creation_input_tokens":19514}}`)
 	detail := ParseClaudeUsage(data)
