@@ -600,6 +600,15 @@ export function Docs() {
                 修改 provider、模型或本地状态后，旧会话可能不在当前视图里显示。
                 建议先复制一份 config.toml 作为备份，再覆盖配置。
               </InfoBox>
+              <InfoBox
+                tone='warning'
+                icon={ShieldAlert}
+                title='思考强度怎么选'
+              >
+                model_reasoning_effort 可填写 minimal、low、medium、high、xhigh
+                或 max。想要最高强度时填 max；不要填写 ultra 或
+                pro，这两个值目前会被上游拒绝。
+              </InfoBox>
               <div className='grid gap-6 lg:grid-cols-2'>
                 <CodeBlock
                   title='简化配置'
