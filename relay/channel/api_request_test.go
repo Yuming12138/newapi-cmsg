@@ -1,15 +1,102 @@
 package channel
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	common2 "github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHTTPAndFormDebugURLLoggingSanitizesSensitiveQuery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	oldDebugEnabled := common2.DebugEnabled
+	oldErrorWriter := gin.DefaultErrorWriter
+	var logOutput bytes.Buffer
+	common2.DebugEnabled = true
+	gin.DefaultErrorWriter = &logOutput
+	t.Cleanup(func() {
+		common2.DebugEnabled = oldDebugEnabled
+		gin.DefaultErrorWriter = oldErrorWriter
+	})
+
+	for _, requestKind := range []string{"http", "form"} {
+		t.Run(requestKind, func(t *testing.T) {
+			logOutput.Reset()
+			logUpstreamRequestURL(ctx, "https://example.test/v1/responses?key=debug-secret&model=gpt-5.6")
+
+			got := logOutput.String()
+			require.NotContains(t, got, "debug-secret")
+			require.Contains(t, got, "model=gpt-5.6")
+		})
+	}
+}
+
+func TestNewWSSDialErrorSanitizesExplicitAndNestedURLs(t *testing.T) {
+	fullRequestURL := "wss://example.test/v1/realtime?access_token=access-secret&model=gpt-5.6"
+	cause := context.DeadlineExceeded
+	dialErr := &url.Error{
+		Op:  "dial",
+		URL: fullRequestURL,
+		Err: cause,
+	}
+
+	err := newWSSDialError(fullRequestURL, dialErr)
+
+	require.NotContains(t, err.Error(), "access-secret")
+	require.Contains(t, err.Error(), "model=gpt-5.6")
+	require.ErrorIs(t, err, cause)
+
+	var extracted *url.Error
+	require.ErrorAs(t, err, &extracted)
+	require.Same(t, dialErr, extracted)
+	require.Contains(t, extracted.URL, "access-secret", "the original error identity must remain unchanged")
+}
+
+func TestNewDoRequestFailedErrorSanitizesLogAndKeepsErrorCode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	oldDebugEnabled := common2.DebugEnabled
+	oldErrorWriter := gin.DefaultErrorWriter
+	var logOutput bytes.Buffer
+	common2.DebugEnabled = false
+	gin.DefaultErrorWriter = &logOutput
+	t.Cleanup(func() {
+		common2.DebugEnabled = oldDebugEnabled
+		gin.DefaultErrorWriter = oldErrorWriter
+	})
+
+	cause := errors.New("connection refused")
+	original := &url.Error{
+		Op:  http.MethodPost,
+		URL: "https://example.test/v1/responses?token=token-secret&client_secret=client-secret&model=gpt-5.6",
+		Err: cause,
+	}
+
+	apiErr := newDoRequestFailedError(ctx, original)
+
+	gotLog := logOutput.String()
+	require.NotContains(t, gotLog, "token-secret")
+	require.NotContains(t, gotLog, "client-secret")
+	require.Contains(t, gotLog, "model=gpt-5.6")
+	require.Equal(t, types.ErrorCodeDoRequestFailed, apiErr.GetErrorCode())
+	require.Equal(t, "upstream error: do request failed", apiErr.Error())
+}
 
 func TestApplyUpstreamRequestID(t *testing.T) {
 	t.Parallel()
