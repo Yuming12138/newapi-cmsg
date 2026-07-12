@@ -89,6 +89,26 @@ function getGroupRatioText(other: LogOtherData | null): string | null {
   return null
 }
 
+function getReasoningEffortVariant(
+  effort: string
+): StatusBadgeProps['variant'] {
+  switch (effort.trim().toLowerCase()) {
+    case 'minimal':
+      return 'neutral'
+    case 'low':
+      return 'green'
+    case 'medium':
+      return 'yellow'
+    case 'high':
+      return 'orange'
+    case 'xhigh':
+    case 'max':
+      return 'red'
+    default:
+      return 'purple'
+  }
+}
+
 function getOpenWebUIActorText(other: LogOtherData | null): string | null {
   const actor = other?.admin_info?.open_webui
   if (!actor) return null
@@ -472,9 +492,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                       <TooltipContent>
                         <div className='space-y-0.5 text-xs'>
                           <p className='font-medium'>Open WebUI</p>
-                          <p>
-                            {sensitiveVisible ? openWebUIActor : '••••'}
-                          </p>
+                          <p>{sensitiveVisible ? openWebUIActor : '••••'}</p>
                           {other?.admin_info?.open_webui?.chat_id && (
                             <p className='text-muted-foreground font-mono'>
                               {t('Chat ID')}:{' '}
@@ -566,6 +584,35 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         )
       },
       meta: { label: t('Model'), mobileTitle: true },
+    },
+
+    {
+      id: 'reasoning_effort',
+      accessorFn: (row) => parseLogOther(row.other)?.reasoning_effort ?? '',
+      header: ({ column }) => (
+        <DataTableColumnHeader column={column} title={t('Reasoning Effort')} />
+      ),
+      cell: ({ row }) => {
+        const log = row.original
+        if (!isDisplayableLogType(log.type)) return null
+
+        const effort = String(row.getValue('reasoning_effort') ?? '').trim()
+        if (!effort) {
+          return <span className='text-muted-foreground/40'>—</span>
+        }
+
+        return (
+          <StatusBadge
+            label={effort}
+            variant={getReasoningEffortVariant(effort)}
+            size='sm'
+            copyable={false}
+          />
+        )
+      },
+      meta: { label: t('Reasoning Effort'), mobileHidden: true },
+      size: 100,
+      maxSize: 120,
     },
 
     {
