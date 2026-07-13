@@ -288,6 +288,7 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 	manager.runtimeConfig.Store(&internalconfig.Config{})
 	manager.apiKeyModelAlias.Store(apiKeyModelAliasTable(nil))
 	manager.scheduler = newAuthScheduler(selector)
+	manager.configureSessionAffinitySelector(selector)
 	return manager
 }
 
@@ -470,6 +471,7 @@ func (m *Manager) SetSelector(selector Selector) {
 	if selector == nil {
 		selector = &RoundRobinSelector{}
 	}
+	m.configureSessionAffinitySelector(selector)
 	m.mu.Lock()
 	m.selector = selector
 	m.mu.Unlock()
@@ -477,6 +479,93 @@ func (m *Manager) SetSelector(selector Selector) {
 		m.scheduler.setSelector(selector)
 		m.syncScheduler()
 	}
+}
+
+func (m *Manager) configureSessionAffinitySelector(selector Selector) {
+	if m == nil || selector == nil {
+		return
+	}
+	if affinitySelector, ok := selector.(*SessionAffinitySelector); ok {
+		affinitySelector.setAuthStateResolver(m.resolveSessionAffinityAuthState)
+	}
+}
+
+func (m *Manager) resolveSessionAffinityAuthState(authID, provider, routeModel string) sessionAffinityAuthState {
+	state := sessionAffinityAuthState{BlockReason: "auth_missing"}
+	if m == nil || strings.TrimSpace(authID) == "" {
+		return state
+	}
+
+	m.mu.RLock()
+	auth := m.auths[authID]
+	if auth != nil {
+		auth = auth.Clone()
+	}
+	m.mu.RUnlock()
+	if auth == nil {
+		return state
+	}
+
+	auth.EnsureIndex()
+	state.AuthIndex = auth.Index
+	state.Account = dispatchAuditAccountLabel(auth)
+	providerKey := executorKeyFromAuth(auth)
+	if normalizedProvider := strings.ToLower(strings.TrimSpace(provider)); normalizedProvider != "" && normalizedProvider != "mixed" && providerKey != normalizedProvider {
+		state.BlockReason = "provider_mismatch"
+		return state
+	}
+
+	checkModel := routeModel
+	if strings.TrimSpace(routeModel) != "" {
+		checkModel = m.selectionModelForAuth(auth, routeModel)
+	}
+	blocked, reason, resetAt := isAuthBlockedForModel(auth, checkModel, time.Now())
+	if blocked {
+		state.BlockReason = sessionAffinityBlockReason(auth, checkModel, reason)
+		state.ResetAt = resetAt
+		return state
+	}
+	if strings.TrimSpace(routeModel) != "" && !m.authSupportsRouteModel(registry.GetGlobalRegistry(), auth, routeModel) {
+		state.BlockReason = "unsupported_model"
+		return state
+	}
+	state.BlockReason = "not_in_candidate_set"
+	return state
+}
+
+func sessionAffinityBlockReason(auth *Auth, model string, reason blockReason) string {
+	switch reason {
+	case blockReasonDisabled:
+		return "manual_disabled"
+	case blockReasonCooldown:
+		if sessionAffinityQuotaExceeded(auth, model) {
+			return "quota"
+		}
+		return "cooldown"
+	case blockReasonOther:
+		return "unavailable"
+	default:
+		return "not_in_candidate_set"
+	}
+}
+
+func sessionAffinityQuotaExceeded(auth *Auth, model string) bool {
+	if auth == nil {
+		return false
+	}
+	if model != "" && len(auth.ModelStates) > 0 {
+		state := auth.ModelStates[model]
+		if state == nil {
+			baseModel := canonicalModelKey(model)
+			if baseModel != "" && baseModel != model {
+				state = auth.ModelStates[baseModel]
+			}
+		}
+		if state != nil && state.Quota.Exceeded {
+			return true
+		}
+	}
+	return auth.Quota.Exceeded
 }
 
 // SetStore swaps the underlying persistence store.

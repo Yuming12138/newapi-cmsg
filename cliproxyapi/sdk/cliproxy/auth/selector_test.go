@@ -639,6 +639,34 @@ func TestExtractSessionID_ClaudeCodePriorityOverIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestExtractSessionID_PromptCacheKeyPriorityOverHeaders(t *testing.T) {
+	t.Parallel()
+
+	headers := make(http.Header)
+	headers.Set("X-Session-ID", "header-session-id")
+	headers.Set("Session-Id", "codex-session-id")
+	headers.Set("Session_id", "legacy-codex-session-id")
+	payload := []byte(`{"prompt_cache_key":"thread-019f5507-4840-7953-acca-39c484eeac60"}`)
+
+	got := ExtractSessionID(headers, payload, nil)
+	want := "prompt-cache:thread-019f5507-4840-7953-acca-39c484eeac60"
+	if got != want {
+		t.Fatalf("ExtractSessionID() = %q, want %q", got, want)
+	}
+}
+
+func TestExtractSessionID_ClaudeCodePriorityOverPromptCacheKey(t *testing.T) {
+	t.Parallel()
+
+	payload := []byte(`{"prompt_cache_key":"responses-thread","metadata":{"user_id":"user_xxx_account__session_ac980658-63bd-4fb3-97ba-8da64cb1e344"}}`)
+
+	got := ExtractSessionID(nil, payload, nil)
+	want := "claude:ac980658-63bd-4fb3-97ba-8da64cb1e344"
+	if got != want {
+		t.Fatalf("ExtractSessionID() = %q, want %q", got, want)
+	}
+}
+
 func TestExtractSessionID_Headers(t *testing.T) {
 	t.Parallel()
 
@@ -689,6 +717,53 @@ func TestExtractSessionID_CodexSessionIDPriorityOverClientRequestID(t *testing.T
 	want := "codex:codex-session-456"
 	if got != want {
 		t.Errorf("ExtractSessionID() = %q, want %q (Session_id should take priority over X-Client-Request-Id)", got, want)
+	}
+}
+
+func TestSessionAffinitySelector_PromptCacheKeyStableAcrossHeaderChanges(t *testing.T) {
+	t.Parallel()
+
+	selector := NewSessionAffinitySelector(&RoundRobinSelector{})
+	defer selector.Stop()
+	auths := []*Auth{{ID: "auth-a"}, {ID: "auth-b"}}
+	payload := []byte(`{"prompt_cache_key":"stable-responses-thread"}`)
+
+	headersFirst := make(http.Header)
+	headersFirst.Set("X-Session-ID", "header-first")
+	headersFirst.Set("Session-Id", "codex-first")
+	first, errFirst := selector.Pick(context.Background(), "codex", "gpt-5.6", cliproxyexecutor.Options{
+		Headers:         headersFirst,
+		OriginalRequest: payload,
+	}, auths)
+	if errFirst != nil {
+		t.Fatalf("first Pick() error = %v", errFirst)
+	}
+
+	headersSecond := make(http.Header)
+	headersSecond.Set("X-Session-ID", "header-second")
+	headersSecond.Set("Session_id", "codex-second")
+	second, errSecond := selector.Pick(context.Background(), "codex", "gpt-5.6", cliproxyexecutor.Options{
+		Headers:         headersSecond,
+		OriginalRequest: payload,
+	}, auths)
+	if errSecond != nil {
+		t.Fatalf("second Pick() error = %v", errSecond)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("second auth = %q, want %q for the same prompt_cache_key", second.ID, first.ID)
+	}
+}
+
+func TestAffinityIdentityDoesNotExposeRawID(t *testing.T) {
+	t.Parallel()
+
+	raw := "prompt-cache:thread-sensitive-value"
+	source, fingerprint := affinityIdentity(raw)
+	if source != "prompt-cache" {
+		t.Fatalf("source = %q, want prompt-cache", source)
+	}
+	if len(fingerprint) != 12 || strings.Contains(fingerprint, "thread-sensitive-value") {
+		t.Fatalf("fingerprint = %q, want a 12-character redacted hash", fingerprint)
 	}
 }
 

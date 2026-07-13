@@ -14,7 +14,7 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 )
 
-const dispatchAuditLimit = 100
+const dispatchAuditLimit = 2000
 
 type dispatchAuditContextKey struct{}
 
@@ -43,6 +43,19 @@ type DispatchAuditAttempt struct {
 	Error          *Error     `json:"error,omitempty"`
 }
 
+// DispatchAuditAffinity describes the session binding decision without exposing the raw session identifier.
+type DispatchAuditAffinity struct {
+	Source            string     `json:"source,omitempty"`
+	Fingerprint       string     `json:"fingerprint,omitempty"`
+	Event             string     `json:"event,omitempty"`
+	CachedAuthIndex   string     `json:"cached_auth_index,omitempty"`
+	CachedAccount     string     `json:"cached_account,omitempty"`
+	SelectedAuthIndex string     `json:"selected_auth_index,omitempty"`
+	SelectedAccount   string     `json:"selected_account,omitempty"`
+	BlockReason       string     `json:"block_reason,omitempty"`
+	ResetAt           *time.Time `json:"reset_at,omitempty"`
+}
+
 // DispatchAuditRecord is a request-scoped routing trace for management diagnostics.
 type DispatchAuditRecord struct {
 	ID                 uint64                   `json:"id"`
@@ -59,6 +72,7 @@ type DispatchAuditRecord struct {
 	Error              *Error                   `json:"error,omitempty"`
 	Candidates         []DispatchAuditCandidate `json:"candidates,omitempty"`
 	Attempts           []DispatchAuditAttempt   `json:"attempts,omitempty"`
+	Affinity           *DispatchAuditAffinity   `json:"affinity,omitempty"`
 }
 
 type dispatchAudit struct {
@@ -95,6 +109,25 @@ func dispatchAuditFromContext(ctx context.Context) *dispatchAudit {
 	}
 	audit, _ := ctx.Value(dispatchAuditContextKey{}).(*dispatchAudit)
 	return audit
+}
+
+func recordSessionAffinityAudit(ctx context.Context, affinity DispatchAuditAffinity) {
+	audit := dispatchAuditFromContext(ctx)
+	if audit == nil {
+		return
+	}
+	audit.mu.Lock()
+	affinityCopy := affinity
+	audit.record.Affinity = &affinityCopy
+	audit.mu.Unlock()
+}
+
+func authAuditIndex(auth *Auth) string {
+	if auth == nil {
+		return ""
+	}
+	auth.EnsureIndex()
+	return auth.Index
 }
 
 func (m *Manager) recordDispatchAuditSelection(ctx context.Context, auth *Auth, provider string, model string) {
@@ -194,7 +227,11 @@ func (m *Manager) finishDispatchAudit(audit *dispatchAudit, success bool, err er
 		record.ID = m.dispatchAuditSeq
 		m.dispatchAudits = append(m.dispatchAudits, record)
 		if len(m.dispatchAudits) > dispatchAuditLimit {
-			m.dispatchAudits = append([]DispatchAuditRecord(nil), m.dispatchAudits[len(m.dispatchAudits)-dispatchAuditLimit:]...)
+			overflow := len(m.dispatchAudits) - dispatchAuditLimit
+			for idx := 0; idx < overflow; idx++ {
+				m.dispatchAudits[idx] = DispatchAuditRecord{}
+			}
+			m.dispatchAudits = m.dispatchAudits[overflow:]
 		}
 		m.dispatchAuditMu.Unlock()
 	})
