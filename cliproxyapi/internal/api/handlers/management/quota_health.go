@@ -260,21 +260,26 @@ func (h *Handler) evaluateQuotaHealthAccount(cfg quotaHealthConfig, auth *coreau
 	if errWindows != nil {
 		return nil, errWindows
 	}
-	remaining5h, errRemaining5h := quotaHealthWindowRemaining(windows, "5h")
-	if errRemaining5h != nil {
-		return nil, errRemaining5h
-	}
 	remaining7d, errRemaining7d := quotaHealthWindowRemaining(windows, "7d")
 	if errRemaining7d != nil {
 		return nil, errRemaining7d
 	}
+	remainingValues := []float64{remaining7d}
+	headroomValues := []float64{remaining7d - cfg.MinRemainingPercent7d}
+	if _, has5h := windows["5h"]; has5h {
+		remaining5h, errRemaining5h := quotaHealthWindowRemaining(windows, "5h")
+		if errRemaining5h != nil {
+			return nil, errRemaining5h
+		}
+		remainingValues = append(remainingValues, remaining5h)
+		headroomValues = append(headroomValues, remaining5h-cfg.MinRemainingPercent5h)
+	}
 
 	account := h.quotaHealthBaseAccount(auth, cfg, usage)
 	canExhaust, _ := account["can_exhaust"].(bool)
-	headroom5h := remaining5h - cfg.MinRemainingPercent5h
-	headroom7d := remaining7d - cfg.MinRemainingPercent7d
-	rawRemaining := minFloat64(remaining5h, remaining7d)
-	protectedHeadroom := maxFloat64(0, minFloat64(headroom5h, headroom7d))
+	minimumHeadroom := minSliceFloat64(headroomValues)
+	rawRemaining := minSliceFloat64(remainingValues)
+	protectedHeadroom := maxFloat64(0, minimumHeadroom)
 	visibleRemaining := protectedHeadroom
 	if canExhaust {
 		visibleRemaining = rawRemaining
@@ -286,7 +291,7 @@ func (h *Handler) evaluateQuotaHealthAccount(cfg quotaHealthConfig, auth *coreau
 
 	account["ok"] = true
 	account["schedulable"] = schedulable
-	account["remaining_headroom_percent"] = roundQuotaHealth(minFloat64(headroom5h, headroom7d))
+	account["remaining_headroom_percent"] = roundQuotaHealth(minimumHeadroom)
 	account["remaining_share_percent"] = roundQuotaHealth(visibleRemaining)
 	account["raw_remaining_percent"] = roundQuotaHealth(rawRemaining)
 	account["balance_units"] = roundQuotaHealth(balanceUnits)
@@ -365,11 +370,8 @@ func quotaHealthWindows(usage map[string]any) (map[string]map[string]any, error)
 		}
 		out[name] = window
 	}
-	if _, ok := out["5h"]; !ok {
-		return nil, fmt.Errorf("missing_required_quota_windows")
-	}
 	if _, ok := out["7d"]; !ok {
-		return nil, fmt.Errorf("missing_required_quota_windows")
+		return nil, fmt.Errorf("missing_required_7d_quota_window")
 	}
 	return out, nil
 }

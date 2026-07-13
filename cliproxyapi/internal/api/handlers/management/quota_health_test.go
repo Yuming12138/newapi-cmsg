@@ -40,6 +40,64 @@ func TestQuotaHealthWindowsUsesDurationNames(t *testing.T) {
 	}
 }
 
+func TestQuotaHealthWindowsAllowsWeeklyOnly(t *testing.T) {
+	windows, err := quotaHealthWindows(quotaHealthTestWeeklyOnlyUsage(25))
+	if err != nil {
+		t.Fatalf("quotaHealthWindows() error = %v", err)
+	}
+	if _, ok := windows["5h"]; ok {
+		t.Fatalf("windows = %#v, unexpected 5h window", windows)
+	}
+	got7d, err7d := quotaHealthWindowRemaining(windows, "7d")
+	if err7d != nil {
+		t.Fatalf("7d remaining error = %v", err7d)
+	}
+	if got7d != 75.0 {
+		t.Fatalf("7d remaining = %v, want 75", got7d)
+	}
+}
+
+func TestQuotaHealthWindowsStillRequiresWeeklyWindow(t *testing.T) {
+	usage := map[string]any{
+		"rate_limit": map[string]any{
+			"primary_window": map[string]any{
+				"limit_window_seconds": quotaHealthWindow5h,
+				"used_percent":         10.0,
+			},
+		},
+	}
+	if _, err := quotaHealthWindows(usage); err == nil || err.Error() != "missing_required_7d_quota_window" {
+		t.Fatalf("quotaHealthWindows() error = %v, want missing_required_7d_quota_window", err)
+	}
+}
+
+func TestEvaluateQuotaHealthAccountWeeklyOnly(t *testing.T) {
+	h := &Handler{}
+	plus, errPlus := h.evaluateQuotaHealthAccount(defaultQuotaHealthTestConfig(), &coreauth.Auth{
+		Provider:   "codex",
+		Status:     coreauth.StatusActive,
+		Attributes: map[string]string{"plan_type": "plus"},
+	}, quotaHealthTestWeeklyOnlyUsage(22), nil)
+	if errPlus != nil {
+		t.Fatalf("plus evaluate error = %v", errPlus)
+	}
+	if plus["raw_remaining_percent"] != 78.0 || plus["usable_balance_units"] != 78.0 {
+		t.Fatalf("plus weekly-only balance = %#v", plus)
+	}
+
+	pro, errPro := h.evaluateQuotaHealthAccount(defaultQuotaHealthTestConfig(), &coreauth.Auth{
+		Provider:   "codex",
+		Status:     coreauth.StatusActive,
+		Attributes: map[string]string{"plan_type": "pro"},
+	}, quotaHealthTestWeeklyOnlyUsage(22), nil)
+	if errPro != nil {
+		t.Fatalf("pro evaluate error = %v", errPro)
+	}
+	if pro["raw_remaining_percent"] != 78.0 || pro["usable_balance_units"] != 58.0 {
+		t.Fatalf("pro weekly-only balance = %#v", pro)
+	}
+}
+
 func TestEvaluateQuotaHealthAccountPlusWeeklyExhausted(t *testing.T) {
 	account, err := (&Handler{}).evaluateQuotaHealthAccount(defaultQuotaHealthTestConfig(), &coreauth.Auth{
 		Provider:   "codex",
@@ -210,6 +268,19 @@ func quotaHealthTestUsage(used5h float64, used7d float64) map[string]any {
 				"reset_after_seconds":  1200,
 			},
 			"secondary_window": map[string]any{
+				"limit_window_seconds": quotaHealthWindow7d,
+				"used_percent":         used7d,
+				"reset_at":             1800100000,
+				"reset_after_seconds":  86400,
+			},
+		},
+	}
+}
+
+func quotaHealthTestWeeklyOnlyUsage(used7d float64) map[string]any {
+	return map[string]any{
+		"rate_limit": map[string]any{
+			"primary_window": map[string]any{
 				"limit_window_seconds": quotaHealthWindow7d,
 				"used_percent":         used7d,
 				"reset_at":             1800100000,

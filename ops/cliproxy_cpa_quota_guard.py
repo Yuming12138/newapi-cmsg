@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Runtime quota guard for the New API CLIProxyAPI Codex channel.
 
-The channel consumes a shared CPA Codex account whose upstream quota is reported
-as rolling 5h and 7d windows. New API only understands channel balance/status,
-so this script polls CPA's management API, reads the upstream Codex wham usage
-payload, and toggles the New API channel when the shared account drops below the
-configured low-watermark thresholds.
+The channel consumes a shared CPA Codex account whose upstream quota is normally
+reported as rolling 5h and 7d windows. The 5h window can temporarily disappear,
+so the guard falls back to the required weekly window until it returns. New API
+only understands channel balance/status, so this script polls CPA's management
+API and maps the available windows to the channel state.
 """
 
 from __future__ import annotations
@@ -595,8 +595,8 @@ def quota_windows(usage: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "reset_at": int(reset_at) if reset_at else None,
             "reset_after_seconds": int(reset_after) if reset_after else None,
         }
-    if "5h" not in out or "7d" not in out:
-        raise RuntimeError("missing_required_quota_windows")
+    if "7d" not in out:
+        raise RuntimeError("missing_required_7d_quota_window")
     return out
 
 
@@ -638,17 +638,21 @@ def evaluate_account_quota(config: dict[str, Any], auth_entry: dict[str, Any], u
     windows = quota_windows(usage)
     threshold_5h = clamp_percent(config.get("min_remaining_percent_5h"), 30.0)
     threshold_7d = clamp_percent(config.get("min_remaining_percent_7d"), 20.0)
-    remaining_5h = account_window_remaining(windows, "5h")
     remaining_7d = account_window_remaining(windows, "7d")
-    headroom_5h = remaining_5h - threshold_5h
-    headroom_7d = remaining_7d - threshold_7d
+    remaining_values = [remaining_7d]
+    headroom_values = [remaining_7d - threshold_7d]
+    if "5h" in windows:
+        remaining_5h = account_window_remaining(windows, "5h")
+        remaining_values.append(remaining_5h)
+        headroom_values.append(remaining_5h - threshold_5h)
     guard_auth = usage.get("_guard_auth") if isinstance(usage.get("_guard_auth"), dict) else {}
     auth_index = str(guard_auth.get("auth_index") or "").strip()
     account_id_hash = str(guard_auth.get("account_id_hash") or "").strip()
     bucket = classify_account_bucket(config, auth_entry, usage, account_id_hash, auth_index)
     can_exhaust = bucket == "personal"
-    raw_remaining = min(remaining_5h, remaining_7d)
-    protected_headroom = max(0.0, min(headroom_5h, headroom_7d))
+    raw_remaining = min(remaining_values)
+    minimum_headroom = min(headroom_values)
+    protected_headroom = max(0.0, minimum_headroom)
     visible_remaining = raw_remaining if can_exhaust else protected_headroom
     units_per_percent = float(config.get("balance_units_per_percent") or 1.0)
     balance_units = raw_remaining * units_per_percent
@@ -673,7 +677,7 @@ def evaluate_account_quota(config: dict[str, Any], auth_entry: dict[str, Any], u
         "can_exhaust": can_exhaust,
         "min_remaining_percent_5h": threshold_5h,
         "min_remaining_percent_7d": threshold_7d,
-        "remaining_headroom_percent": round(min(headroom_5h, headroom_7d), 6),
+        "remaining_headroom_percent": round(minimum_headroom, 6),
         "remaining_share_percent": round(visible_remaining, 6),
         "raw_remaining_percent": round(raw_remaining, 6),
         "balance_units": round(balance_units, 6),
