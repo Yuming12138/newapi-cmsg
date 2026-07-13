@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -369,8 +370,9 @@ var sessionPattern = regexp.MustCompile(`_session_([a-f0-9-]+)$`)
 // It extracts session ID from multiple sources and maintains session-to-auth
 // mappings with automatic failover when the bound auth becomes unavailable.
 type SessionAffinitySelector struct {
-	fallback Selector
-	cache    *SessionCache
+	fallback          Selector
+	cache             *SessionCache
+	authStateResolver sessionAffinityAuthStateResolver
 }
 
 // SessionAffinityConfig configures the session affinity selector.
@@ -378,6 +380,15 @@ type SessionAffinityConfig struct {
 	Fallback Selector
 	TTL      time.Duration
 }
+
+type sessionAffinityAuthState struct {
+	AuthIndex   string
+	Account     string
+	BlockReason string
+	ResetAt     time.Time
+}
+
+type sessionAffinityAuthStateResolver func(authID, provider, model string) sessionAffinityAuthState
 
 // NewSessionAffinitySelector creates a new session-aware selector.
 func NewSessionAffinitySelector(fallback Selector) *SessionAffinitySelector {
@@ -404,12 +415,13 @@ func NewSessionAffinitySelectorWithConfig(cfg SessionAffinityConfig) *SessionAff
 // Pick selects an auth with session affinity when possible.
 // Priority for session ID extraction:
 //  1. metadata.user_id (Claude Code format with _session_{uuid}) - highest priority
-//  2. X-Session-ID header
-//  3. Session_id header (Codex)
-//  4. X-Client-Request-Id header (PI)
-//  5. metadata.user_id (non-Claude Code format)
-//  6. conversation_id field in request body
-//  7. Stable hash from first few messages content (fallback)
+//  2. prompt_cache_key field in request body
+//  3. X-Session-ID header
+//  4. Session_id header (Codex)
+//  5. X-Client-Request-Id header (PI)
+//  6. metadata.user_id (non-Claude Code format)
+//  7. conversation_id field in request body
+//  8. Stable hash from first few messages content (fallback)
 //
 // Note: The cache key includes provider, session ID, and model to handle cases where
 // a session uses multiple models (e.g., gemini-2.5-pro and gemini-3-flash-preview)
@@ -421,6 +433,7 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		entry.Debugf("session-affinity: no session ID extracted, falling back to default selector | provider=%s model=%s", provider, model)
 		return s.fallback.Pick(ctx, provider, model, opts, auths)
 	}
+	affinitySource, affinityFingerprint := affinityIdentity(primaryID)
 
 	now := time.Now()
 	available, err := getAvailableAuths(auths, provider, model, now)
@@ -433,7 +446,22 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 	if cachedAuthID, ok := s.cache.GetAndRefresh(cacheKey); ok {
 		for _, auth := range available {
 			if auth.ID == cachedAuthID {
-				entry.Infof("session-affinity: cache hit | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+				recordSessionAffinityAudit(ctx, DispatchAuditAffinity{
+					Source:            affinitySource,
+					Fingerprint:       affinityFingerprint,
+					Event:             "cache_hit",
+					CachedAuthIndex:   authAuditIndex(auth),
+					CachedAccount:     dispatchAuditAccountLabel(auth),
+					SelectedAuthIndex: authAuditIndex(auth),
+					SelectedAccount:   dispatchAuditAccountLabel(auth),
+				})
+				entry.WithFields(log.Fields{
+					"affinity_source":      affinitySource,
+					"affinity_fingerprint": affinityFingerprint,
+					"auth":                 auth.ID,
+					"provider":             provider,
+					"model":                model,
+				}).Info("session-affinity: cache hit")
 				return auth, nil
 			}
 		}
@@ -443,7 +471,34 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 			return nil, err
 		}
 		s.cache.Set(cacheKey, auth.ID)
-		entry.Infof("session-affinity: cache hit but auth unavailable, reselected | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+		cachedState := sessionAffinityAuthState{BlockReason: "not_in_available_set"}
+		if s.authStateResolver != nil {
+			cachedState = s.authStateResolver(cachedAuthID, provider, model)
+			if cachedState.BlockReason == "" {
+				cachedState.BlockReason = "not_in_available_set"
+			}
+		}
+		recordSessionAffinityAudit(ctx, DispatchAuditAffinity{
+			Source:            affinitySource,
+			Fingerprint:       affinityFingerprint,
+			Event:             "reselected",
+			CachedAuthIndex:   cachedState.AuthIndex,
+			CachedAccount:     cachedState.Account,
+			SelectedAuthIndex: authAuditIndex(auth),
+			SelectedAccount:   dispatchAuditAccountLabel(auth),
+			BlockReason:       cachedState.BlockReason,
+			ResetAt:           timePointer(cachedState.ResetAt),
+		})
+		entry.WithFields(log.Fields{
+			"affinity_source":      affinitySource,
+			"affinity_fingerprint": affinityFingerprint,
+			"cached_auth":          cachedAuthID,
+			"selected_auth":        auth.ID,
+			"block_reason":         cachedState.BlockReason,
+			"reset_at":             formatAffinityResetAt(cachedState.ResetAt),
+			"provider":             provider,
+			"model":                model,
+		}).Info("session-affinity: cache hit but auth unavailable, reselected")
 		return auth, nil
 	}
 
@@ -453,7 +508,25 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 			for _, auth := range available {
 				if auth.ID == cachedAuthID {
 					s.cache.Set(cacheKey, auth.ID)
-					entry.Infof("session-affinity: fallback cache hit | session=%s fallback=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), truncateSessionID(fallbackID), auth.ID, provider, model)
+					fallbackSource, fallbackFingerprint := affinityIdentity(fallbackID)
+					recordSessionAffinityAudit(ctx, DispatchAuditAffinity{
+						Source:            affinitySource,
+						Fingerprint:       affinityFingerprint,
+						Event:             "fallback_cache_hit",
+						CachedAuthIndex:   authAuditIndex(auth),
+						CachedAccount:     dispatchAuditAccountLabel(auth),
+						SelectedAuthIndex: authAuditIndex(auth),
+						SelectedAccount:   dispatchAuditAccountLabel(auth),
+					})
+					entry.WithFields(log.Fields{
+						"affinity_source":      affinitySource,
+						"affinity_fingerprint": affinityFingerprint,
+						"fallback_source":      fallbackSource,
+						"fallback_fingerprint": fallbackFingerprint,
+						"auth":                 auth.ID,
+						"provider":             provider,
+						"model":                model,
+					}).Info("session-affinity: fallback cache hit")
 					return auth, nil
 				}
 			}
@@ -465,8 +538,49 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		return nil, err
 	}
 	s.cache.Set(cacheKey, auth.ID)
-	entry.Infof("session-affinity: cache miss, new binding | session=%s auth=%s provider=%s model=%s", truncateSessionID(primaryID), auth.ID, provider, model)
+	recordSessionAffinityAudit(ctx, DispatchAuditAffinity{
+		Source:            affinitySource,
+		Fingerprint:       affinityFingerprint,
+		Event:             "new_binding",
+		SelectedAuthIndex: authAuditIndex(auth),
+		SelectedAccount:   dispatchAuditAccountLabel(auth),
+	})
+	entry.WithFields(log.Fields{
+		"affinity_source":      affinitySource,
+		"affinity_fingerprint": affinityFingerprint,
+		"auth":                 auth.ID,
+		"provider":             provider,
+		"model":                model,
+	}).Info("session-affinity: cache miss, new binding")
 	return auth, nil
+}
+
+func (s *SessionAffinitySelector) setAuthStateResolver(resolver sessionAffinityAuthStateResolver) {
+	s.authStateResolver = resolver
+}
+
+func affinityIdentity(id string) (source, fingerprint string) {
+	source = "unknown"
+	if prefix, _, ok := strings.Cut(id, ":"); ok && strings.TrimSpace(prefix) != "" {
+		source = strings.TrimSpace(prefix)
+	}
+	sum := sha256.Sum256([]byte(id))
+	return source, fmt.Sprintf("%x", sum[:6])
+}
+
+func formatAffinityResetAt(resetAt time.Time) string {
+	if resetAt.IsZero() {
+		return ""
+	}
+	return resetAt.UTC().Format(time.RFC3339)
+}
+
+func timePointer(value time.Time) *time.Time {
+	if value.IsZero() {
+		return nil
+	}
+	copyValue := value
+	return &copyValue
 }
 
 func selectorLogEntry(ctx context.Context) *log.Entry {
@@ -477,14 +591,6 @@ func selectorLogEntry(ctx context.Context) *log.Entry {
 		return log.WithField("request_id", reqID)
 	}
 	return log.NewEntry(log.StandardLogger())
-}
-
-// truncateSessionID shortens session ID for logging (first 8 chars + "...")
-func truncateSessionID(id string) string {
-	if len(id) <= 20 {
-		return id
-	}
-	return id[:8] + "..."
 }
 
 // Stop releases resources held by the selector.
@@ -505,12 +611,13 @@ func (s *SessionAffinitySelector) InvalidateAuth(authID string) {
 // ExtractSessionID extracts session identifier from multiple sources.
 // Priority order:
 //  1. metadata.user_id (Claude Code format with _session_{uuid}) - highest priority for Claude Code clients
-//  2. X-Session-ID header
-//  3. Session_id header (Codex)
-//  4. X-Client-Request-Id header (PI)
-//  5. metadata.user_id (non-Claude Code format)
-//  6. conversation_id field in request body
-//  7. Stable hash from first few messages content (fallback)
+//  2. prompt_cache_key field in request body
+//  3. X-Session-ID header
+//  4. Session_id header (Codex)
+//  5. X-Client-Request-Id header (PI)
+//  6. metadata.user_id (non-Claude Code format)
+//  7. conversation_id field in request body
+//  8. Stable hash from first few messages content (fallback)
 func ExtractSessionID(headers http.Header, payload []byte, metadata map[string]any) string {
 	primary, _ := extractSessionIDs(headers, payload, metadata)
 	return primary
@@ -539,14 +646,21 @@ func extractSessionIDs(headers http.Header, payload []byte, metadata map[string]
 		}
 	}
 
-	// 2. X-Session-ID header
+	// 2. prompt_cache_key is the stable conversation identifier used by OpenAI Responses.
+	if len(payload) > 0 {
+		if cacheKey := strings.TrimSpace(gjson.GetBytes(payload, "prompt_cache_key").String()); cacheKey != "" {
+			return "prompt-cache:" + cacheKey, ""
+		}
+	}
+
+	// 3. X-Session-ID header
 	if headers != nil {
 		if sid := headers.Get("X-Session-ID"); sid != "" {
 			return "header:" + sid, ""
 		}
 	}
 
-	// 3. Session_id header (Codex)
+	// 4. Session_id header (Codex)
 	if headers != nil {
 		if sid := headers.Get("Session-Id"); sid != "" {
 			return "codex:" + sid, ""
@@ -556,7 +670,7 @@ func extractSessionIDs(headers http.Header, payload []byte, metadata map[string]
 		}
 	}
 
-	// 4. X-Client-Request-Id header (PI)
+	// 5. X-Client-Request-Id header (PI)
 	if headers != nil {
 		if rid := headers.Get("X-Client-Request-Id"); rid != "" {
 			return "clientreq:" + rid, ""
