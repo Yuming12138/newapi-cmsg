@@ -194,7 +194,8 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 	// ---- 信任额度旁路 ----
 	if s.funding.Source() == BillingSourceMeteredOnly {
 		effectiveQuota = 0
-		logger.LogInfo(c, fmt.Sprintf("用户 %d 使用分组 %s，仅计量不扣费", s.relayInfo.UserId, s.relayInfo.UsingGroup))
+		logger.LogInfo(c, fmt.Sprintf("用户 %d 所属分组 %s 使用分组 %s，仅计量不扣费",
+			s.relayInfo.UserId, s.relayInfo.UserGroup, s.relayInfo.UsingGroup))
 	} else if s.shouldTrust(c) {
 		s.trusted = true
 		effectiveQuota = 0
@@ -354,7 +355,7 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return nil, types.NewError(fmt.Errorf("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
 
-	if !operation_setting.IsQuotaChargedGroup(relayInfo.UsingGroup) {
+	if !operation_setting.IsQuotaChargedForUser(relayInfo.UserGroup, relayInfo.UsingGroup) {
 		session := &BillingSession{
 			relayInfo: relayInfo,
 			funding:   &MeteredOnlyFunding{},

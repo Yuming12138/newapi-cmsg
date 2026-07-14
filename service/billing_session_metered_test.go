@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -12,14 +13,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func withQuotaChargedGroups(t *testing.T, chargedGroups string) {
+func withQuotaPolicy(t *testing.T, chargedGroups, defaultAction string, rules []operation_setting.QuotaPolicyRule) {
 	t.Helper()
 	cfg := operation_setting.GetQuotaPolicySetting()
-	old := cfg.ChargedGroups
+	old := *cfg
 	cfg.ChargedGroups = chargedGroups
+	cfg.DefaultAction = defaultAction
+	cfg.Rules = rules
 	t.Cleanup(func() {
-		cfg.ChargedGroups = old
+		*cfg = old
 	})
+}
+
+func internalMeteredOnlyBillingRules() []operation_setting.QuotaPolicyRule {
+	return []operation_setting.QuotaPolicyRule{
+		{
+			UserGroups:  []string{"asxs"},
+			UsingGroups: []string{"cliproxy-codex", "deepseek-codex", "deepseek-claude"},
+			Action:      "metered_only",
+		},
+	}
+}
+
+func seedUserInGroup(t *testing.T, id int, quota int, group string) {
+	t.Helper()
+	seedUser(t, id, quota)
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", id).Update("group", group).Error)
 }
 
 func newBillingTestContext() *gin.Context {
@@ -29,15 +48,15 @@ func newBillingTestContext() *gin.Context {
 	return c
 }
 
-func TestPreConsumeBilling_MeteredOnlyGroupSkipsUserAndTokenQuota(t *testing.T) {
+func TestPreConsumeBilling_InternalMeteredOnlyGroupSkipsUserAndTokenQuota(t *testing.T) {
 	truncate(t)
-	withQuotaChargedGroups(t, "asxs")
+	withQuotaPolicy(t, "asxs,default", "charged", internalMeteredOnlyBillingRules())
 
 	const userID = 101
 	const tokenID = 101
 	const tokenRemain = 5000
 
-	seedUser(t, userID, 0)
+	seedUserInGroup(t, userID, 0, "asxs")
 	seedToken(t, tokenID, userID, "metered-token", tokenRemain)
 
 	c := newBillingTestContext()
@@ -45,6 +64,7 @@ func TestPreConsumeBilling_MeteredOnlyGroupSkipsUserAndTokenQuota(t *testing.T) 
 		UserId:          userID,
 		TokenId:         tokenID,
 		TokenKey:        "metered-token",
+		UserGroup:       "asxs",
 		UsingGroup:      "cliproxy-codex",
 		OriginModelName: "gpt-5.5",
 		RequestId:       "metered-only-request",
@@ -65,14 +85,14 @@ func TestPreConsumeBilling_MeteredOnlyGroupSkipsUserAndTokenQuota(t *testing.T) 
 	require.Equal(t, 0, getTokenUsedQuota(t, tokenID))
 }
 
-func TestPreConsumeBilling_ChargedGroupStillRequiresUserQuota(t *testing.T) {
+func TestPreConsumeBilling_ExternalCPAGroupStillRequiresUserQuota(t *testing.T) {
 	truncate(t)
-	withQuotaChargedGroups(t, "asxs")
+	withQuotaPolicy(t, "asxs,default", "charged", internalMeteredOnlyBillingRules())
 
 	const userID = 102
 	const tokenID = 102
 
-	seedUser(t, userID, 0)
+	seedUserInGroup(t, userID, 0, "default")
 	seedToken(t, tokenID, userID, "charged-token", 5000)
 
 	c := newBillingTestContext()
@@ -80,7 +100,8 @@ func TestPreConsumeBilling_ChargedGroupStillRequiresUserQuota(t *testing.T) {
 		UserId:          userID,
 		TokenId:         tokenID,
 		TokenKey:        "charged-token",
-		UsingGroup:      "asxs",
+		UserGroup:       "default",
+		UsingGroup:      "cliproxy-codex",
 		OriginModelName: "gpt-5.5",
 		RequestId:       "charged-request",
 	}
@@ -90,6 +111,46 @@ func TestPreConsumeBilling_ChargedGroupStillRequiresUserQuota(t *testing.T) {
 	require.Nil(t, info.Billing)
 	require.Equal(t, "", info.BillingSource)
 	require.Equal(t, 0, getUserQuota(t, userID))
+}
+
+func TestPreConsumeBilling_InternalASXSGroupStillRequiresUserQuota(t *testing.T) {
+	truncate(t)
+	withQuotaPolicy(t, "asxs,default", "charged", internalMeteredOnlyBillingRules())
+
+	const userID = 104
+	const tokenID = 104
+
+	seedUserInGroup(t, userID, 0, "asxs")
+	seedToken(t, tokenID, userID, "internal-asxs-token", 5000)
+
+	c := newBillingTestContext()
+	info := &relaycommon.RelayInfo{
+		UserId:          userID,
+		TokenId:         tokenID,
+		TokenKey:        "internal-asxs-token",
+		UserGroup:       "asxs",
+		UsingGroup:      "asxs",
+		OriginModelName: "gpt-5.5",
+		RequestId:       "internal-asxs-request",
+	}
+
+	apiErr := PreConsumeBilling(c, 3000, info)
+	require.NotNil(t, apiErr)
+	require.Nil(t, info.Billing)
+	require.Equal(t, "", info.BillingSource)
+	require.Equal(t, 0, getUserQuota(t, userID))
+}
+
+func TestPreWssConsumeQuota_MeteredOnlySkipsQuotaLookups(t *testing.T) {
+	truncate(t)
+
+	info := &relaycommon.RelayInfo{
+		UserId:        9999,
+		TokenKey:      "missing-token",
+		BillingSource: BillingSourceMeteredOnly,
+	}
+
+	require.NoError(t, PreWssConsumeQuota(newBillingTestContext(), info, &dto.RealtimeUsage{}))
 }
 
 func TestRecalculateTaskQuota_MeteredOnlySkipsFundingAndTokenQuota(t *testing.T) {

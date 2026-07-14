@@ -195,16 +195,26 @@ func isTokenQuotaCharged(token *Token) bool {
 	if token == nil {
 		return true
 	}
-	group := strings.TrimSpace(token.Group)
-	if group == "" {
-		userGroup, err := GetUserGroup(token.UserId, false)
-		if err != nil {
-			common.SysLog("failed to resolve token user group for quota policy: " + err.Error())
-			return true
-		}
-		group = userGroup
+
+	usingGroup := strings.TrimSpace(token.Group)
+	if !operation_setting.HasUserGroupQuotaPolicy() && usingGroup != "" {
+		return operation_setting.IsQuotaChargedGroup(usingGroup)
 	}
-	return operation_setting.IsQuotaChargedGroup(group)
+
+	userGroup, err := GetUserGroup(token.UserId, false)
+	if err != nil {
+		common.SysLog("failed to resolve token user group for quota policy: " + err.Error())
+		return true
+	}
+	userGroup = strings.TrimSpace(userGroup)
+	if userGroup == "" {
+		common.SysLog(fmt.Sprintf("empty token user group for quota policy (userId=%d)", token.UserId))
+		return true
+	}
+	if usingGroup == "" {
+		usingGroup = userGroup
+	}
+	return operation_setting.IsQuotaChargedForUser(userGroup, usingGroup)
 }
 
 func ValidateUserToken(key string) (token *Token, err error) {
