@@ -18,7 +18,11 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
-import { StatusBadge, type StatusBadgeProps } from './status-badge'
+import {
+  StatusBadge,
+  type StatusBadgeProps,
+  type StatusVariant,
+} from './status-badge'
 
 type GroupBadgeProps = Omit<
   StatusBadgeProps,
@@ -27,6 +31,12 @@ type GroupBadgeProps = Omit<
   group?: string | null
   label?: string
   ratio?: number | null
+}
+
+const groupVariantOverrides: Record<string, StatusVariant> = {
+  // Match the green/teal visual used by the internal asxs group instead of
+  // the default name hash, which maps cliproxy-codex to a misleading red.
+  'cliproxy-codex': 'teal',
 }
 
 function getGroupRatioClassName(ratio: number): string {
@@ -67,6 +77,9 @@ export function GroupBadge(props: GroupBadgeProps) {
   const isAutoGroup = groupName === 'auto'
   const isEmptyGroup = !groupName
   const isSpecialGroup = isAutoGroup || isEmptyGroup
+  const groupVariant = groupName
+    ? groupVariantOverrides[groupName.toLowerCase()]
+    : undefined
   const label = getGroupLabel({
     labelOverride,
     groupName,
@@ -81,8 +94,8 @@ export function GroupBadge(props: GroupBadgeProps) {
       copyable={copyable}
       label={label}
       showDot={showDot ?? (isSpecialGroup ? false : undefined)}
-      variant={isSpecialGroup ? 'neutral' : undefined}
-      autoColor={isSpecialGroup ? undefined : groupName}
+      variant={isSpecialGroup ? 'neutral' : groupVariant}
+      autoColor={isSpecialGroup || groupVariant ? undefined : groupName}
       className={cn('min-w-0 shrink overflow-hidden', className)}
     />
   )
