@@ -38,8 +38,9 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 		delta := actualQuota - preConsumed
 
 		if relayInfo.BillingSource == BillingSourceMeteredOnly {
-			logger.LogInfo(ctx, fmt.Sprintf("仅计量不扣费：%s（分组：%s）",
+			logger.LogInfo(ctx, fmt.Sprintf("仅计量不扣费：%s（用户分组：%s，使用分组：%s）",
 				logger.FormatQuota(actualQuota),
+				relayInfo.UserGroup,
 				relayInfo.UsingGroup,
 			))
 		} else if delta > 0 {

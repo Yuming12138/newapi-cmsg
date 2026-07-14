@@ -89,6 +89,9 @@ func calculateAudioQuota(info QuotaInfo) int {
 }
 
 func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage) error {
+	if relayInfo != nil && relayInfo.BillingSource == BillingSourceMeteredOnly {
+		return nil
+	}
 	if relayInfo.UsePrice {
 		return nil
 	}
