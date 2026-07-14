@@ -546,7 +546,7 @@ export function Docs() {
             <div className='grid gap-6 lg:grid-cols-[minmax(0,1fr)_420px]'>
               <figure className='border-border bg-card overflow-hidden rounded-lg border'>
                 <img
-                  src='/docs/codex-config.png'
+                  src='/doc-assets/codex-config.png'
                   alt='Windows 资源管理器中 .codex 目录和用户名位置示意图'
                   className='w-full object-contain'
                 />
