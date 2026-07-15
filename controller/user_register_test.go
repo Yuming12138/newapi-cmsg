@@ -91,9 +91,10 @@ func TestRegisterAllowsMissingRegistrationCodeWhenGateDisabled(t *testing.T) {
 	resp := decodeUserRegisterAPIResponse(t, recorder)
 	require.True(t, resp.Success)
 
-	var count int64
-	require.NoError(t, model.DB.Model(&model.User{}).Where("username = ?", "reg-open").Count(&count).Error)
-	require.EqualValues(t, 1, count)
+	var user model.User
+	require.NoError(t, model.DB.Where("username = ?", "reg-open").First(&user).Error)
+	require.Equal(t, model.DefaultUserGroup, user.Group)
+	require.Zero(t, user.Quota)
 }
 
 func TestRegisterRejectsMissingRegistrationCodeWhenGateEnabled(t *testing.T) {

@@ -16,7 +16,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const UserNameMaxLength = 20
+const (
+	UserNameMaxLength = 20
+	DefaultUserGroup  = "default"
+)
 
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
@@ -513,6 +516,20 @@ func (user *User) prepareForInsert(tx *gorm.DB) error {
 	return err
 }
 
+func (user *User) prepareNewUserFields() {
+	user.Group = strings.TrimSpace(user.Group)
+	if user.Group == "" {
+		user.Group = DefaultUserGroup
+	}
+	user.Quota = common.QuotaForNewUser
+	user.AffCode = common.GetRandomString(4)
+
+	if user.Setting == "" {
+		defaultSetting := dto.UserSetting{}
+		user.SetSetting(defaultSetting)
+	}
+}
+
 // BindEmailToUser atomically checks email availability and assigns it to the
 // user, serializing concurrent binds of the same email so two accounts cannot
 // end up sharing one address. The email is normalized before check and store.
@@ -559,15 +576,7 @@ func (user *User) Insert(inviterId int) error {
 			if err := user.prepareForInsert(tx); err != nil {
 				return err
 			}
-			user.Quota = common.QuotaForNewUser
-			user.AffCode = common.GetRandomString(4)
-
-			// 初始化用户设置，包括默认的边栏配置
-			if user.Setting == "" {
-				defaultSetting := dto.UserSetting{}
-				// 这里暂时不设置SidebarModules，因为需要在用户创建后根据角色设置
-				user.SetSetting(defaultSetting)
-			}
+			user.prepareNewUserFields()
 
 			return tx.Create(user).Error
 		})
@@ -615,14 +624,7 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 		if err := user.prepareForInsert(tx); err != nil {
 			return err
 		}
-		user.Quota = common.QuotaForNewUser
-		user.AffCode = common.GetRandomString(4)
-
-		// 初始化用户设置
-		if user.Setting == "" {
-			defaultSetting := dto.UserSetting{}
-			user.SetSetting(defaultSetting)
-		}
+		user.prepareNewUserFields()
 
 		return tx.Create(user).Error
 	})

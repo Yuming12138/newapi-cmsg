@@ -153,6 +153,68 @@ func TestInsertKeepsBlankPasswordForPasswordlessUser(t *testing.T) {
 	assert.Empty(t, stored.Password)
 }
 
+func TestInsertDefaultsNewUsersToDefaultGroup(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	oldQuotaForNewUser := common.QuotaForNewUser
+	common.QuotaForNewUser = 0
+	t.Cleanup(func() {
+		common.QuotaForNewUser = oldQuotaForNewUser
+	})
+
+	user := &User{
+		Username: "default-group-user",
+		Password: "password123",
+		Group:    "   ",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+	}
+
+	require.NoError(t, user.Insert(0))
+
+	var stored User
+	require.NoError(t, DB.Where("username = ?", user.Username).First(&stored).Error)
+	assert.Equal(t, DefaultUserGroup, stored.Group)
+	assert.Zero(t, stored.Quota)
+}
+
+func TestInsertPreservesExplicitNewUserGroup(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	user := &User{
+		Username: "explicit-group-user",
+		Password: "password123",
+		Group:    " asxs ",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+	}
+
+	require.NoError(t, user.Insert(0))
+
+	var stored User
+	require.NoError(t, DB.Where("username = ?", user.Username).First(&stored).Error)
+	assert.Equal(t, "asxs", stored.Group)
+}
+
+func TestInsertWithTxDefaultsOAuthUserToDefaultGroup(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	user := &User{
+		Username: "oauth-default-group-user",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+	}
+
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		return user.InsertWithTx(tx, 0)
+	}))
+
+	var stored User
+	require.NoError(t, DB.Where("username = ?", user.Username).First(&stored).Error)
+	assert.Equal(t, DefaultUserGroup, stored.Group)
+	assert.Zero(t, stored.Quota)
+}
+
 func TestValidateAndFillRejectsPasswordlessUser(t *testing.T) {
 	setupUserUpdateTestState(t)
 
