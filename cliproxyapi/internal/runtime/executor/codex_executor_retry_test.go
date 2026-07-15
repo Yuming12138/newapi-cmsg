@@ -46,12 +46,12 @@ func TestParseCodexRetryAfter(t *testing.T) {
 		}
 	})
 
-	t.Run("caps paid plan reset hint for recheck", func(t *testing.T) {
+	t.Run("keeps paid plan reset hint", func(t *testing.T) {
 		resetAt := now.Add(4 * time.Hour).Unix()
 		body := []byte(`{"error":{"type":"usage_limit_reached","plan_type":"team","resets_at":` + itoa(resetAt) + `}}`)
 		retryAfter := parseCodexRetryAfter(http.StatusTooManyRequests, body, now)
-		if retryAfter == nil || *retryAfter != codexPaidPlanRecheckInterval {
-			t.Fatalf("retryAfter = %v, want %v", retryAfter, codexPaidPlanRecheckInterval)
+		if retryAfter == nil || *retryAfter != 4*time.Hour {
+			t.Fatalf("retryAfter = %v, want %v", retryAfter, 4*time.Hour)
 		}
 	})
 

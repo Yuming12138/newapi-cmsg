@@ -35,12 +35,11 @@ import (
 )
 
 const (
-	codexUserAgent               = "codex-tui/0.135.0 (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; 0.135.0)"
-	codexOriginator              = "codex-tui"
-	codexDefaultImageToolModel   = "gpt-image-2"
-	codexPaidPlanRecheckInterval = 30 * time.Minute
-	codexResponsesLiteHeader     = "X-OpenAI-Internal-Codex-Responses-Lite"
-	codexResponsesLiteMetadata   = "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite"
+	codexUserAgent             = "codex-tui/0.135.0 (Mac OS 26.5.0; arm64) iTerm.app/3.6.10 (codex-tui; 0.135.0)"
+	codexOriginator            = "codex-tui"
+	codexDefaultImageToolModel = "gpt-image-2"
+	codexResponsesLiteHeader   = "X-OpenAI-Internal-Codex-Responses-Lite"
+	codexResponsesLiteMetadata = "client_metadata.ws_request_header_x_openai_internal_codex_responses_lite"
 )
 
 var dataTag = []byte("data:")
@@ -1907,10 +1906,6 @@ func parseCodexRetryAfter(statusCode int, errorBody []byte, now time.Time) *time
 	}
 	if retryAfter <= 0 {
 		return nil
-	}
-	planType := strings.TrimSpace(gjson.GetBytes(errorBody, "error.plan_type").String())
-	if planType != "" && !strings.EqualFold(planType, "free") && retryAfter > codexPaidPlanRecheckInterval {
-		retryAfter = codexPaidPlanRecheckInterval
 	}
 	return &retryAfter
 }
