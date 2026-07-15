@@ -255,6 +255,7 @@ func Register(c *gin.Context) {
 		DisplayName: user.Username,
 		InviterId:   inviterId,
 		Role:        common.RoleCommonUser, // 明确设置角色为普通用户
+		Group:       model.DefaultUserGroup,
 	}
 	if common.EmailVerificationEnabled {
 		cleanUser.Email = user.Email
@@ -1054,6 +1055,7 @@ func CreateUser(c *gin.Context) {
 		Password:    user.Password,
 		DisplayName: user.DisplayName,
 		Role:        user.Role, // 保持管理员设置的角色
+		Group:       strings.TrimSpace(user.Group),
 	}
 	if err := cleanUser.Insert(0); err != nil {
 		common.ApiError(c, err)
