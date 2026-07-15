@@ -102,6 +102,23 @@ export interface AsxsQuotaPoolStatus {
   partial?: boolean
 }
 
+export interface EstimatedQuotaPoolStatus {
+  source?: string
+  group?: string
+  channel_count?: number
+  available_channel_count?: number
+  failed_channel_count?: number
+  estimated_usd?: number
+  usable_estimated_usd?: number
+  remaining_quota?: number
+  quota_per_usd?: number
+  estimate_rates?: Record<string, number>
+  updated_at?: number
+  estimated?: boolean
+  estimation_basis?: string
+  partial?: boolean
+}
+
 export interface SystemStatus {
   success?: boolean
   message?: string
@@ -137,6 +154,7 @@ export interface SystemStatus {
     quota_per_unit?: number
     quota_display_type?: string
     asxs_quota_pool?: AsxsQuotaPoolStatus
+    estimated_quota_pool?: EstimatedQuotaPoolStatus
     usd_exchange_rate?: number
     custom_currency_symbol?: string
     custom_currency_exchange_rate?: number
@@ -181,6 +199,7 @@ export interface SystemStatus {
   quota_per_unit?: number
   quota_display_type?: string
   asxs_quota_pool?: AsxsQuotaPoolStatus
+  estimated_quota_pool?: EstimatedQuotaPoolStatus
   usd_exchange_rate?: number
   custom_currency_symbol?: string
   custom_currency_exchange_rate?: number

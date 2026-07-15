@@ -280,18 +280,17 @@ func (h *Handler) evaluateQuotaHealthAccount(cfg quotaHealthConfig, auth *coreau
 	minimumHeadroom := minSliceFloat64(headroomValues)
 	rawRemaining := minSliceFloat64(remainingValues)
 	protectedHeadroom := maxFloat64(0, minimumHeadroom)
-	visibleRemaining := protectedHeadroom
-	if canExhaust {
-		visibleRemaining = rawRemaining
-	}
+	visibleRemaining := rawRemaining
+	protectedReserveWarning := !canExhaust && protectedHeadroom <= 0.000001
 	balanceUnits := rawRemaining * cfg.BalanceUnitsPerPercent
 	usableBalanceUnits := visibleRemaining * cfg.BalanceUnitsPerPercent
-	reason, exhaustedWindow := quotaHealthUnschedulableReason(auth, canExhaust, protectedHeadroom, windows)
+	reason, exhaustedWindow := quotaHealthUnschedulableReason(auth, windows)
 	schedulable := reason == ""
 
 	account["ok"] = true
 	account["schedulable"] = schedulable
 	account["remaining_headroom_percent"] = roundQuotaHealth(minimumHeadroom)
+	account["protected_reserve_warning"] = protectedReserveWarning
 	account["remaining_share_percent"] = roundQuotaHealth(visibleRemaining)
 	account["raw_remaining_percent"] = roundQuotaHealth(rawRemaining)
 	account["balance_units"] = roundQuotaHealth(balanceUnits)
@@ -388,15 +387,12 @@ func quotaHealthWindowRemaining(windows map[string]map[string]any, key string) (
 	return clampQuotaHealthPercent(remaining, 0), nil
 }
 
-func quotaHealthUnschedulableReason(auth *coreauth.Auth, canExhaust bool, protectedHeadroom float64, windows map[string]map[string]any) (string, string) {
+func quotaHealthUnschedulableReason(auth *coreauth.Auth, windows map[string]map[string]any) (string, string) {
 	if auth != nil && auth.Disabled {
 		return "auth_disabled", ""
 	}
 	if exhausted := quotaHealthExhaustedWindow(windows); exhausted != "" {
 		return "quota_" + exhausted + "_exhausted", exhausted
-	}
-	if !canExhaust && protectedHeadroom <= 0.000001 {
-		return "protected_reserve_reached", ""
 	}
 	if auth != nil && auth.Unavailable {
 		return "auth_unavailable", ""
@@ -573,6 +569,7 @@ func quotaHealthAccountSummaries(accounts []map[string]any) []map[string]any {
 		"usable_balance_units",
 		"remaining_share_percent",
 		"raw_remaining_percent",
+		"protected_reserve_warning",
 		"reset_credits_available",
 		"reset_credits_earliest_expires_at",
 		"reset_credits_total_earned",

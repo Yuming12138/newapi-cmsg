@@ -93,7 +93,7 @@ func TestEvaluateQuotaHealthAccountWeeklyOnly(t *testing.T) {
 	if errPro != nil {
 		t.Fatalf("pro evaluate error = %v", errPro)
 	}
-	if pro["raw_remaining_percent"] != 78.0 || pro["usable_balance_units"] != 58.0 {
+	if pro["raw_remaining_percent"] != 78.0 || pro["usable_balance_units"] != 78.0 {
 		t.Fatalf("pro weekly-only balance = %#v", pro)
 	}
 }
@@ -136,8 +136,31 @@ func TestEvaluateQuotaHealthAccountProProtectedHeadroom(t *testing.T) {
 	if account["raw_remaining_percent"] != 78.0 {
 		t.Fatalf("raw_remaining_percent = %#v, want 78", account["raw_remaining_percent"])
 	}
-	if account["usable_balance_units"] != 58.0 {
-		t.Fatalf("usable_balance_units = %#v, want 58", account["usable_balance_units"])
+	if account["usable_balance_units"] != 78.0 {
+		t.Fatalf("usable_balance_units = %#v, want 78", account["usable_balance_units"])
+	}
+	if account["protected_reserve_warning"] != false {
+		t.Fatalf("protected_reserve_warning = %#v, want false", account["protected_reserve_warning"])
+	}
+}
+
+func TestEvaluateQuotaHealthAccountProReserveIsWarningOnly(t *testing.T) {
+	account, err := (&Handler{}).evaluateQuotaHealthAccount(defaultQuotaHealthTestConfig(), &coreauth.Auth{
+		Provider:   "codex",
+		Status:     coreauth.StatusActive,
+		Attributes: map[string]string{"plan_type": "pro"},
+	}, quotaHealthTestUsage(85, 85), nil)
+	if err != nil {
+		t.Fatalf("evaluateQuotaHealthAccount() error = %v", err)
+	}
+	if account["schedulable"] != true || account["state"] != authScheduleStateAvailable || account["reason"] != nil {
+		t.Fatalf("reserve warning account = %#v", account)
+	}
+	if account["raw_remaining_percent"] != 15.0 || account["usable_balance_units"] != 15.0 {
+		t.Fatalf("reserve warning balance = %#v", account)
+	}
+	if account["protected_reserve_warning"] != true {
+		t.Fatalf("protected_reserve_warning = %#v, want true", account["protected_reserve_warning"])
 	}
 }
 
@@ -165,8 +188,8 @@ func TestEvaluateQuotaHealthAggregatesBuckets(t *testing.T) {
 	if result["ok"] != true || result["quota_ok"] != true {
 		t.Fatalf("result = %#v", result)
 	}
-	if result["usable_balance_units"] != 58.0 {
-		t.Fatalf("usable_balance_units = %#v, want 58", result["usable_balance_units"])
+	if result["usable_balance_units"] != 78.0 {
+		t.Fatalf("usable_balance_units = %#v, want 78", result["usable_balance_units"])
 	}
 	if result["available_account_count"] != 1 {
 		t.Fatalf("available_account_count = %#v, want 1", result["available_account_count"])

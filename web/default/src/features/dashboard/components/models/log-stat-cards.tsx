@@ -113,11 +113,17 @@ export function LogStatCards(props: LogStatCardsProps) {
     }
   }, [filters, isAdmin, onDataUpdate])
 
-  const asxsPoolQuota = Number(status?.asxs_quota_pool?.remaining_quota ?? 0)
+  const estimatedPoolQuota = Number(
+    status?.estimated_quota_pool?.remaining_quota ?? 0
+  )
+  const hasEstimatedPoolQuota =
+    status?.estimated_quota_pool != null && Number.isFinite(estimatedPoolQuota)
 
   const adaptedStats = {
     rpm: stats?.totalCount ?? 0,
-    quota: asxsPoolQuota > 0 ? asxsPoolQuota : (stats?.totalQuota ?? 0),
+    quota: hasEstimatedPoolQuota
+      ? estimatedPoolQuota
+      : Number(user?.quota ?? stats?.totalQuota ?? 0),
     tpm: stats?.totalTokens ?? 0,
   }
 
@@ -134,8 +140,14 @@ export function LogStatCards(props: LogStatCardsProps) {
 
     return {
       title: config.title,
-      value: formatted.displayValue,
-      fullValue: formatted.fullValue,
+      value:
+        config.key === 'quota' && hasEstimatedPoolQuota
+          ? `≈ ${formatted.displayValue}`
+          : formatted.displayValue,
+      fullValue:
+        config.key === 'quota' && hasEstimatedPoolQuota
+          ? `≈ ${formatted.fullValue}`
+          : formatted.fullValue,
       desc: config.description,
       icon: config.icon,
     }

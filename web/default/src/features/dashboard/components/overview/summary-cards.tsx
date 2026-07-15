@@ -22,8 +22,8 @@ import { Link } from '@tanstack/react-router'
 import { ArrowRight, CreditCard } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
-import { getCurrencyLabel, isCurrencyDisplayEnabled } from '@/lib/currency'
 import { getSelf } from '@/lib/api'
+import { getCurrencyLabel, isCurrencyDisplayEnabled } from '@/lib/currency'
 import { formatNumber, formatQuota } from '@/lib/format'
 import { computeTimeRange } from '@/lib/time'
 import { useStatus } from '@/hooks/use-status'
@@ -110,9 +110,16 @@ export function SummaryCards() {
   }, [selfQuery.data, setUser])
 
   const liveUser =
-    selfQuery.data?.success && selfQuery.data?.data
-      ? selfQuery.data.data
-      : user
+    selfQuery.data?.success && selfQuery.data?.data ? selfQuery.data.data : user
+
+  const estimatedPoolQuota = Number(
+    status?.estimated_quota_pool?.remaining_quota ?? 0
+  )
+  const hasEstimatedPoolQuota =
+    status?.estimated_quota_pool != null && Number.isFinite(estimatedPoolQuota)
+  const displayedRemainQuota = hasEstimatedPoolQuota
+    ? estimatedPoolQuota
+    : Number(liveUser?.quota ?? 0)
 
   const usageTrendQuery = useQuery({
     queryKey: [
@@ -132,16 +139,17 @@ export function SummaryCards() {
   })
 
   const summaryValues = useMemo(() => {
-    const remainQuota = Number(liveUser?.quota ?? 0)
     const usedQuota = Number(liveUser?.used_quota ?? 0)
     const requestCount = Number(liveUser?.request_count ?? 0)
 
     return {
-      remainDisplay: formatQuota(remainQuota),
+      remainDisplay: hasEstimatedPoolQuota
+        ? `≈ ${formatQuota(displayedRemainQuota)}`
+        : formatQuota(displayedRemainQuota),
       usedDisplay: formatQuota(usedQuota),
       requestCountDisplay: formatNumber(requestCount),
     }
-  }, [liveUser])
+  }, [displayedRemainQuota, hasEstimatedPoolQuota, liveUser])
 
   const currencyEnabledFromStore = isCurrencyDisplayEnabled()
   const statusCurrencyFlag =
@@ -158,7 +166,7 @@ export function SummaryCards() {
     () =>
       buildSummarySparklines(
         usageTrendQuery.data?.data ?? [],
-        Number(liveUser?.quota ?? 0),
+        displayedRemainQuota,
         summaryTimeRange.start_timestamp,
         summaryTimeRange.end_timestamp
       ),
@@ -166,7 +174,7 @@ export function SummaryCards() {
       summaryTimeRange.end_timestamp,
       summaryTimeRange.start_timestamp,
       usageTrendQuery.data?.data,
-      liveUser?.quota,
+      displayedRemainQuota,
     ]
   )
 

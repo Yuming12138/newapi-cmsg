@@ -618,8 +618,6 @@ def exhausted_quota_window(windows: dict[str, dict[str, Any]]) -> str | None:
 def account_unschedulable_reason(
     disabled: bool,
     runtime_unavailable: bool,
-    can_exhaust: bool,
-    protected_headroom: float,
     windows: dict[str, dict[str, Any]],
 ) -> tuple[str | None, str | None]:
     if disabled:
@@ -627,8 +625,6 @@ def account_unschedulable_reason(
     exhausted = exhausted_quota_window(windows)
     if exhausted:
         return f"quota_{exhausted}_exhausted", exhausted
-    if not can_exhaust and protected_headroom <= 0.000001:
-        return "protected_reserve_reached", None
     if runtime_unavailable:
         return "auth_unavailable", None
     return None, None
@@ -653,7 +649,8 @@ def evaluate_account_quota(config: dict[str, Any], auth_entry: dict[str, Any], u
     raw_remaining = min(remaining_values)
     minimum_headroom = min(headroom_values)
     protected_headroom = max(0.0, minimum_headroom)
-    visible_remaining = raw_remaining if can_exhaust else protected_headroom
+    visible_remaining = raw_remaining
+    protected_reserve_warning = not can_exhaust and protected_headroom <= 0.000001
     units_per_percent = float(config.get("balance_units_per_percent") or 1.0)
     balance_units = raw_remaining * units_per_percent
     usable_balance_units = visible_remaining * units_per_percent
@@ -662,8 +659,6 @@ def evaluate_account_quota(config: dict[str, Any], auth_entry: dict[str, Any], u
     reason, exhausted_window = account_unschedulable_reason(
         disabled,
         runtime_unavailable,
-        can_exhaust,
-        protected_headroom,
         windows,
     )
     schedulable = reason is None
@@ -678,6 +673,7 @@ def evaluate_account_quota(config: dict[str, Any], auth_entry: dict[str, Any], u
         "min_remaining_percent_5h": threshold_5h,
         "min_remaining_percent_7d": threshold_7d,
         "remaining_headroom_percent": round(minimum_headroom, 6),
+        "protected_reserve_warning": protected_reserve_warning,
         "remaining_share_percent": round(visible_remaining, 6),
         "raw_remaining_percent": round(raw_remaining, 6),
         "balance_units": round(balance_units, 6),
@@ -762,6 +758,7 @@ def account_summary(account: dict[str, Any]) -> dict[str, Any]:
         "usable_balance_units",
         "remaining_share_percent",
         "raw_remaining_percent",
+        "protected_reserve_warning",
         "reset_credits_available",
         "windows",
     ]
@@ -913,28 +910,12 @@ def quota_source_window_remaining(result: dict[str, Any], name: str) -> float | 
     return None if remaining is None else float(remaining)
 
 
-def quota_source_protected_reserve_reached(result: dict[str, Any]) -> bool:
-    buckets = result.get("buckets")
-    if not isinstance(buckets, dict):
-        return False
-    for bucket in buckets.values():
-        if not isinstance(bucket, dict) or bucket.get("can_exhaust") is True:
-            continue
-        usable = number(bucket.get("usable_balance_units"))
-        if usable is not None and usable <= 0.000001:
-            return True
-    return False
-
-
 def build_quota_source(result: dict[str, Any], balance: float, spendable: bool, now: int) -> dict[str, Any]:
     remaining_7d = quota_source_window_remaining(result, "7d")
     remaining_5h = quota_source_window_remaining(result, "5h")
     if not result.get("ok"):
         status = "unknown"
         reason = str(result.get("reason") or result.get("error") or "quota_probe_failed")
-    elif quota_source_protected_reserve_reached(result):
-        status = "protected_reserve"
-        reason = "protected_reserve_reached"
     elif remaining_7d is not None and remaining_7d <= 0.000001:
         status = "quota_7d_exhausted"
         reason = "quota_7d_exhausted"
