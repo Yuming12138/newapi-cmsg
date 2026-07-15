@@ -40,6 +40,43 @@ git push origin dev/cmsg
 | `docs/proposals/` | 重要架构调整和上线方案记录 |
 | `AGENTS.md` | 本仓库开发、分支、构建和生产安全规则 |
 
+## 双上游与 CLIProxyAPI subtree
+
+`new-api-cmsg` 是唯一需要提交、推送和用于生产构建的 Git 仓库。它同时跟踪两个上游：
+
+| Remote | 上游 | 更新范围 |
+|--------|------|----------|
+| `upstream` | `https://github.com/QuantumNous/new-api.git` | 仓库根目录的 New API 代码 |
+| `cliproxy-upstream` | `https://github.com/router-for-me/CLIProxyAPI.git` | `cliproxyapi/` subtree |
+
+首次克隆后配置 CPA 上游：
+
+```bash
+git remote add cliproxy-upstream https://github.com/router-for-me/CLIProxyAPI.git
+git config remote.cliproxy-upstream.tagOpt --no-tags
+git fetch --no-tags cliproxy-upstream main
+```
+
+`cliproxyapi/` 是外层仓库直接跟踪的 subtree，不应包含独立 `.git`。不要在该目录内执行 `git pull`、`git merge`、`git rebase`、`git reset`、`git checkout`、`git clean` 或单独提交。
+
+同步 CPA 上游时使用独立分支：
+
+```bash
+git switch dev/cmsg
+git pull --ff-only origin dev/cmsg
+git switch -c sync/cliproxy-vX.Y.Z
+git fetch --no-tags cliproxy-upstream main
+git subtree pull \
+  --prefix=cliproxyapi \
+  cliproxy-upstream main \
+  --squash \
+  -m "sync(cliproxy): update upstream to vX.Y.Z"
+```
+
+解决与 CMSG 定制代码的冲突后，在 `cliproxyapi/` 内完成测试和构建，再将同步分支合回 `dev/cmsg`。同步提交应记录上游 tag 和完整 commit，便于以后审计。
+
+New API 上游继续使用普通外层 Git 工作流同步；不要用 subtree 命令更新仓库根目录。
+
 ## 构建与部署规则
 
 `cmsg-root` 是低资源生产服务器，不能当构建机使用。
