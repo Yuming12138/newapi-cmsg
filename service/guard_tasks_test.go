@@ -25,6 +25,57 @@ func TestParseASXSUsageSelectsDailyUSD(t *testing.T) {
 	}
 }
 
+func TestSummarizeEstimatedQuotaPoolUsesCliproxyPercentageEstimate(t *testing.T) {
+	channels := []*model.Channel{
+		{
+			Id:                 1,
+			Name:               "legacy-asxs",
+			Group:              "asxs",
+			Status:             common.ChannelStatusEnabled,
+			Balance:            257.392647,
+			BalanceUpdatedTime: 100,
+		},
+		{
+			Id:                 12,
+			Name:               "cliproxy-codex-pool",
+			Group:              "cliproxy-codex",
+			Status:             common.ChannelStatusEnabled,
+			Balance:            39,
+			BalanceUpdatedTime: 200,
+			OtherInfo: `{
+				"cliproxy_cpa_quota_guard":{"managed":true,"updated_at":201,"health":{"ok":true,"usable_balance_units":39,"total_balance_units":59,"accounts":[
+					{"ok":true,"plan_type":"plus","raw_remaining_percent":0,"remaining_share_percent":0},
+					{"ok":true,"plan_type":"pro","raw_remaining_percent":58,"remaining_share_percent":58}
+				]}},
+				"quota_source":{"balance":39,"spendable":true,"status":"available","updated_at":202,"raw_source":{"source":"cliproxy_cpa_quota_guard"}}
+			}`,
+		},
+		{
+			Id:                 22,
+			Name:               "cliproxy-disabled",
+			Group:              "cliproxy-codex",
+			Status:             common.ChannelStatusAutoDisabled,
+			Balance:            10,
+			BalanceUpdatedTime: 300,
+			OtherInfo: `{
+				"cliproxy_cpa_quota_guard":{"managed":true,"health":{"ok":false}},
+				"quota_source":{"balance":10,"spendable":false,"status":"unknown","raw_source":{"source":"cliproxy_cpa_quota_guard"}}
+			}`,
+		},
+	}
+
+	got := summarizeEstimatedQuotaPool(channels, 500000)
+	if got.Source != "cliproxy_cpa_plan_weighted_estimate" || got.Group != "cliproxy-codex" {
+		t.Fatalf("summarizeEstimatedQuotaPool() identity = %+v", got)
+	}
+	if got.ChannelCount != 2 || got.AvailableChannelCount != 1 || got.FailedChannelCount != 1 || !got.Partial {
+		t.Fatalf("summarizeEstimatedQuotaPool() counts = %+v", got)
+	}
+	if got.EstimatedUSD != 894.94 || got.UsableEstimatedUSD != 894.94 || got.RemainingQuota != 447470000 || got.UpdatedAt != 300 {
+		t.Fatalf("summarizeEstimatedQuotaPool() balance = %+v", got)
+	}
+}
+
 func TestInGuardMinuteWindow(t *testing.T) {
 	start, err := parseGuardHHMM("09:00")
 	if err != nil {
@@ -449,7 +500,7 @@ func TestNewAPIQuotaSourceStoredValue(t *testing.T) {
 	}
 }
 
-func TestCliproxyCPAQuotaSourceProtectedReserve(t *testing.T) {
+func TestCliproxyCPAQuotaSourceProtectedReserveIsWarningOnly(t *testing.T) {
 	health := map[string]interface{}{
 		"ok": true,
 		"windows": map[string]interface{}{
@@ -459,14 +510,14 @@ func TestCliproxyCPAQuotaSourceProtectedReserve(t *testing.T) {
 		"buckets": map[string]interface{}{
 			"protected": map[string]interface{}{
 				"can_exhaust":              false,
-				"usable_balance_units":     0,
+				"usable_balance_units":     29.9,
 				"min_remaining_percent_5h": 30,
 				"min_remaining_percent_7d": 20,
 			},
 		},
 	}
-	source := buildCliproxyCPAQuotaSource(health, 0, 1782321700)
-	if source["source_type"] != "shared_protected_rolling_quota" || source["status"] != "protected_reserve" || source["spendable"] != false {
+	source := buildCliproxyCPAQuotaSource(health, 29.9, 1782321700)
+	if source["source_type"] != "shared_protected_rolling_quota" || source["status"] != "available" || source["spendable"] != true || source["balance"] != 29.9 {
 		t.Fatalf("source = %+v", source)
 	}
 	policy, ok := source["reserve_policy"].(map[string]interface{})

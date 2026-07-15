@@ -52,7 +52,18 @@ class QuotaWindowCompatibilityTest(unittest.TestCase):
         self.assertEqual(78.0, plus["raw_remaining_percent"])
         self.assertEqual(78.0, plus["usable_balance_units"])
         self.assertEqual(78.0, pro["raw_remaining_percent"])
-        self.assertEqual(58.0, pro["usable_balance_units"])
+        self.assertEqual(78.0, pro["usable_balance_units"])
+        self.assertFalse(pro["protected_reserve_warning"])
+
+    def test_protected_reserve_is_warning_only(self) -> None:
+        config = dict(guard.DEFAULT_CONFIG)
+        pro = guard.evaluate_account_quota(config, {}, weekly_only_usage(85.0, "pro"))
+
+        self.assertEqual(15.0, pro["raw_remaining_percent"])
+        self.assertEqual(15.0, pro["usable_balance_units"])
+        self.assertTrue(pro["protected_reserve_warning"])
+        self.assertTrue(pro["schedulable"])
+        self.assertIsNone(pro["reason"])
 
 
 if __name__ == "__main__":

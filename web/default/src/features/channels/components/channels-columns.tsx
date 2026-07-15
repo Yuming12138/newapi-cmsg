@@ -143,6 +143,7 @@ type CliproxyCPAQuotaAccount = {
   skipped: boolean | null
   runtimeUnavailable: boolean | null
   quotaExhaustedWindow: string | null
+  protectedReserveWarning: boolean | null
   unavailable: boolean | null
   disabled: boolean | null
   canExhaust: boolean | null
@@ -386,6 +387,7 @@ function parseCliproxyCPAQuotaAccount(
       typeof item.quota_exhausted_window === 'string'
         ? item.quota_exhausted_window
         : null,
+    protectedReserveWarning: booleanValue(item.protected_reserve_warning),
     unavailable: booleanValue(item.unavailable),
     disabled: booleanValue(item.disabled),
     canExhaust: booleanValue(item.can_exhaust),
@@ -439,7 +441,8 @@ function parseCliproxyCPAQuotaMeta(
     const windows = asObject(health?.windows)
     if (!guard || !health) return null
     const updatedAt =
-      timestampValue(quotaSource?.updated_at) ?? timestampValue(guard.updated_at)
+      timestampValue(quotaSource?.updated_at) ??
+      timestampValue(guard.updated_at)
     const buckets = parseCliproxyCPAQuotaBuckets(health.buckets, updatedAt)
     const accounts = parseCliproxyCPAQuotaAccounts(health.accounts)
 
@@ -622,7 +625,8 @@ function getCliproxyCPAAccountIssueDetail(
       return `重置 ${formatShortDuration(quotaWindow.resetAfterSeconds)}`
     }
   }
-  if (account.resetAt != null) return `恢复 ${formatCompactTimestamp(account.resetAt)}`
+  if (account.resetAt != null)
+    return `恢复 ${formatCompactTimestamp(account.resetAt)}`
   if (account.reason === 'protected_reserve_reached') return '保留共享 Pro 余量'
   if (account.state === 'auth_invalid') return account.lastError || 'OAuth 失效'
   if (account.state === 'protected_reserve') return '保留共享 Pro 余量'
@@ -1034,12 +1038,20 @@ function CliproxyCPAAccountRow({
               </p>
             </div>
           ) : (
-            <p className='text-foreground/70 text-[10px]'>
-              <CliproxyCPAResetCreditsText
-                value={account.resetCreditsAvailable}
-                earliestExpiresAt={account.resetCreditsEarliestExpiresAt}
-              />
-            </p>
+            <div className='space-y-0.5'>
+              {account.protectedReserveWarning === true && (
+                <p className='flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400'>
+                  <AlertTriangle className='size-3 shrink-0' />
+                  低于保护水位（仅警示）
+                </p>
+              )}
+              <p className='text-foreground/70 text-[10px]'>
+                <CliproxyCPAResetCreditsText
+                  value={account.resetCreditsAvailable}
+                  earliestExpiresAt={account.resetCreditsEarliestExpiresAt}
+                />
+              </p>
+            </div>
           )}
         </div>
         <div className='flex shrink-0 flex-wrap justify-end gap-1'>

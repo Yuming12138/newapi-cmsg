@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"math"
 	"strings"
 
@@ -8,7 +9,11 @@ import (
 	"github.com/QuantumNous/new-api/model"
 )
 
-const channelQuotaSourceInfoKey = "quota_source"
+const (
+	channelQuotaSourceInfoKey    = "quota_source"
+	cliproxyCPAPlusUSDPerPercent = 0.77
+	cliproxyCPAProUSDPerPercent  = 15.43
+)
 
 type usageBalanceQuota struct {
 	Limit     interface{} `json:"limit"`
@@ -35,6 +40,203 @@ type newAPIBalanceResult struct {
 	Balance float64
 	Quota   int64
 	Status  newAPIStatusBalanceResponse
+}
+
+// EstimatedQuotaPoolSummary exposes the plan-weighted total and currently
+// spendable shared balances derived from upstream quota percentages. The
+// estimate is intentionally separate from the legacy ASXS pool.
+type EstimatedQuotaPoolSummary struct {
+	Source                string             `json:"source"`
+	Group                 string             `json:"group"`
+	ChannelCount          int                `json:"channel_count"`
+	AvailableChannelCount int                `json:"available_channel_count"`
+	FailedChannelCount    int                `json:"failed_channel_count"`
+	EstimatedUSD          float64            `json:"estimated_usd"`
+	UsableEstimatedUSD    float64            `json:"usable_estimated_usd"`
+	RemainingQuota        int64              `json:"remaining_quota"`
+	QuotaPerUSD           float64            `json:"quota_per_usd"`
+	EstimateRates         map[string]float64 `json:"estimate_rates"`
+	UpdatedAt             int64              `json:"updated_at"`
+	Estimated             bool               `json:"estimated"`
+	EstimationBasis       string             `json:"estimation_basis"`
+	Partial               bool               `json:"partial"`
+}
+
+func GetEstimatedQuotaPoolSnapshot(ctx context.Context) (EstimatedQuotaPoolSummary, bool, error) {
+	if model.DB == nil {
+		return EstimatedQuotaPoolSummary{}, false, nil
+	}
+	var channels []*model.Channel
+	err := model.DB.WithContext(ctx).
+		Select("id", "name", "status", "balance", "balance_updated_time", "other_info", "group").
+		Order("id asc").
+		Find(&channels).Error
+	if err != nil {
+		return EstimatedQuotaPoolSummary{}, false, err
+	}
+	summary := summarizeEstimatedQuotaPool(channels, common.QuotaPerUnit)
+	return summary, summary.ChannelCount > 0, nil
+}
+
+func summarizeEstimatedQuotaPool(channels []*model.Channel, quotaPerUSD float64) EstimatedQuotaPoolSummary {
+	if quotaPerUSD <= 0 {
+		quotaPerUSD = common.QuotaPerUnit
+	}
+	summary := EstimatedQuotaPoolSummary{
+		Source:      "cliproxy_cpa_plan_weighted_estimate",
+		QuotaPerUSD: quotaPerUSD,
+		EstimateRates: map[string]float64{
+			"plus": cliproxyCPAPlusUSDPerPercent,
+			"pro":  cliproxyCPAProUSDPerPercent,
+		},
+		Estimated:       true,
+		EstimationBasis: "plan_weighted_raw_remaining_percent",
+	}
+	for _, channel := range channels {
+		balance, usableBalance, updatedAt, available, failed, ok := cliproxyCPAEstimatedChannelBalance(channel)
+		if !ok {
+			continue
+		}
+		summary.ChannelCount++
+		if summary.Group == "" {
+			summary.Group = strings.TrimSpace(channel.Group)
+		}
+		if available {
+			summary.AvailableChannelCount++
+		}
+		if failed {
+			summary.FailedChannelCount++
+		} else {
+			summary.EstimatedUSD += balance
+			summary.UsableEstimatedUSD += usableBalance
+		}
+		if updatedAt > summary.UpdatedAt {
+			summary.UpdatedAt = updatedAt
+		}
+	}
+	summary.EstimatedUSD = roundFloat(summary.EstimatedUSD, 6)
+	summary.UsableEstimatedUSD = roundFloat(summary.UsableEstimatedUSD, 6)
+	summary.RemainingQuota = int64(math.Round(summary.EstimatedUSD * quotaPerUSD))
+	summary.Partial = summary.FailedChannelCount > 0
+	return summary
+}
+
+func cliproxyCPAEstimatedChannelBalance(channel *model.Channel) (float64, float64, int64, bool, bool, bool) {
+	if channel == nil {
+		return 0, 0, 0, false, false, false
+	}
+	otherInfo := parseGuardObject(channel.OtherInfo)
+	guardInfo, hasGuard := otherInfo["cliproxy_cpa_quota_guard"].(map[string]interface{})
+	quotaSource, hasQuotaSource := otherInfo[channelQuotaSourceInfoKey].(map[string]interface{})
+	isCPA := hasGuard
+	if rawSource, ok := quotaSource["raw_source"].(map[string]interface{}); ok {
+		if source, ok := rawSource["source"].(string); ok && strings.EqualFold(strings.TrimSpace(source), "cliproxy_cpa_quota_guard") {
+			isCPA = true
+		}
+	}
+	if !isCPA {
+		return 0, 0, 0, false, false, false
+	}
+
+	usableBalance := math.Max(channel.Balance, 0)
+	displayBalance := usableBalance
+	usableDisplayBalance := usableBalance
+	updatedAt := channel.BalanceUpdatedTime
+	spendable := usableBalance > 0
+	failed := false
+	if hasQuotaSource {
+		if value, ok := guardObjectFloat(quotaSource, "balance"); ok {
+			usableBalance = math.Max(value, 0)
+			displayBalance = usableBalance
+			usableDisplayBalance = usableBalance
+		}
+		if value, ok := guardObjectInt64(quotaSource, "updated_at"); ok && value > updatedAt {
+			updatedAt = value
+		}
+		if value, ok := guardObjectBool(quotaSource, "spendable"); ok {
+			spendable = value
+		}
+		if status, ok := quotaSource["status"].(string); ok && strings.EqualFold(strings.TrimSpace(status), "unknown") {
+			failed = true
+		}
+	}
+	if hasGuard {
+		if value, ok := guardObjectInt64(guardInfo, "updated_at"); ok && value > updatedAt {
+			updatedAt = value
+		}
+		if health, ok := guardInfo["health"].(map[string]interface{}); ok {
+			if rawEstimate, usableEstimate, ok := cliproxyCPAPlanWeightedEstimate(health); ok {
+				displayBalance = rawEstimate
+				usableDisplayBalance = usableEstimate
+			} else {
+				if value, ok := guardObjectFloat(health, "total_balance_units"); ok {
+					displayBalance = math.Max(value, 0)
+				}
+				if value, ok := guardObjectFloat(health, "usable_balance_units"); ok {
+					usableDisplayBalance = math.Max(value, 0)
+				}
+			}
+			if value, ok := guardObjectFloat(health, "usable_balance_units"); ok {
+				usableBalance = math.Max(value, 0)
+			}
+			if value, exists := guardObjectBool(health, "ok"); exists && !value {
+				failed = true
+			}
+		}
+	}
+	available := channel.Status == common.ChannelStatusEnabled && spendable && usableBalance > 0
+	return displayBalance, usableDisplayBalance, updatedAt, available, failed, true
+}
+
+func cliproxyCPAPlanWeightedEstimate(health map[string]interface{}) (float64, float64, bool) {
+	accounts, ok := health["accounts"].([]interface{})
+	if !ok || len(accounts) == 0 {
+		return 0, 0, false
+	}
+	rawEstimate := 0.0
+	usableEstimate := 0.0
+	count := 0
+	for _, item := range accounts {
+		account, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if value, exists := guardObjectBool(account, "ok"); exists && !value {
+			continue
+		}
+		rawRemaining, okRaw := guardObjectFloat(account, "raw_remaining_percent")
+		usableRemaining, okUsable := guardObjectFloat(account, "remaining_share_percent")
+		if !okRaw && !okUsable {
+			continue
+		}
+		if !okRaw {
+			rawRemaining = usableRemaining
+		}
+		if !okUsable {
+			usableRemaining = rawRemaining
+		}
+		planType, _ := account["plan_type"].(string)
+		rate := cliproxyCPAUSDPerPercent(planType)
+		rawEstimate += math.Max(rawRemaining, 0) * rate
+		usableEstimate += math.Max(usableRemaining, 0) * rate
+		count++
+	}
+	if count == 0 {
+		return 0, 0, false
+	}
+	return roundFloat(rawEstimate, 6), roundFloat(usableEstimate, 6), true
+}
+
+func cliproxyCPAUSDPerPercent(planType string) float64 {
+	normalized := strings.ToLower(strings.TrimSpace(planType))
+	switch {
+	case strings.Contains(normalized, "pro"):
+		return cliproxyCPAProUSDPerPercent
+	case strings.Contains(normalized, "plus"):
+		return cliproxyCPAPlusUSDPerPercent
+	default:
+		return 1
+	}
 }
 
 func buildQuotaSource(sourceType string, unit string, balance float64, windows []map[string]interface{}, spendable bool, status string, statusReason string, reservePolicy map[string]interface{}, updatedAt int64, rawSource map[string]interface{}) map[string]interface{} {
@@ -339,9 +541,6 @@ func cliproxyCPAQuotaSourceStatus(health map[string]interface{}, spendable bool)
 	if ok, exists := guardObjectBool(health, "ok"); exists && !ok {
 		return "unknown", "cpa_health_not_ok"
 	}
-	if cliproxyCPAProtectedReserveReached(health) {
-		return "protected_reserve", "protected_reserve_reached"
-	}
 	if cliproxyCPAWindowRemainingPercent(health, "7d") <= 0 {
 		return "quota_7d_exhausted", "quota_7d_exhausted"
 	}
@@ -352,24 +551,6 @@ func cliproxyCPAQuotaSourceStatus(health map[string]interface{}, spendable bool)
 		return "quota_exhausted", "no_spendable_balance"
 	}
 	return "available", "within_budget"
-}
-
-func cliproxyCPAProtectedReserveReached(health map[string]interface{}) bool {
-	buckets, _ := health["buckets"].(map[string]interface{})
-	for _, raw := range buckets {
-		bucket, ok := raw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		canExhaust, okCanExhaust := guardObjectBool(bucket, "can_exhaust")
-		if okCanExhaust && canExhaust {
-			continue
-		}
-		if balance, ok := guardObjectFloat(bucket, "usable_balance_units"); ok && balance <= 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func cliproxyCPAWindowRemainingPercent(health map[string]interface{}, name string) float64 {
