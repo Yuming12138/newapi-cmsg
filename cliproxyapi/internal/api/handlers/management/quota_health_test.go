@@ -2,9 +2,65 @@ package management
 
 import (
 	"testing"
+	"time"
 
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
+
+func TestEvaluateQuotaHealthAccountExposesRuntimeQuotaState(t *testing.T) {
+	next := time.Now().Add(6 * 24 * time.Hour).Truncate(time.Second)
+	auth := &coreauth.Auth{
+		Provider:    "codex",
+		Status:      coreauth.StatusError,
+		Unavailable: true,
+		Attributes:  map[string]string{"plan_type": "plus"},
+		Quota: coreauth.QuotaState{
+			Exceeded:      true,
+			Reason:        "quota",
+			NextRecoverAt: next,
+		},
+		NextRetryAfter: next,
+	}
+
+	account, err := (&Handler{}).evaluateQuotaHealthAccount(defaultQuotaHealthTestConfig(), auth, quotaHealthTestWeeklyOnlyUsage(0), nil)
+	if err != nil {
+		t.Fatalf("evaluateQuotaHealthAccount() error = %v", err)
+	}
+	if account["runtime_quota_exceeded"] != true {
+		t.Fatalf("runtime_quota_exceeded = %#v, want true", account["runtime_quota_exceeded"])
+	}
+	if account["runtime_unavailable"] != true || account["runtime_schedulable"] != false {
+		t.Fatalf("runtime availability = %#v", account)
+	}
+	if account["runtime_reason"] != authScheduleReasonCooldown {
+		t.Fatalf("runtime_reason = %#v, want %q", account["runtime_reason"], authScheduleReasonCooldown)
+	}
+	if account["runtime_reset_at"] != next.Unix() {
+		t.Fatalf("runtime_reset_at = %#v, want %d", account["runtime_reset_at"], next.Unix())
+	}
+	if account["schedulable"] != false || account["reason"] != "auth_unavailable" {
+		t.Fatalf("effective schedule state = %#v", account)
+	}
+}
+
+func TestEvaluateQuotaHealthAccountDoesNotTreatTransientCooldownAsQuota(t *testing.T) {
+	next := time.Now().Add(time.Minute)
+	auth := &coreauth.Auth{
+		Provider:       "codex",
+		Status:         coreauth.StatusError,
+		Unavailable:    true,
+		Attributes:     map[string]string{"plan_type": "plus"},
+		NextRetryAfter: next,
+	}
+
+	account, err := (&Handler{}).evaluateQuotaHealthAccount(defaultQuotaHealthTestConfig(), auth, quotaHealthTestWeeklyOnlyUsage(0), nil)
+	if err != nil {
+		t.Fatalf("evaluateQuotaHealthAccount() error = %v", err)
+	}
+	if account["runtime_quota_exceeded"] != false {
+		t.Fatalf("runtime_quota_exceeded = %#v, want false", account["runtime_quota_exceeded"])
+	}
+}
 
 func TestQuotaHealthWindowsUsesDurationNames(t *testing.T) {
 	usage := map[string]any{

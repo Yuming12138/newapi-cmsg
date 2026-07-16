@@ -172,6 +172,7 @@ func (h *Handler) quotaHealthBaseAccount(auth *coreauth.Auth, cfg quotaHealthCon
 	planType := quotaHealthPlanType(auth, usage)
 	bucket := quotaHealthClassifyBucket(auth, usage, planType)
 	canExhaust := bucket == "personal"
+	runtimeState := deriveAuthScheduleState(auth, time.Now())
 	base := map[string]any{
 		"auth_index":              authIndex,
 		"account_id_hash":         accountIDHash,
@@ -182,7 +183,16 @@ func (h *Handler) quotaHealthBaseAccount(auth *coreauth.Auth, cfg quotaHealthCon
 		"disabled":                auth != nil && auth.Disabled,
 		"unavailable":             auth != nil && auth.Unavailable,
 		"runtime_unavailable":     auth != nil && auth.Unavailable,
+		"runtime_state":           runtimeState.State,
+		"runtime_reason":          runtimeState.Reason,
+		"runtime_retryable":       runtimeState.Retryable,
+		"runtime_schedulable":     runtimeState.Schedulable,
+		"runtime_reset_at":        nil,
+		"runtime_quota_exceeded":  authRuntimeQuotaExceeded(auth),
 		"reset_credits_available": nil,
+	}
+	if !runtimeState.ResetAt.IsZero() {
+		base["runtime_reset_at"] = runtimeState.ResetAt.Unix()
 	}
 	if !canExhaust {
 		base["min_remaining_percent_5h"] = cfg.MinRemainingPercent5h
@@ -192,6 +202,33 @@ func (h *Handler) quotaHealthBaseAccount(auth *coreauth.Auth, cfg quotaHealthCon
 		base["account_id_hash"] = ""
 	}
 	return base
+}
+
+func authRuntimeQuotaExceeded(auth *coreauth.Auth) bool {
+	if auth == nil {
+		return false
+	}
+	if quotaReasonIsExhaustion(auth.Quota) {
+		return true
+	}
+	for _, state := range auth.ModelStates {
+		if state != nil && quotaReasonIsExhaustion(state.Quota) {
+			return true
+		}
+	}
+	return false
+}
+
+func quotaReasonIsExhaustion(quota coreauth.QuotaState) bool {
+	if !quota.Exceeded {
+		return false
+	}
+	normalized := strings.ToLower(strings.TrimSpace(quota.Reason))
+	return normalized == "quota" ||
+		strings.Contains(normalized, "5h") ||
+		strings.Contains(normalized, "7d") ||
+		strings.Contains(normalized, "week") ||
+		strings.Contains(normalized, "weekly")
 }
 
 func (h *Handler) fetchCodexWhamUsage(ctx context.Context, auth *coreauth.Auth) (map[string]any, error) {
@@ -558,6 +595,12 @@ func quotaHealthAccountSummaries(accounts []map[string]any) []map[string]any {
 		"state",
 		"retryable",
 		"runtime_unavailable",
+		"runtime_state",
+		"runtime_reason",
+		"runtime_retryable",
+		"runtime_schedulable",
+		"runtime_reset_at",
+		"runtime_quota_exceeded",
 		"quota_exhausted_window",
 		"can_exhaust",
 		"disabled",

@@ -3,6 +3,7 @@
 import importlib.util
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).with_name("cliproxy_cpa_quota_guard.py")
@@ -21,6 +22,23 @@ def weekly_only_usage(used_percent: float, plan_type: str) -> dict:
                 "used_percent": used_percent,
                 "reset_at": 1_800_100_000,
                 "reset_after_seconds": 86_400,
+            }
+        },
+    }
+
+
+def runtime_quota_account(runtime_reset_at: int, upstream_reset_at: int, *, quota: bool = True) -> dict:
+    return {
+        "auth_index": "auth-index-a",
+        "plan_type": "plus",
+        "disabled": False,
+        "runtime_unavailable": True,
+        "runtime_quota_exceeded": quota,
+        "runtime_reset_at": runtime_reset_at,
+        "windows": {
+            "7d": {
+                "remaining_percent": 100.0,
+                "reset_at": upstream_reset_at,
             }
         },
     }
@@ -64,6 +82,54 @@ class QuotaWindowCompatibilityTest(unittest.TestCase):
         self.assertTrue(pro["protected_reserve_warning"])
         self.assertTrue(pro["schedulable"])
         self.assertIsNone(pro["reason"])
+
+
+class RuntimeQuotaReconcileTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.config = dict(guard.DEFAULT_CONFIG)
+        self.config["cpa_base_url"] = "http://127.0.0.1:8317"
+        self.env = {"CPA_MANAGEMENT_KEY": "test-management-key"}
+
+    def test_advanced_upstream_window_resets_immediately(self) -> None:
+        state: dict = {}
+        result = {
+            "accounts": [runtime_quota_account(1_800_000_000, 1_800_100_000)],
+        }
+        with mock.patch.object(guard, "request_json", return_value={"status": "ok"}) as request:
+            summary = guard.auto_reconcile_runtime_quota(self.config, self.env, result, state, now=1_799_000_000)
+
+        self.assertEqual(1, summary["reset_count"])
+        request.assert_called_once()
+        self.assertEqual(
+            "7d:1800100000",
+            state["quota_auto_reconcile"]["accounts"]["auth-index-a"]["last_reset_window"],
+        )
+
+    def test_same_window_requires_confirmation_and_only_resets_once(self) -> None:
+        state: dict = {}
+        result = {
+            "accounts": [runtime_quota_account(1_800_100_000, 1_800_100_000)],
+        }
+        with mock.patch.object(guard, "request_json", return_value={"status": "ok"}) as request:
+            first = guard.auto_reconcile_runtime_quota(self.config, self.env, result, state, now=1_799_000_000)
+            second = guard.auto_reconcile_runtime_quota(self.config, self.env, result, state, now=1_799_000_060)
+            third = guard.auto_reconcile_runtime_quota(self.config, self.env, result, state, now=1_799_000_120)
+
+        self.assertEqual(1, first["pending_count"])
+        self.assertEqual(1, second["reset_count"])
+        self.assertEqual(0, third["reset_count"])
+        request.assert_called_once()
+
+    def test_non_quota_runtime_cooldown_is_ignored(self) -> None:
+        state: dict = {}
+        result = {
+            "accounts": [runtime_quota_account(1_800_000_000, 1_800_100_000, quota=False)],
+        }
+        with mock.patch.object(guard, "request_json", return_value={"status": "ok"}) as request:
+            summary = guard.auto_reconcile_runtime_quota(self.config, self.env, result, state, now=1_799_000_000)
+
+        self.assertEqual(0, summary["reset_count"])
+        request.assert_not_called()
 
 
 if __name__ == "__main__":
