@@ -50,6 +50,9 @@ DEFAULT_CONFIG = {
     "default_account_bucket": "protected",
     "account_bucket_overrides": {},
     "prefer_cpa_quota_health_endpoint": True,
+    "auto_reconcile_runtime_quota": True,
+    "auto_reconcile_confirmation_count": 2,
+    "auto_reconcile_reset_tolerance_sec": 60,
 }
 
 OPTION_CONFIG_MAP = {
@@ -556,6 +559,128 @@ def call_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[str, 
     return result
 
 
+def quota_reconcile_candidate(config: dict[str, Any], account: dict[str, Any], now: int) -> dict[str, Any] | None:
+    if not bool_value(config.get("auto_reconcile_runtime_quota"), True):
+        return None
+    if bool(account.get("disabled")) or not bool(account.get("runtime_unavailable")):
+        return None
+    if not bool(account.get("runtime_quota_exceeded")):
+        return None
+
+    auth_index = str(account.get("auth_index") or "").strip()
+    runtime_reset_at = int(number(account.get("runtime_reset_at")) or 0)
+    windows = account.get("windows")
+    if not auth_index or runtime_reset_at <= 0 or not isinstance(windows, dict):
+        return None
+
+    weekly = windows.get("7d")
+    if not isinstance(weekly, dict):
+        return None
+    weekly_remaining = number(weekly.get("remaining_percent"))
+    if weekly_remaining is None or weekly_remaining <= 0.000001:
+        return None
+
+    five_hour = windows.get("5h")
+    if isinstance(five_hour, dict):
+        five_hour_remaining = number(five_hour.get("remaining_percent"))
+        if five_hour_remaining is None or five_hour_remaining <= 0.000001:
+            return None
+
+    selected_name = "7d"
+    selected_window = weekly
+    if isinstance(five_hour, dict) and runtime_reset_at-now <= WINDOW_5H_SECONDS + 15 * 60:
+        selected_name = "5h"
+        selected_window = five_hour
+
+    upstream_reset_at = int(number(selected_window.get("reset_at")) or 0)
+    if upstream_reset_at <= 0:
+        return None
+    tolerance = max(0, int(config.get("auto_reconcile_reset_tolerance_sec") or 60))
+    return {
+        "auth_index": auth_index,
+        "window": selected_name,
+        "window_key": f"{selected_name}:{upstream_reset_at}",
+        "upstream_reset_at": upstream_reset_at,
+        "runtime_reset_at": runtime_reset_at,
+        "window_advanced": upstream_reset_at > runtime_reset_at + tolerance,
+    }
+
+
+def auto_reconcile_runtime_quota(
+    config: dict[str, Any],
+    env: dict[str, str],
+    result: dict[str, Any],
+    state: dict[str, Any],
+    now: int | None = None,
+) -> dict[str, Any]:
+    summary: dict[str, Any] = {"reset_count": 0, "pending_count": 0, "error_count": 0}
+    if not bool_value(config.get("auto_reconcile_runtime_quota"), True):
+        return summary
+
+    base_url = str(config.get("cpa_base_url") or "").rstrip("/")
+    if not base_url:
+        return summary
+    headers = management_headers(env, base_url)
+    if not headers.get("Authorization") and not headers.get("X-Management-Key"):
+        return summary
+
+    now_ts = int(time.time()) if now is None else int(now)
+    confirmation_count = max(1, int(config.get("auto_reconcile_confirmation_count") or 2))
+    reconcile_state = state.setdefault("quota_auto_reconcile", {})
+    account_states = reconcile_state.setdefault("accounts", {})
+
+    for raw_account in result.get("accounts") or []:
+        if not isinstance(raw_account, dict):
+            continue
+        candidate = quota_reconcile_candidate(config, raw_account, now_ts)
+        if candidate is None:
+            continue
+
+        auth_index = candidate["auth_index"]
+        window_key = candidate["window_key"]
+        account_state = account_states.setdefault(auth_index, {})
+        if account_state.get("last_reset_window") == window_key:
+            account_state["candidate_count"] = 0
+            account_state["candidate_window"] = None
+            continue
+
+        if account_state.get("candidate_window") == window_key:
+            candidate_count = int(account_state.get("candidate_count") or 0) + 1
+        else:
+            candidate_count = 1
+        account_state["candidate_window"] = window_key
+        account_state["candidate_count"] = candidate_count
+        account_state["last_observed_at"] = now_ts
+
+        required = 1 if candidate["window_advanced"] else confirmation_count
+        if candidate_count < required:
+            summary["pending_count"] += 1
+            continue
+
+        try:
+            request_json(
+                base_url + "/v0/management/reset-quota",
+                headers,
+                int(config.get("timeout_sec") or 30),
+                {"auth_index": auth_index},
+            )
+        except Exception as exc:
+            account_state["last_error"] = str(exc)[:180]
+            account_state["last_error_at"] = now_ts
+            summary["error_count"] += 1
+            continue
+
+        account_state["last_reset_window"] = window_key
+        account_state["last_reset_at"] = now_ts
+        account_state["last_error"] = None
+        account_state["candidate_window"] = None
+        account_state["candidate_count"] = 0
+        summary["reset_count"] += 1
+
+    reconcile_state["updated_at"] = now_ts
+    return summary
+
+
 def number(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
@@ -1025,6 +1150,11 @@ def main() -> int:
 
     try:
         result = call_quota_health(config, env)
+        reconcile_summary = auto_reconcile_runtime_quota(config, env, result, state)
+        if reconcile_summary["reset_count"] > 0:
+            result = call_quota_health(config, env)
+        if any(reconcile_summary.values()):
+            result["auto_reconcile"] = reconcile_summary
         state["failure_count"] = 0
         state["last_success_at"] = int(time.time())
         state["last_error"] = None
