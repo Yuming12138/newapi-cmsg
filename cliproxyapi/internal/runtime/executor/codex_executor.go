@@ -130,7 +130,14 @@ func codexTerminalStreamErr(eventData []byte) (statusErr, []byte, bool) {
 			body = codexTerminalErrorBody(eventData, "error")
 		}
 	default:
-		return statusErr{}, nil, false
+		// Some Codex backends report a failed response using response.completed
+		// or another terminal event while keeping the error under response.error.
+		// Treat those shapes like response.failed so transient capacity failures can
+		// still be retried before the downstream stream is committed.
+		body = codexTerminalErrorBody(eventData, "response.error")
+		if len(body) == 0 {
+			return statusErr{}, nil, false
+		}
 	}
 	if len(body) == 0 {
 		return statusErr{}, nil, false
@@ -139,6 +146,19 @@ func codexTerminalStreamErr(eventData []byte) (statusErr, []byte, bool) {
 		return statusErr{}, nil, false
 	}
 	return newCodexStatusErr(http.StatusBadRequest, body), body, true
+}
+
+// codexStreamBootstrapBufferLimit prevents an upstream that emits only control
+// events from retaining an unbounded amount of translated stream data.
+const codexStreamBootstrapBufferLimit = 256 * 1024
+
+func codexStreamBootstrapControlEvent(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "", "response.created", "response.in_progress", "response.queued":
+		return true
+	default:
+		return false
+	}
 }
 
 func codexTerminalStreamErrShouldHandle(body []byte) bool {
@@ -1145,13 +1165,36 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		var param any
 		outputItemsByIndex := make(map[int64][]byte)
 		var outputItemsFallback [][]byte
+		bootstrapCommitted := false
+		bootstrapBytes := 0
+		bootstrapChunks := make([][]byte, 0, 8)
+		sendPayload := func(payload []byte) bool {
+			select {
+			case out <- cliproxyexecutor.StreamChunk{Payload: payload}:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+		flushBootstrap := func() bool {
+			for _, chunk := range bootstrapChunks {
+				if !sendPayload(chunk) {
+					return false
+				}
+			}
+			bootstrapChunks = nil
+			bootstrapBytes = 0
+			return true
+		}
 		for scanner.Scan() {
 			line := applyCodexIdentityConfuseResponsePayload(scanner.Bytes(), identityState)
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
 			translatedLine := bytes.Clone(line)
+			eventType := ""
 
 			if bytes.HasPrefix(line, dataTag) {
 				data := bytes.TrimSpace(line[5:])
+				eventType = gjson.GetBytes(data, "type").String()
 				if streamErr, terminalBody, ok := codexTerminalStreamErr(data); ok {
 					if errClearReplay := clearCodexReasoningReplayOnInvalidSignature(ctx, replayScope, streamErr.StatusCode(), terminalBody); errClearReplay != nil {
 						helps.RecordAPIResponseError(ctx, e.cfg, errClearReplay)
@@ -1170,7 +1213,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 					}
 					return
 				}
-				switch gjson.GetBytes(data, "type").String() {
+				switch eventType {
 				case "response.output_item.done":
 					collectCodexOutputItemDone(data, outputItemsByIndex, &outputItemsFallback)
 				case "response.completed":
@@ -1186,12 +1229,29 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 
 			translatedLine = applyCodexIdentityExposeResponsePayload(translatedLine, identityState)
 			chunks := sdktranslator.TranslateStream(ctx, to, responseFormat, req.Model, originalPayload, body, translatedLine, &param)
+			if bootstrapCommitted {
+				for i := range chunks {
+					if !sendPayload(chunks[i]) {
+						return
+					}
+				}
+				continue
+			}
+
+			hasPayload := false
 			for i := range chunks {
-				select {
-				case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
-				case <-ctx.Done():
+				if len(chunks[i]) == 0 {
+					continue
+				}
+				hasPayload = true
+				bootstrapChunks = append(bootstrapChunks, bytes.Clone(chunks[i]))
+				bootstrapBytes += len(chunks[i])
+			}
+			if (hasPayload && !codexStreamBootstrapControlEvent(eventType)) || bootstrapBytes >= codexStreamBootstrapBufferLimit {
+				if !flushBootstrap() {
 					return
 				}
+				bootstrapCommitted = true
 			}
 		}
 		if errScan := scanner.Err(); errScan != nil {
@@ -1201,6 +1261,10 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 			case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
 			case <-ctx.Done():
 			}
+			return
+		}
+		if !bootstrapCommitted {
+			_ = flushBootstrap()
 		}
 	}()
 	return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil
