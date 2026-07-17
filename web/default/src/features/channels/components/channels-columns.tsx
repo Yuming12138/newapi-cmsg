@@ -865,18 +865,49 @@ function CliproxyCPAAccountWindowSummary({
 }
 
 function CliproxyCPAResetCreditButton({
+  account,
+  onRequestResetCredit,
+}: {
+  account: CliproxyCPAQuotaAccount
+  onRequestResetCredit: (account: CliproxyCPAQuotaAccount) => void
+}) {
+  const { t } = useTranslation()
+  const resetCredits = account.resetCreditsAvailable ?? 0
+  const disabled = resetCredits <= 0 || account.ok === false
+
+  return (
+    <Button
+      type='button'
+      variant='outline'
+      size='xs'
+      disabled={disabled}
+      className='h-6 px-1.5 text-[11px]'
+      onClick={(event: React.MouseEvent<HTMLButtonElement>) => {
+        event.preventDefault()
+        event.stopPropagation()
+        onRequestResetCredit(account)
+      }}
+    >
+      <RotateCcw className='size-3' />
+      {t('主动重置')}
+    </Button>
+  )
+}
+
+function CliproxyCPAResetCreditDialog({
   channelId,
   account,
+  onOpenChange,
 }: {
   channelId: number
-  account: CliproxyCPAQuotaAccount
+  account: CliproxyCPAQuotaAccount | null
+  onOpenChange: (open: boolean) => void
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const [confirmOpen, setConfirmOpen] = useState(false)
   const [isResetting, setIsResetting] = useState(false)
-  const resetCredits = account.resetCreditsAvailable ?? 0
-  const disabled = resetCredits <= 0 || isResetting || account.ok === false
+
+  if (account == null) return null
 
   const handleConfirm = async () => {
     setIsResetting(true)
@@ -892,7 +923,7 @@ function CliproxyCPAResetCreditButton({
         t('Reset request sent. Quota display will refresh after CPA polling.')
       )
       queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
-      setConfirmOpen(false)
+      onOpenChange(false)
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : t('Reset request failed')
@@ -903,49 +934,34 @@ function CliproxyCPAResetCreditButton({
   }
 
   return (
-    <>
-      <Button
-        type='button'
-        variant='outline'
-        size='xs'
-        disabled={disabled}
-        className='h-6 px-1.5 text-[11px]'
-        onClick={(event: React.MouseEvent<HTMLButtonElement>) => {
-          event.preventDefault()
-          event.stopPropagation()
-          setConfirmOpen(true)
-        }}
-      >
-        <RotateCcw className='size-3' />
-        {isResetting ? t('Resetting') : t('主动重置')}
-      </Button>
-      <ConfirmDialog
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
-        title={t('Consume reset credit?')}
-        desc={
-          <div className='space-y-1 text-sm'>
-            <p>
-              {t(
-                'This will consume one upstream reset credit for this CPA account.'
-              )}
-            </p>
-            <p className='text-muted-foreground'>
-              {t(
-                'The upstream API does not guarantee this only resets the 5h window; the actual affected quota window is controlled by OpenAI.'
-              )}
-            </p>
-            <p className='text-muted-foreground'>
-              {account.label} · {t('Remaining reset credits')}{' '}
-              {formatResetCreditsAvailable(account.resetCreditsAvailable)}
-            </p>
-          </div>
-        }
-        confirmText={isResetting ? t('Resetting') : t('Confirm reset')}
-        isLoading={isResetting}
-        handleConfirm={handleConfirm}
-      />
-    </>
+    <ConfirmDialog
+      open
+      onOpenChange={(open) => {
+        if (!isResetting) onOpenChange(open)
+      }}
+      title={t('Consume reset credit?')}
+      desc={
+        <div className='space-y-1 text-sm'>
+          <p>
+            {t(
+              'This will consume one upstream reset credit for this CPA account.'
+            )}
+          </p>
+          <p className='text-muted-foreground'>
+            {t(
+              'The upstream API does not guarantee this only resets the 5h window; the actual affected quota window is controlled by OpenAI.'
+            )}
+          </p>
+          <p className='text-muted-foreground'>
+            {account.label} · {t('Remaining reset credits')}{' '}
+            {formatResetCreditsAvailable(account.resetCreditsAvailable)}
+          </p>
+        </div>
+      }
+      confirmText={isResetting ? t('Resetting') : t('Confirm reset')}
+      isLoading={isResetting}
+      handleConfirm={handleConfirm}
+    />
   )
 }
 
@@ -1001,11 +1017,13 @@ function CliproxyCPAAccountRow({
   account,
   channelId,
   updatedAt,
+  onRequestResetCredit,
   unavailable = false,
 }: {
   account: CliproxyCPAQuotaAccount
   channelId: number
   updatedAt: number | null
+  onRequestResetCredit: (account: CliproxyCPAQuotaAccount) => void
   unavailable?: boolean
 }) {
   const issue = unavailable ? getCliproxyCPAAccountIssue(account) : null
@@ -1063,8 +1081,8 @@ function CliproxyCPAAccountRow({
           )}
           {canReset && (
             <CliproxyCPAResetCreditButton
-              channelId={channelId}
               account={account}
+              onRequestResetCredit={onRequestResetCredit}
             />
           )}
         </div>
@@ -1093,11 +1111,13 @@ function CliproxyCPABucketDetails({
   accounts,
   channelId,
   updatedAt,
+  onRequestResetCredit,
 }: {
   bucket: CliproxyCPAQuotaBucket
   accounts: CliproxyCPAQuotaAccount[]
   channelId: number
   updatedAt: number | null
+  onRequestResetCredit: (account: CliproxyCPAQuotaAccount) => void
 }) {
   const count = getCliproxyCPABucketAccountCountLabel(bucket)
   const rawBalanceVisible =
@@ -1154,6 +1174,7 @@ function CliproxyCPABucketDetails({
               account={account}
               channelId={channelId}
               updatedAt={updatedAt}
+              onRequestResetCredit={onRequestResetCredit}
             />
           ))}
         </div>
@@ -1165,9 +1186,11 @@ function CliproxyCPABucketDetails({
 function CliproxyCPAQuotaDetails({
   meta,
   channelId,
+  onRequestResetCredit,
 }: {
   meta: CliproxyCPAQuotaMeta
   channelId: number
+  onRequestResetCredit: (account: CliproxyCPAQuotaAccount) => void
 }) {
   const unavailableAccounts = meta.accounts.filter(
     (account) => !isCliproxyCPAAccountAvailable(account)
@@ -1205,6 +1228,7 @@ function CliproxyCPAQuotaDetails({
               )}
               channelId={channelId}
               updatedAt={meta.updatedAt}
+              onRequestResetCredit={onRequestResetCredit}
             />
           ))}
         </div>
@@ -1238,6 +1262,7 @@ function CliproxyCPAQuotaDetails({
                   account={account}
                   channelId={channelId}
                   updatedAt={meta.updatedAt}
+                  onRequestResetCredit={onRequestResetCredit}
                 />
               ))}
             </div>
@@ -1261,6 +1286,7 @@ function CliproxyCPAQuotaDetails({
                 account={account}
                 channelId={channelId}
                 updatedAt={meta.updatedAt}
+                onRequestResetCredit={onRequestResetCredit}
                 unavailable
               />
             ))}
@@ -1411,6 +1437,8 @@ function BalanceCell({ channel }: { channel: Channel }) {
   const [codexUsageOpen, setCodexUsageOpen] = useState(false)
   const [codexUsageResponse, setCodexUsageResponse] =
     useState<CodexUsageDialogData | null>(null)
+  const [resetCreditAccount, setResetCreditAccount] =
+    useState<CliproxyCPAQuotaAccount | null>(null)
   const currencyLabel = getCurrencyLabel()
   const tokenSuffix = currencyLabel === 'Tokens' ? ' Tokens' : ''
   const withSuffix = (value: string) =>
@@ -1536,6 +1564,7 @@ function BalanceCell({ channel }: { channel: Channel }) {
                 <CliproxyCPAQuotaDetails
                   meta={cliproxyCPAQuota}
                   channelId={channel.id}
+                  onRequestResetCredit={setResetCreditAccount}
                 />
               )}
               {channel.type !== 57 && <p>{t('Click to update balance')}</p>}
@@ -1555,11 +1584,20 @@ function BalanceCell({ channel }: { channel: Channel }) {
               <CliproxyCPAQuotaDetails
                 meta={cliproxyCPAQuota}
                 channelId={channel.id}
+                onRequestResetCredit={setResetCreditAccount}
               />
             </TooltipContent>
           </Tooltip>
         )}
       </div>
+
+      <CliproxyCPAResetCreditDialog
+        channelId={channel.id}
+        account={resetCreditAccount}
+        onOpenChange={(open) => {
+          if (!open) setResetCreditAccount(null)
+        }}
+      />
 
       <CodexUsageDialog
         open={codexUsageOpen}
