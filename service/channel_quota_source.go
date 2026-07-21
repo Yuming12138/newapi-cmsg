@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -42,9 +43,10 @@ type newAPIBalanceResult struct {
 	Status  newAPIStatusBalanceResponse
 }
 
-// EstimatedQuotaPoolSummary exposes the plan-weighted total and currently
-// spendable shared balances derived from upstream quota percentages. The
-// estimate is intentionally separate from the legacy ASXS pool.
+// EstimatedQuotaPoolSummary exposes the total and currently spendable shared
+// balances derived from channel quota_source metadata. It keeps the legacy
+// cliproxy percentage estimate while also including concrete sources such as
+// ASXS daily quota.
 type EstimatedQuotaPoolSummary struct {
 	Source                string             `json:"source"`
 	Group                 string             `json:"group"`
@@ -83,23 +85,23 @@ func summarizeEstimatedQuotaPool(channels []*model.Channel, quotaPerUSD float64)
 		quotaPerUSD = common.QuotaPerUnit
 	}
 	summary := EstimatedQuotaPoolSummary{
-		Source:      "cliproxy_cpa_plan_weighted_estimate",
+		Source:      "unified_quota_source_pool",
 		QuotaPerUSD: quotaPerUSD,
 		EstimateRates: map[string]float64{
 			"plus": cliproxyCPAPlusUSDPerPercent,
 			"pro":  cliproxyCPAProUSDPerPercent,
 		},
-		Estimated:       true,
-		EstimationBasis: "plan_weighted_raw_remaining_percent",
+		EstimationBasis: "quota_source_balance",
 	}
+	groups := map[string]struct{}{}
 	for _, channel := range channels {
-		balance, usableBalance, updatedAt, available, failed, ok := cliproxyCPAEstimatedChannelBalance(channel)
+		balance, usableBalance, updatedAt, available, failed, estimated, ok := estimatedQuotaPoolChannelBalance(channel)
 		if !ok {
 			continue
 		}
 		summary.ChannelCount++
-		if summary.Group == "" {
-			summary.Group = strings.TrimSpace(channel.Group)
+		if group := strings.TrimSpace(channel.Group); group != "" {
+			groups[group] = struct{}{}
 		}
 		if available {
 			summary.AvailableChannelCount++
@@ -110,15 +112,76 @@ func summarizeEstimatedQuotaPool(channels []*model.Channel, quotaPerUSD float64)
 			summary.EstimatedUSD += balance
 			summary.UsableEstimatedUSD += usableBalance
 		}
+		if estimated {
+			summary.Estimated = true
+		}
 		if updatedAt > summary.UpdatedAt {
 			summary.UpdatedAt = updatedAt
 		}
+	}
+	summary.Group = joinQuotaPoolGroups(groups)
+	if summary.Estimated {
+		summary.EstimationBasis = "quota_source_balance_with_plan_weighted_estimates"
 	}
 	summary.EstimatedUSD = roundFloat(summary.EstimatedUSD, 6)
 	summary.UsableEstimatedUSD = roundFloat(summary.UsableEstimatedUSD, 6)
 	summary.RemainingQuota = int64(math.Round(summary.EstimatedUSD * quotaPerUSD))
 	summary.Partial = summary.FailedChannelCount > 0
 	return summary
+}
+
+func joinQuotaPoolGroups(groups map[string]struct{}) string {
+	if len(groups) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(groups))
+	for group := range groups {
+		names = append(names, group)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ",")
+}
+
+func estimatedQuotaPoolChannelBalance(channel *model.Channel) (float64, float64, int64, bool, bool, bool, bool) {
+	if balance, usableBalance, updatedAt, available, failed, ok := cliproxyCPAEstimatedChannelBalance(channel); ok {
+		return balance, usableBalance, updatedAt, available, failed, true, true
+	}
+	balance, usableBalance, updatedAt, available, failed, ok := quotaSourceChannelBalance(channel)
+	return balance, usableBalance, updatedAt, available, failed, false, ok
+}
+
+func quotaSourceChannelBalance(channel *model.Channel) (float64, float64, int64, bool, bool, bool) {
+	if channel == nil {
+		return 0, 0, 0, false, false, false
+	}
+	otherInfo := parseGuardObject(channel.OtherInfo)
+	quotaSource, ok := otherInfo[channelQuotaSourceInfoKey].(map[string]interface{})
+	if !ok {
+		return 0, 0, 0, false, false, false
+	}
+	balance := math.Max(channel.Balance, 0)
+	if value, ok := guardObjectFloat(quotaSource, "balance"); ok {
+		balance = math.Max(value, 0)
+	}
+	updatedAt := channel.BalanceUpdatedTime
+	if value, ok := guardObjectInt64(quotaSource, "updated_at"); ok && value > updatedAt {
+		updatedAt = value
+	}
+	spendable := balance > 0
+	if value, ok := guardObjectBool(quotaSource, "spendable"); ok {
+		spendable = value
+	}
+	status := ""
+	if value, ok := quotaSource["status"].(string); ok {
+		status = strings.ToLower(strings.TrimSpace(value))
+	}
+	failed := status == "unknown" || status == "error" || status == "unavailable"
+	available := spendable && !failed && channel.Status == common.ChannelStatusEnabled
+	usableBalance := balance
+	if !spendable {
+		usableBalance = 0
+	}
+	return balance, usableBalance, updatedAt, available, failed, true
 }
 
 func cliproxyCPAEstimatedChannelBalance(channel *model.Channel) (float64, float64, int64, bool, bool, bool) {

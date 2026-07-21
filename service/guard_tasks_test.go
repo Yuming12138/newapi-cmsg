@@ -25,15 +25,18 @@ func TestParseASXSUsageSelectsDailyUSD(t *testing.T) {
 	}
 }
 
-func TestSummarizeEstimatedQuotaPoolUsesCliproxyPercentageEstimate(t *testing.T) {
+func TestSummarizeEstimatedQuotaPoolIncludesASXSAndCliproxySources(t *testing.T) {
 	channels := []*model.Channel{
 		{
 			Id:                 1,
-			Name:               "legacy-asxs",
+			Name:               "asxs-cgm-1.2",
 			Group:              "asxs",
 			Status:             common.ChannelStatusEnabled,
-			Balance:            257.392647,
+			Balance:            12.5,
 			BalanceUpdatedTime: 100,
+			OtherInfo: `{
+				"quota_source":{"balance":12.5,"spendable":true,"status":"available","updated_at":151,"raw_source":{"source":"asxs_usage"}}
+			}`,
 		},
 		{
 			Id:                 12,
@@ -65,13 +68,13 @@ func TestSummarizeEstimatedQuotaPoolUsesCliproxyPercentageEstimate(t *testing.T)
 	}
 
 	got := summarizeEstimatedQuotaPool(channels, 500000)
-	if got.Source != "cliproxy_cpa_plan_weighted_estimate" || got.Group != "cliproxy-codex" {
+	if got.Source != "unified_quota_source_pool" || got.Group != "asxs,cliproxy-codex" || !got.Estimated || got.EstimationBasis != "quota_source_balance_with_plan_weighted_estimates" {
 		t.Fatalf("summarizeEstimatedQuotaPool() identity = %+v", got)
 	}
-	if got.ChannelCount != 2 || got.AvailableChannelCount != 1 || got.FailedChannelCount != 1 || !got.Partial {
+	if got.ChannelCount != 3 || got.AvailableChannelCount != 2 || got.FailedChannelCount != 1 || !got.Partial {
 		t.Fatalf("summarizeEstimatedQuotaPool() counts = %+v", got)
 	}
-	if got.EstimatedUSD != 894.94 || got.UsableEstimatedUSD != 894.94 || got.RemainingQuota != 447470000 || got.UpdatedAt != 300 {
+	if got.EstimatedUSD != 907.44 || got.UsableEstimatedUSD != 907.44 || got.RemainingQuota != 453720000 || got.UpdatedAt != 300 {
 		t.Fatalf("summarizeEstimatedQuotaPool() balance = %+v", got)
 	}
 }
