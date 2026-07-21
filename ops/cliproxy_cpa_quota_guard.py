@@ -11,8 +11,10 @@ API and maps the available windows to the channel state.
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import hashlib
 import json
+import math
 import socket
 import subprocess
 import sys
@@ -23,6 +25,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 STATUS_ENABLED = 1
 STATUS_MANUALLY_DISABLED = 2
@@ -41,10 +44,13 @@ DEFAULT_CONFIG = {
     "wham_usage_url": "https://chatgpt.com/backend-api/wham/usage",
     "timeout_sec": 30,
     "enabled": True,
-    "min_remaining_percent_5h": 30.0,
-    "min_remaining_percent_7d": 20.0,
+    "min_remaining_percent_5h": 15.0,
+    "min_remaining_percent_7d": 15.0,
     "fail_closed_after_consecutive_failures": 3,
     "balance_units_per_percent": 1.0,
+    "dynamic_daily_budget_enabled": False,
+    "timezone": "Asia/Shanghai",
+    "quota_reset_increase_threshold_percent": 0.25,
     "personal_plan_keywords": ["plus"],
     "protected_plan_keywords": ["pro"],
     "default_account_bucket": "protected",
@@ -59,6 +65,8 @@ OPTION_CONFIG_MAP = {
     "cliproxy_cpa_quota_guard.enabled": ("enabled", "bool"),
     "cliproxy_cpa_quota_guard.min_remaining_percent_5h": ("min_remaining_percent_5h", "float"),
     "cliproxy_cpa_quota_guard.min_remaining_percent_7d": ("min_remaining_percent_7d", "float"),
+    "cliproxy_cpa_quota_guard.dynamic_daily_budget_enabled": ("dynamic_daily_budget_enabled", "bool"),
+    "cliproxy_cpa_quota_guard.quota_reset_increase_threshold_percent": ("quota_reset_increase_threshold_percent", "float"),
 }
 
 
@@ -955,6 +963,172 @@ def evaluate_quota(config: dict[str, Any], accounts: list[dict[str, Any]]) -> di
     }
 
 
+def guard_timezone(config: dict[str, Any]) -> dt.tzinfo:
+    name = str(config.get("timezone") or "Asia/Shanghai").strip()
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return dt.timezone.utc
+
+
+def protected_weekly_budget_snapshot(result: dict[str, Any], now: int) -> dict[str, Any] | None:
+    accounts = result.get("accounts")
+    if not isinstance(accounts, list):
+        return None
+
+    protected: list[dict[str, Any]] = []
+    for account in accounts:
+        if not isinstance(account, dict) or not account.get("ok") or account.get("bucket") != "protected":
+            continue
+        windows = account.get("windows")
+        weekly = windows.get("7d") if isinstance(windows, dict) else None
+        remaining = number(weekly.get("remaining_percent")) if isinstance(weekly, dict) else None
+        if remaining is None:
+            continue
+        protected.append(account)
+    if not protected:
+        return None
+
+    remaining_total = 0.0
+    weekly_remaining_values: list[float] = []
+    five_hour_remaining_values: list[float] = []
+    reset_after_values: list[float] = []
+    reset_at_values: list[float] = []
+    identities: list[str] = []
+    for account in protected:
+        weekly = account["windows"]["7d"]
+        remaining_total += max(0.0, float(number(weekly.get("remaining_percent")) or 0.0))
+        weekly_remaining_values.append(max(0.0, float(number(weekly.get("remaining_percent")) or 0.0)))
+        five_hour = account["windows"].get("5h")
+        five_hour_remaining = number(five_hour.get("remaining_percent")) if isinstance(five_hour, dict) else None
+        if five_hour_remaining is not None:
+            five_hour_remaining_values.append(max(0.0, float(five_hour_remaining)))
+        reset_after = number(weekly.get("reset_after_seconds"))
+        reset_at = number(weekly.get("reset_at"))
+        if reset_after is not None and reset_after >= 0:
+            reset_after_values.append(reset_after)
+        if reset_at is not None and reset_at > 0:
+            reset_at_values.append(reset_at)
+        identity = str(first_non_empty(account.get("account_id_hash"), account.get("auth_index"), "unknown"))
+        identities.append(identity)
+
+    reset_at = int(min(reset_at_values)) if reset_at_values else 0
+    if reset_after_values:
+        reset_after_seconds = max(0, int(min(reset_after_values)))
+    elif reset_at > 0:
+        reset_after_seconds = max(0, reset_at - now)
+    else:
+        reset_after_seconds = WINDOW_7D_SECONDS
+    days_remaining = max(1, min(7, int(math.ceil(max(reset_after_seconds, 1) / 86_400))))
+    signature = hashlib.sha256("|".join(sorted(identities)).encode("utf-8")).hexdigest()[:16]
+    return {
+        "account_count": len(protected),
+        "account_signature": signature,
+        "remaining_percent": round(remaining_total, 6),
+        "minimum_remaining_percent_7d": round(min(weekly_remaining_values), 6),
+        "minimum_remaining_percent_5h": round(min(five_hour_remaining_values), 6) if five_hour_remaining_values else None,
+        "reset_at": reset_at,
+        "reset_after_seconds": reset_after_seconds,
+        "days_remaining": days_remaining,
+    }
+
+
+def apply_dynamic_daily_budget(
+    config: dict[str, Any],
+    result: dict[str, Any],
+    state: dict[str, Any],
+    now: int | None = None,
+) -> dict[str, Any]:
+    if not bool_value(config.get("dynamic_daily_budget_enabled"), False) or not result.get("ok"):
+        return result
+
+    now = int(time.time()) if now is None else int(now)
+    snapshot = protected_weekly_budget_snapshot(result, now)
+    if snapshot is None:
+        result["dynamic_daily_budget"] = {"enabled": True, "applied": False, "reason": "protected_7d_window_unavailable"}
+        return result
+
+    day_key = dt.datetime.fromtimestamp(now, guard_timezone(config)).date().isoformat()
+    reserve_per_account = clamp_percent(config.get("min_remaining_percent_7d"), 15.0)
+    reserve_5h_per_account = clamp_percent(config.get("min_remaining_percent_5h"), 15.0)
+    reserve_total = reserve_per_account * int(snapshot["account_count"])
+    current_remaining = float(snapshot["remaining_percent"])
+    budget_state = state.get("dynamic_daily_budget")
+    if not isinstance(budget_state, dict):
+        budget_state = {}
+
+    increase_threshold = max(0.0, float(number(config.get("quota_reset_increase_threshold_percent")) or 0.25))
+    last_remaining = number(budget_state.get("last_remaining_percent"))
+    quota_increased = last_remaining is not None and current_remaining > last_remaining + increase_threshold
+    reset_changed = int(budget_state.get("reset_at") or 0) != int(snapshot["reset_at"])
+    should_reset = (
+        budget_state.get("day") != day_key
+        or budget_state.get("account_signature") != snapshot["account_signature"]
+        or reset_changed
+        or quota_increased
+        or number(budget_state.get("baseline_remaining_percent")) is None
+    )
+    if should_reset:
+        baseline = current_remaining
+        daily_limit = max(0.0, baseline - reserve_total) / int(snapshot["days_remaining"])
+        budget_state = {
+            "day": day_key,
+            "account_signature": snapshot["account_signature"],
+            "reset_at": int(snapshot["reset_at"]),
+            "baseline_remaining_percent": round(baseline, 6),
+            "daily_limit_percent": round(daily_limit, 6),
+        }
+
+    baseline = float(number(budget_state.get("baseline_remaining_percent")) or current_remaining)
+    daily_limit = max(0.0, float(number(budget_state.get("daily_limit_percent")) or 0.0))
+    consumed_today = max(0.0, baseline - current_remaining)
+    remaining_today = max(0.0, daily_limit - consumed_today)
+    minimum_remaining_7d = float(snapshot["minimum_remaining_percent_7d"])
+    minimum_remaining_5h = number(snapshot.get("minimum_remaining_percent_5h"))
+    hard_reserve_available = minimum_remaining_7d > reserve_per_account + 0.000001
+    if minimum_remaining_5h is not None:
+        hard_reserve_available = hard_reserve_available and minimum_remaining_5h > reserve_5h_per_account + 0.000001
+    daily_budget_available = remaining_today > 0.000001
+    original_quota_ok = bool(result.get("quota_ok", result.get("within_share")))
+    quota_ok = original_quota_ok and hard_reserve_available and daily_budget_available
+
+    budget_state.update({
+        "last_remaining_percent": round(current_remaining, 6),
+        "last_updated_at": now,
+        "days_remaining": int(snapshot["days_remaining"]),
+        "reset_after_seconds": int(snapshot["reset_after_seconds"]),
+        "reserve_percent": round(reserve_total, 6),
+        "minimum_remaining_percent_7d": round(minimum_remaining_7d, 6),
+        "minimum_remaining_percent_5h": round(minimum_remaining_5h, 6) if minimum_remaining_5h is not None else None,
+        "consumed_today_percent": round(consumed_today, 6),
+        "remaining_today_percent": round(remaining_today, 6),
+        "quota_ok": quota_ok,
+    })
+    state["dynamic_daily_budget"] = budget_state
+
+    units_per_percent = max(0.0, float(number(config.get("balance_units_per_percent")) or 1.0))
+    visible_balance = remaining_today * units_per_percent if quota_ok else 0.0
+    original_usable = max(0.0, float(number(result.get("usable_balance_units")) or 0.0))
+    if original_usable > 0:
+        visible_balance = min(visible_balance, original_usable)
+
+    result["guard_mode"] = "bucket_dynamic_daily_budget"
+    result["quota_ok"] = quota_ok
+    result["within_share"] = quota_ok
+    result["usable_balance_units"] = round(visible_balance, 6)
+    result["remaining_share_percent"] = round(remaining_today if quota_ok else 0.0, 6)
+    result["dynamic_daily_budget"] = {"enabled": True, "applied": True, **budget_state}
+    if not original_quota_ok:
+        return result
+    if not hard_reserve_available:
+        result["reason"] = "protected_reserve_reached"
+    elif not daily_budget_available:
+        result["reason"] = "dynamic_daily_budget_exhausted"
+    else:
+        result["reason"] = "dynamic_daily_budget_available"
+    return result
+
+
 def quota_source_window(name: str, window: dict[str, Any]) -> dict[str, Any]:
     remaining = number(window.get("remaining_percent"))
     used = number(window.get("used_percent"))
@@ -1155,6 +1329,7 @@ def main() -> int:
             result = call_quota_health(config, env)
         if any(reconcile_summary.values()):
             result["auto_reconcile"] = reconcile_summary
+        result = apply_dynamic_daily_budget(config, result, state)
         state["failure_count"] = 0
         state["last_success_at"] = int(time.time())
         state["last_error"] = None

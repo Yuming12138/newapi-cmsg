@@ -100,7 +100,14 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 
-				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
+				userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+				affinityGroup := usingGroup
+				modelRoute, hasModelRoute := service.ResolveModelGroupRoute(userGroup, usingGroup, modelRequest.Model)
+				if hasModelRoute {
+					affinityGroup = modelRoute.PreferredGroup
+				}
+
+				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, affinityGroup); found {
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err != nil || preferred == nil {
 						service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer exists", preferredChannelID))
@@ -116,7 +123,7 @@ func Distribute() func(c *gin.Context) {
 							service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d is %s", preferred.Id, reason))
 						} else if !channelSupportsRequestPath(preferred, requestPath) {
 							service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer satisfies request path", preferred.Id))
-						} else if usingGroup == "auto" {
+						} else if affinityGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroup(userGroup)
 							matched := false
@@ -133,10 +140,13 @@ func Distribute() func(c *gin.Context) {
 							if !matched {
 								service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer satisfies auto group/model", preferred.Id))
 							}
-						} else if model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
+						} else if model.IsChannelEnabledForGroupModel(affinityGroup, modelRequest.Model, preferred.Id) {
 							channel = preferred
-							selectGroup = usingGroup
-							service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
+							selectGroup = affinityGroup
+							if hasModelRoute {
+								common.SetContextKey(c, constant.ContextKeyAutoGroup, affinityGroup)
+							}
+							service.MarkChannelAffinityUsed(c, affinityGroup, preferred.Id)
 						} else {
 							service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer satisfies group/model", preferred.Id))
 						}
@@ -168,6 +178,9 @@ func Distribute() func(c *gin.Context) {
 					if channel == nil {
 						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": modelRequest.Model}), types.ErrorCodeModelNotFound)
 						return
+					}
+					if hasModelRoute && selectGroup != affinityGroup {
+						_, _ = service.GetPreferredChannelByAffinity(c, modelRequest.Model, selectGroup)
 					}
 				}
 			}

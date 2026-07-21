@@ -88,6 +88,42 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
 	excluded := GetExcludedChannelIDsForRequest(param.Ctx)
 
+	if route, ok := ResolveModelGroupRoute(userGroup, param.TokenGroup, param.ModelName); ok {
+		retry := param.GetRetry()
+		if retry > 0 {
+			selectedGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyAutoGroup)
+			if selectedGroup != route.PreferredGroup && selectedGroup != route.FallbackGroup {
+				selectedGroup = route.FallbackGroup
+			}
+			channel, err = model.GetRandomSatisfiedChannelForRequestPath(selectedGroup, param.ModelName, retry, param.RequestPath, excluded)
+			if err != nil {
+				return nil, selectedGroup, err
+			}
+			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, selectedGroup)
+			return channel, selectedGroup, nil
+		}
+
+		channel, err = model.GetRandomSatisfiedChannelForRequestPath(route.PreferredGroup, param.ModelName, 0, param.RequestPath, excluded)
+		if channel != nil {
+			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, route.PreferredGroup)
+			return channel, route.PreferredGroup, nil
+		}
+		if err != nil {
+			logger.LogDebug(param.Ctx, "Preferred model route group %s unavailable for model %s: %v", route.PreferredGroup, param.ModelName, err)
+		}
+
+		channel, err = model.GetRandomSatisfiedChannelForRequestPath(route.FallbackGroup, param.ModelName, 0, param.RequestPath, excluded)
+		if channel != nil {
+			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, route.FallbackGroup)
+			return channel, route.FallbackGroup, nil
+		}
+		if err != nil {
+			return nil, route.FallbackGroup, err
+		}
+		common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, route.FallbackGroup)
+		return channel, route.FallbackGroup, nil
+	}
+
 	if param.TokenGroup == "auto" {
 		if len(setting.GetAutoGroups()) == 0 {
 			return nil, selectGroup, errors.New("auto groups is not enabled")
