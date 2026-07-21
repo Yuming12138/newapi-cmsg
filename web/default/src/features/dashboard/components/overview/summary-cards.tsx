@@ -38,6 +38,11 @@ const SUMMARY_SPARKLINE_BUCKETS = 12
 
 type SummarySparklineKey = 'balance' | 'usage' | 'requests'
 
+function displayPoolGroupName(group?: string): string {
+  const trimmed = group?.trim()
+  return trimmed || 'default'
+}
+
 function getBucketIndex(
   timestamp: number,
   start: number,
@@ -120,6 +125,17 @@ export function SummaryCards() {
   const displayedRemainQuota = hasEstimatedPoolQuota
     ? estimatedPoolQuota
     : Number(liveUser?.quota ?? 0)
+  const quotaPoolBreakdown = useMemo(
+    () =>
+      (status?.estimated_quota_pool?.group_breakdown ?? [])
+        .map((item) => ({
+          group: displayPoolGroupName(item.group),
+          quota: Number(item.remaining_quota ?? 0),
+          estimated: Boolean(item.estimated),
+        }))
+        .filter((item) => Number.isFinite(item.quota)),
+    [status?.estimated_quota_pool?.group_breakdown]
+  )
 
   const usageTrendQuery = useQuery({
     queryKey: [
@@ -253,6 +269,27 @@ export function SummaryCards() {
                 ? `${t('Displayed in')} ${currencyLabel}`
                 : t('Balance is shown in quota units')}
             </p>
+            {quotaPoolBreakdown.length > 1 && (
+              <div className='mt-1 flex flex-col gap-1.5'>
+                <div className='text-muted-foreground/70 text-xs font-medium tracking-wide uppercase'>
+                  {t('Quota pools')}
+                </div>
+                {quotaPoolBreakdown.map((item) => (
+                  <div
+                    key={item.group}
+                    className='bg-background/70 border-border/60 flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-xs'
+                  >
+                    <span className='text-muted-foreground truncate font-medium'>
+                      {item.group}
+                    </span>
+                    <span className='text-foreground shrink-0 font-mono tabular-nums'>
+                      {item.estimated ? '≈ ' : ''}
+                      {formatQuota(item.quota)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <Button className='justify-between' render={<Link to='/wallet' />}>
             <span>{t('Recharge')}</span>

@@ -77,6 +77,17 @@ func TestSummarizeEstimatedQuotaPoolIncludesASXSAndCliproxySources(t *testing.T)
 	if got.EstimatedUSD != 907.44 || got.UsableEstimatedUSD != 907.44 || got.RemainingQuota != 453720000 || got.UpdatedAt != 300 {
 		t.Fatalf("summarizeEstimatedQuotaPool() balance = %+v", got)
 	}
+	if len(got.GroupBreakdown) != 2 {
+		t.Fatalf("summarizeEstimatedQuotaPool() group breakdown = %+v", got.GroupBreakdown)
+	}
+	asxsGroup := got.GroupBreakdown[0]
+	if asxsGroup.Group != "asxs" || asxsGroup.ChannelCount != 1 || asxsGroup.AvailableChannelCount != 1 || asxsGroup.EstimatedUSD != 12.5 || asxsGroup.RemainingQuota != 6250000 || asxsGroup.Estimated {
+		t.Fatalf("summarizeEstimatedQuotaPool() asxs group = %+v", asxsGroup)
+	}
+	cliproxyGroup := got.GroupBreakdown[1]
+	if cliproxyGroup.Group != "cliproxy-codex" || cliproxyGroup.ChannelCount != 2 || cliproxyGroup.AvailableChannelCount != 1 || cliproxyGroup.FailedChannelCount != 1 || cliproxyGroup.EstimatedUSD != 894.94 || cliproxyGroup.RemainingQuota != 447470000 || !cliproxyGroup.Estimated || !cliproxyGroup.Partial {
+		t.Fatalf("summarizeEstimatedQuotaPool() cliproxy group = %+v", cliproxyGroup)
+	}
 }
 
 func TestInGuardMinuteWindow(t *testing.T) {

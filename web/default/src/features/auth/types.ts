@@ -117,6 +117,20 @@ export interface EstimatedQuotaPoolStatus {
   estimated?: boolean
   estimation_basis?: string
   partial?: boolean
+  group_breakdown?: EstimatedQuotaPoolGroupStatus[]
+}
+
+export interface EstimatedQuotaPoolGroupStatus {
+  group?: string
+  channel_count?: number
+  available_channel_count?: number
+  failed_channel_count?: number
+  estimated_usd?: number
+  usable_estimated_usd?: number
+  remaining_quota?: number
+  updated_at?: number
+  estimated?: boolean
+  partial?: boolean
 }
 
 export interface SystemStatus {

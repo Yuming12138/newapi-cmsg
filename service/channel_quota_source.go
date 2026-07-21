@@ -62,6 +62,20 @@ type EstimatedQuotaPoolSummary struct {
 	Estimated             bool               `json:"estimated"`
 	EstimationBasis       string             `json:"estimation_basis"`
 	Partial               bool               `json:"partial"`
+	GroupBreakdown        []QuotaPoolGroup   `json:"group_breakdown,omitempty"`
+}
+
+type QuotaPoolGroup struct {
+	Group                 string  `json:"group"`
+	ChannelCount          int     `json:"channel_count"`
+	AvailableChannelCount int     `json:"available_channel_count"`
+	FailedChannelCount    int     `json:"failed_channel_count"`
+	EstimatedUSD          float64 `json:"estimated_usd"`
+	UsableEstimatedUSD    float64 `json:"usable_estimated_usd"`
+	RemainingQuota        int64   `json:"remaining_quota"`
+	UpdatedAt             int64   `json:"updated_at"`
+	Estimated             bool    `json:"estimated"`
+	Partial               bool    `json:"partial"`
 }
 
 func GetEstimatedQuotaPoolSnapshot(ctx context.Context) (EstimatedQuotaPoolSummary, bool, error) {
@@ -94,29 +108,46 @@ func summarizeEstimatedQuotaPool(channels []*model.Channel, quotaPerUSD float64)
 		EstimationBasis: "quota_source_balance",
 	}
 	groups := map[string]struct{}{}
+	groupBreakdown := map[string]*QuotaPoolGroup{}
 	for _, channel := range channels {
 		balance, usableBalance, updatedAt, available, failed, estimated, ok := estimatedQuotaPoolChannelBalance(channel)
 		if !ok {
 			continue
 		}
 		summary.ChannelCount++
-		if group := strings.TrimSpace(channel.Group); group != "" {
-			groups[group] = struct{}{}
+		group := strings.TrimSpace(channel.Group)
+		if group == "" {
+			group = "default"
 		}
+		groups[group] = struct{}{}
+		groupSummary := groupBreakdown[group]
+		if groupSummary == nil {
+			groupSummary = &QuotaPoolGroup{Group: group}
+			groupBreakdown[group] = groupSummary
+		}
+		groupSummary.ChannelCount++
 		if available {
 			summary.AvailableChannelCount++
+			groupSummary.AvailableChannelCount++
 		}
 		if failed {
 			summary.FailedChannelCount++
+			groupSummary.FailedChannelCount++
 		} else {
 			summary.EstimatedUSD += balance
 			summary.UsableEstimatedUSD += usableBalance
+			groupSummary.EstimatedUSD += balance
+			groupSummary.UsableEstimatedUSD += usableBalance
 		}
 		if estimated {
 			summary.Estimated = true
+			groupSummary.Estimated = true
 		}
 		if updatedAt > summary.UpdatedAt {
 			summary.UpdatedAt = updatedAt
+		}
+		if updatedAt > groupSummary.UpdatedAt {
+			groupSummary.UpdatedAt = updatedAt
 		}
 	}
 	summary.Group = joinQuotaPoolGroups(groups)
@@ -127,7 +158,29 @@ func summarizeEstimatedQuotaPool(channels []*model.Channel, quotaPerUSD float64)
 	summary.UsableEstimatedUSD = roundFloat(summary.UsableEstimatedUSD, 6)
 	summary.RemainingQuota = int64(math.Round(summary.EstimatedUSD * quotaPerUSD))
 	summary.Partial = summary.FailedChannelCount > 0
+	summary.GroupBreakdown = summarizeQuotaPoolGroups(groupBreakdown, quotaPerUSD)
 	return summary
+}
+
+func summarizeQuotaPoolGroups(groups map[string]*QuotaPoolGroup, quotaPerUSD float64) []QuotaPoolGroup {
+	if len(groups) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(groups))
+	for group := range groups {
+		names = append(names, group)
+	}
+	sort.Strings(names)
+	result := make([]QuotaPoolGroup, 0, len(names))
+	for _, group := range names {
+		item := *groups[group]
+		item.EstimatedUSD = roundFloat(item.EstimatedUSD, 6)
+		item.UsableEstimatedUSD = roundFloat(item.UsableEstimatedUSD, 6)
+		item.RemainingQuota = int64(math.Round(item.EstimatedUSD * quotaPerUSD))
+		item.Partial = item.FailedChannelCount > 0
+		result = append(result, item)
+	}
+	return result
 }
 
 func joinQuotaPoolGroups(groups map[string]struct{}) string {

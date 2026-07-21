@@ -23,6 +23,7 @@ import { formatCompactNumber, formatNumber, formatQuota } from '@/lib/format'
 import { computeTimeRange } from '@/lib/time'
 import { useStatus } from '@/hooks/use-status'
 import { Skeleton } from '@/components/ui/skeleton'
+import type { EstimatedQuotaPoolStatus } from '@/features/auth/types'
 import { getUserQuotaDates } from '@/features/dashboard/api'
 import { useModelStatCardsConfig } from '@/features/dashboard/hooks/use-dashboard-config'
 import {
@@ -53,6 +54,18 @@ function formatStatNumber(value: number, locale: Intl.LocalesArgument) {
     displayValue,
     fullValue,
   }
+}
+
+function formatQuotaPoolBreakdown(pool?: EstimatedQuotaPoolStatus): string {
+  return (pool?.group_breakdown ?? [])
+    .map((item) => {
+      const quota = Number(item.remaining_quota ?? 0)
+      if (!Number.isFinite(quota)) return ''
+      const group = item.group?.trim() || 'default'
+      return `${group}: ${item.estimated ? '≈ ' : ''}${formatQuota(quota)}`
+    })
+    .filter(Boolean)
+    .join(' · ')
 }
 
 export function LogStatCards(props: LogStatCardsProps) {
@@ -118,6 +131,9 @@ export function LogStatCards(props: LogStatCardsProps) {
   )
   const hasEstimatedPoolQuota =
     status?.estimated_quota_pool != null && Number.isFinite(estimatedPoolQuota)
+  const quotaPoolBreakdown = formatQuotaPoolBreakdown(
+    status?.estimated_quota_pool
+  )
 
   const adaptedStats = {
     rpm: stats?.totalCount ?? 0,
@@ -146,9 +162,12 @@ export function LogStatCards(props: LogStatCardsProps) {
           : formatted.displayValue,
       fullValue:
         config.key === 'quota' && hasEstimatedPoolQuota
-          ? `≈ ${formatted.fullValue}`
+          ? `≈ ${formatted.fullValue}${quotaPoolBreakdown ? ` · ${quotaPoolBreakdown}` : ''}`
           : formatted.fullValue,
-      desc: config.description,
+      desc:
+        config.key === 'quota' && quotaPoolBreakdown
+          ? quotaPoolBreakdown
+          : config.description,
       icon: config.icon,
     }
   })
