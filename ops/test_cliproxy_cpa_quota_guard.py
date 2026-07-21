@@ -44,6 +44,34 @@ def runtime_quota_account(runtime_reset_at: int, upstream_reset_at: int, *, quot
     }
 
 
+def dynamic_budget_result(remaining_percent: float, reset_at: int = 1_800_604_800, remaining_5h: float | None = None) -> dict:
+    windows = {
+        "7d": {
+            "remaining_percent": remaining_percent,
+            "reset_at": reset_at,
+            "reset_after_seconds": 7 * 86_400,
+        }
+    }
+    if remaining_5h is not None:
+        windows["5h"] = {"remaining_percent": remaining_5h, "reset_after_seconds": guard.WINDOW_5H_SECONDS}
+    return {
+        "ok": True,
+        "quota_ok": True,
+        "within_share": True,
+        "usable_balance_units": remaining_percent,
+        "remaining_share_percent": remaining_percent,
+        "reason": "usable_balance_available",
+        "accounts": [
+            {
+                "ok": True,
+                "bucket": "protected",
+                "account_id_hash": "protected-account-a",
+                "windows": windows,
+            }
+        ],
+    }
+
+
 class QuotaWindowCompatibilityTest(unittest.TestCase):
     def test_weekly_only_window_is_accepted(self) -> None:
         windows = guard.quota_windows(weekly_only_usage(25.0, "plus"))
@@ -82,6 +110,61 @@ class QuotaWindowCompatibilityTest(unittest.TestCase):
         self.assertTrue(pro["protected_reserve_warning"])
         self.assertTrue(pro["schedulable"])
         self.assertIsNone(pro["reason"])
+
+
+class DynamicDailyBudgetTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.config = dict(guard.DEFAULT_CONFIG)
+        self.config.update({
+            "dynamic_daily_budget_enabled": True,
+            "min_remaining_percent_5h": 15.0,
+            "min_remaining_percent_7d": 15.0,
+            "timezone": "UTC",
+        })
+        self.now = 1_800_000_000
+
+    def test_daily_budget_reserves_fifteen_percent(self) -> None:
+        state: dict = {}
+        result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+
+        budget = result["dynamic_daily_budget"]
+        self.assertTrue(result["quota_ok"])
+        self.assertAlmostEqual(85.0 / 7.0, budget["daily_limit_percent"], places=6)
+        self.assertAlmostEqual(15.0, budget["reserve_percent"], places=6)
+        self.assertAlmostEqual(85.0 / 7.0, result["usable_balance_units"], places=6)
+
+    def test_daily_budget_exhaustion_disables_channel(self) -> None:
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+        result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(87.0), state, self.now + 60)
+
+        self.assertFalse(result["quota_ok"])
+        self.assertEqual("dynamic_daily_budget_exhausted", result["reason"])
+        self.assertEqual(0.0, result["usable_balance_units"])
+
+    def test_hard_reserve_stops_at_fifteen_percent(self) -> None:
+        state: dict = {}
+        result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(15.0), state, self.now)
+
+        self.assertFalse(result["quota_ok"])
+        self.assertEqual("protected_reserve_reached", result["reason"])
+
+    def test_five_hour_reserve_uses_same_fifteen_percent_line(self) -> None:
+        state: dict = {}
+        result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(80.0, remaining_5h=15.0), state, self.now)
+
+        self.assertFalse(result["quota_ok"])
+        self.assertEqual("protected_reserve_reached", result["reason"])
+
+    def test_quota_increase_rebuilds_budget(self) -> None:
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+        guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(90.0), state, self.now + 60)
+        result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0, 1_801_209_600), state, self.now + 120)
+
+        self.assertTrue(result["quota_ok"])
+        self.assertEqual(100.0, result["dynamic_daily_budget"]["baseline_remaining_percent"])
+        self.assertEqual(0.0, result["dynamic_daily_budget"]["consumed_today_percent"])
 
 
 class RuntimeQuotaReconcileTest(unittest.TestCase):
