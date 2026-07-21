@@ -9,31 +9,39 @@ import (
 
 func GetUserUsableGroups(userGroup string) map[string]string {
 	groupsCopy := setting.GetUserUsableGroupsCopy()
+	userGroup = strings.TrimSpace(userGroup)
 	if userGroup != "" {
-		specialSettings, b := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Get(userGroup)
-		if b {
-			// 处理特殊可用分组
-			for specialGroup, desc := range specialSettings {
-				if strings.HasPrefix(specialGroup, "-:") {
-					// 移除分组
-					groupToRemove := strings.TrimPrefix(specialGroup, "-:")
-					delete(groupsCopy, groupToRemove)
-				} else if strings.HasPrefix(specialGroup, "+:") {
-					// 添加分组
-					groupToAdd := strings.TrimPrefix(specialGroup, "+:")
-					groupsCopy[groupToAdd] = desc
-				} else {
-					// 直接添加分组
-					groupsCopy[specialGroup] = desc
-				}
+		userGroup = setting.NormalizeUserIdentityGroup(userGroup)
+		for _, groupAlias := range setting.UserIdentityGroupAliases(userGroup) {
+			applySpecialUsableGroups(groupsCopy, groupAlias)
+			if _, ok := groupsCopy[groupAlias]; !ok {
+				groupsCopy[groupAlias] = "用户分组"
 			}
-		}
-		// 如果userGroup不在UserUsableGroups中，返回UserUsableGroups + userGroup
-		if _, ok := groupsCopy[userGroup]; !ok {
-			groupsCopy[userGroup] = "用户分组"
 		}
 	}
 	return groupsCopy
+}
+
+func applySpecialUsableGroups(groupsCopy map[string]string, userGroup string) {
+	specialSettings, ok := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Get(userGroup)
+	if !ok {
+		return
+	}
+	// 处理特殊可用分组
+	for specialGroup, desc := range specialSettings {
+		if strings.HasPrefix(specialGroup, "-:") {
+			// 移除分组
+			groupToRemove := strings.TrimPrefix(specialGroup, "-:")
+			delete(groupsCopy, groupToRemove)
+		} else if strings.HasPrefix(specialGroup, "+:") {
+			// 添加分组
+			groupToAdd := strings.TrimPrefix(specialGroup, "+:")
+			groupsCopy[groupToAdd] = desc
+		} else {
+			// 直接添加分组
+			groupsCopy[specialGroup] = desc
+		}
+	}
 }
 
 func GroupInUserUsableGroups(userGroup, groupName string) bool {
@@ -57,9 +65,14 @@ func GetUserAutoGroup(userGroup string) []string {
 // userGroup 用户分组
 // group 需要获取倍率的分组
 func GetUserGroupRatio(userGroup, group string) float64 {
-	ratio, ok := ratio_setting.GetGroupGroupRatio(userGroup, group)
-	if ok {
-		return ratio
+	if strings.TrimSpace(userGroup) == "" {
+		return ratio_setting.GetGroupRatio(group)
+	}
+	for _, groupAlias := range setting.UserIdentityGroupAliases(userGroup) {
+		ratio, ok := ratio_setting.GetGroupGroupRatio(groupAlias, group)
+		if ok {
+			return ratio
+		}
 	}
 	return ratio_setting.GetGroupRatio(group)
 }

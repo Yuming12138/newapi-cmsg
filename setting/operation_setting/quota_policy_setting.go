@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
 )
 
@@ -135,7 +136,7 @@ func IsQuotaChargedForUser(userGroup, usingGroup string) bool {
 		if !valid {
 			continue
 		}
-		if quotaPolicyGroupMatches(rule.UserGroups, userGroup) && quotaPolicyGroupMatches(rule.UsingGroups, usingGroup) {
+		if quotaPolicyUserGroupMatches(rule.UserGroups, userGroup) && quotaPolicyGroupMatches(rule.UsingGroups, usingGroup) {
 			return charged
 		}
 	}
@@ -175,6 +176,15 @@ func quotaPolicyGroupMatches(configuredGroups []string, group string) bool {
 			return true
 		}
 		if configuredGroup == group {
+			return true
+		}
+	}
+	return false
+}
+
+func quotaPolicyUserGroupMatches(configuredGroups []string, userGroup string) bool {
+	for _, groupAlias := range setting.UserIdentityGroupAliases(userGroup) {
+		if quotaPolicyGroupMatches(configuredGroups, groupAlias) {
 			return true
 		}
 	}

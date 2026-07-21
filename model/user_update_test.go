@@ -178,11 +178,11 @@ func TestInsertDefaultsNewUsersToDefaultGroup(t *testing.T) {
 	assert.Zero(t, stored.Quota)
 }
 
-func TestInsertPreservesExplicitNewUserGroup(t *testing.T) {
+func TestInsertCanonicalizesLegacyASXSUserGroup(t *testing.T) {
 	setupUserUpdateTestState(t)
 
 	user := &User{
-		Username: "explicit-group-user",
+		Username: "legacy-group-user",
 		Password: "password123",
 		Group:    " asxs ",
 		Role:     common.RoleCommonUser,
@@ -193,7 +193,30 @@ func TestInsertPreservesExplicitNewUserGroup(t *testing.T) {
 
 	var stored User
 	require.NoError(t, DB.Where("username = ?", user.Username).First(&stored).Error)
-	assert.Equal(t, "asxs", stored.Group)
+	assert.Equal(t, "cmsg", stored.Group)
+}
+
+func TestEditCanonicalizesLegacyASXSUserGroup(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	require.NoError(t, DB.Create(&User{
+		Id:       10,
+		Username: "edit-legacy-group-user",
+		Group:    DefaultUserGroup,
+		Status:   common.UserStatusEnabled,
+	}).Error)
+
+	user := &User{
+		Id:          10,
+		Username:    "edit-legacy-group-user",
+		DisplayName: "legacy group",
+		Group:       " asxs ",
+	}
+	require.NoError(t, user.Edit(false))
+
+	var stored User
+	require.NoError(t, DB.First(&stored, 10).Error)
+	assert.Equal(t, "cmsg", stored.Group)
 }
 
 func TestInsertWithTxDefaultsOAuthUserToDefaultGroup(t *testing.T) {

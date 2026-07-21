@@ -23,6 +23,14 @@ func GetGroups(c *gin.Context) {
 	})
 }
 
+func GetUserIdentityGroups(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    setting.GetUserIdentityGroupNames(),
+	})
+}
+
 func GetUserGroups(c *gin.Context) {
 	usableGroups := make(map[string]map[string]interface{})
 	userGroup := ""

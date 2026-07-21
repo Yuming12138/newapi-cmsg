@@ -163,6 +163,14 @@ export async function getGroups(): Promise<ApiResponse<string[]>> {
 }
 
 /**
+ * Get assignable user identity groups
+ */
+export async function getUserIdentityGroups(): Promise<ApiResponse<string[]>> {
+  const res = await api.get('/api/group/user_identity')
+  return res.data
+}
+
+/**
  * Get pending quota requests
  */
 export async function getQuotaRequests(): Promise<

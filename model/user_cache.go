@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/setting"
 
 	"github.com/gin-gonic/gin"
 
@@ -94,6 +95,7 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 	// Try getting from Redis first
 	userCache, err = cacheGetUserBase(userId)
 	if err == nil {
+		userCache.Group = setting.NormalizeUserIdentityGroup(userCache.Group)
 		return userCache, nil
 	}
 
@@ -207,6 +209,7 @@ func updateUserGroupCache(userId int, group string) error {
 	if !common.RedisEnabled {
 		return nil
 	}
+	group = setting.NormalizeUserIdentityGroup(group)
 	return common.RedisHSetField(getUserCacheKey(userId), "Group", group)
 }
 

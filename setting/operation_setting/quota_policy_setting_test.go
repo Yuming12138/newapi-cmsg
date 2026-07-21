@@ -42,6 +42,9 @@ func TestIsQuotaChargedForUser_UserAndUsingGroupMatrix(t *testing.T) {
 	require.False(t, IsQuotaChargedForUser("asxs", "deepseek-codex"))
 	require.False(t, IsQuotaChargedForUser("asxs", "deepseek-claude"))
 	require.True(t, IsQuotaChargedForUser("asxs", "asxs"))
+	require.False(t, IsQuotaChargedForUser("cmsg", "cliproxy-codex"))
+	require.False(t, IsQuotaChargedForUser("cmsg", "deepseek-codex"))
+	require.True(t, IsQuotaChargedForUser("cmsg", "asxs"))
 }
 
 func TestIsQuotaChargedForUser_FirstMatchingValidRuleWins(t *testing.T) {

@@ -51,6 +51,12 @@ export const USER_FORM_DEFAULT_VALUES: UserFormValues = {
   remark: '',
 }
 
+function normalizeUserIdentityGroup(group?: string): string {
+  const value = group?.trim()
+  if (!value) return DEFAULT_GROUP
+  return value.toLowerCase() === 'asxs' ? 'cmsg' : value
+}
+
 // ============================================================================
 // Form Data Transformation
 // ============================================================================
@@ -73,7 +79,7 @@ export function transformFormDataToPayload(
     payload.role = data.role || 1 // Default to common user
   } else {
     // For update: quota is adjusted atomically via /api/user/manage, not sent here
-    payload.group = data.group
+    payload.group = normalizeUserIdentityGroup(data.group)
     payload.remark = data.remark || undefined
     payload.id = userId
   }
@@ -91,7 +97,7 @@ export function transformUserToFormDefaults(user: User): UserFormValues {
     password: '',
     role: user.role,
     quota_dollars: quotaUnitsToDollars(user.quota),
-    group: user.group || DEFAULT_GROUP,
+    group: normalizeUserIdentityGroup(user.group),
     remark: user.remark || '',
   }
 }

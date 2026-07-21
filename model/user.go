@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
@@ -18,7 +19,7 @@ import (
 
 const (
 	UserNameMaxLength = 20
-	DefaultUserGroup  = "default"
+	DefaultUserGroup  = setting.DefaultUserIdentityGroup
 )
 
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
@@ -60,7 +61,7 @@ type User struct {
 func (user *User) ToBaseUser() *UserBase {
 	cache := &UserBase{
 		Id:       user.Id,
-		Group:    user.Group,
+		Group:    setting.NormalizeUserIdentityGroup(user.Group),
 		Quota:    user.Quota,
 		Status:   user.Status,
 		Username: user.Username,
@@ -362,7 +363,7 @@ func SearchUsers(keyword string, group string, roles []int, statuses []int, star
 	}
 
 	if group != "" {
-		query = query.Where(commonGroupCol+" = ?", group)
+		query = query.Where(commonGroupCol+" IN ?", setting.UserIdentityGroupAliases(group))
 	}
 
 	if len(roles) > 0 {
@@ -409,6 +410,10 @@ func SearchUsers(keyword string, group string, roles []int, statuses []int, star
 		return nil, 0, err
 	}
 
+	for _, user := range users {
+		user.Group = setting.NormalizeUserIdentityGroup(user.Group)
+	}
+
 	return users, total, nil
 }
 
@@ -423,6 +428,7 @@ func GetUserById(id int, selectAll bool) (*User, error) {
 	} else {
 		err = DB.Omit("password", "access_token").First(&user, "id = ?", id).Error
 	}
+	user.Group = setting.NormalizeUserIdentityGroup(user.Group)
 	return &user, err
 }
 
@@ -517,10 +523,7 @@ func (user *User) prepareForInsert(tx *gorm.DB) error {
 }
 
 func (user *User) prepareNewUserFields() {
-	user.Group = strings.TrimSpace(user.Group)
-	if user.Group == "" {
-		user.Group = DefaultUserGroup
-	}
+	user.Group = setting.NormalizeUserIdentityGroup(user.Group)
 	user.Quota = common.QuotaForNewUser
 	user.AffCode = common.GetRandomString(4)
 
@@ -677,6 +680,7 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 		}
 	}
 	newUser := *user
+	newUser.Group = setting.NormalizeUserIdentityGroup(newUser.Group)
 	current := User{}
 	if err = tx.First(&current, user.Id).Error; err != nil {
 		return err
@@ -704,6 +708,7 @@ func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
 	}
 
 	newUser := *user
+	newUser.Group = setting.NormalizeUserIdentityGroup(newUser.Group)
 	updates := map[string]interface{}{
 		"username":     newUser.Username,
 		"display_name": newUser.DisplayName,
@@ -1016,7 +1021,7 @@ func GetUserGroup(id int, fromDB bool) (group string, err error) {
 	if !fromDB && common.RedisEnabled {
 		group, err := getUserGroupCache(id)
 		if err == nil {
-			return group, nil
+			return setting.NormalizeUserIdentityGroup(group), nil
 		}
 		// Don't return error - fall through to DB
 	}
@@ -1026,7 +1031,7 @@ func GetUserGroup(id int, fromDB bool) (group string, err error) {
 		return "", err
 	}
 
-	return group, nil
+	return setting.NormalizeUserIdentityGroup(group), nil
 }
 
 // GetUserSetting gets setting from Redis first, falls back to DB if needed
