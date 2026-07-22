@@ -178,6 +178,11 @@ func ListModels(c *gin.Context, modelType int) {
 			}
 		} else {
 			models = model.GetGroupEnabledModels(group)
+			for _, routedModel := range service.GetModelGroupRouteModels(userGroup, group) {
+				if !common.StringsContains(models, routedModel) {
+					models = append(models, routedModel)
+				}
+			}
 		}
 		for _, modelName := range models {
 			if !acceptUnsetRatioModel {
