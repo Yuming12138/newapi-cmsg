@@ -61,6 +61,7 @@ type utlsRoundTripper struct {
 	mu         sync.Mutex
 	pools      map[string]*connPool
 	pending    map[string]*sync.Cond
+	filling    map[string]bool
 	dialer     proxy.Dialer
 	poolSize   int
 	createConn func(host, addr string) (h2ClientConn, error)
@@ -79,6 +80,7 @@ func newUtlsRoundTripper(proxyURL string, poolSize int) *utlsRoundTripper {
 	rt := &utlsRoundTripper{
 		pools:    make(map[string]*connPool),
 		pending:  make(map[string]*sync.Cond),
+		filling:  make(map[string]bool),
 		dialer:   dialer,
 		poolSize: normalizeUtlsPoolSize(poolSize),
 	}
@@ -243,6 +245,67 @@ func (t *utlsRoundTripper) drainConn(pool *connPool, conn h2ClientConn) {
 	_ = conn.Close()
 }
 
+// maybeFillPool asynchronously prewarms the remaining selectable connections
+// for a host. Without this, a healthy HTTP/2 connection can accept many streams,
+// so an N-sized pool usually stays at one connection and provides no failure
+// isolation under ordinary concurrency.
+func (t *utlsRoundTripper) maybeFillPool(host, addr string) {
+	if t == nil || t.poolSize <= 1 {
+		return
+	}
+	t.mu.Lock()
+	pool := t.poolForHostLocked(host)
+	if len(pool.conns) >= t.poolSize {
+		t.mu.Unlock()
+		return
+	}
+	if t.filling == nil {
+		t.filling = make(map[string]bool)
+	}
+	if t.filling[host] {
+		t.mu.Unlock()
+		return
+	}
+	t.filling[host] = true
+	t.mu.Unlock()
+
+	go t.fillPool(host, addr)
+}
+
+func (t *utlsRoundTripper) fillPool(host, addr string) {
+	defer func() {
+		t.mu.Lock()
+		delete(t.filling, host)
+		t.mu.Unlock()
+	}()
+
+	for {
+		t.mu.Lock()
+		pool := t.poolForHostLocked(host)
+		if len(pool.conns) >= t.poolSize {
+			t.mu.Unlock()
+			return
+		}
+		t.mu.Unlock()
+
+		conn, errDial := t.dialConnection(host, addr)
+		if errDial != nil {
+			log.Debugf("utls: failed to prewarm connection for %s: %v", host, errDial)
+			return
+		}
+
+		t.mu.Lock()
+		pool = t.poolForHostLocked(host)
+		if len(pool.conns) >= t.poolSize {
+			t.mu.Unlock()
+			go func() { _ = conn.Close() }()
+			return
+		}
+		pool.conns = append(pool.conns, conn)
+		t.mu.Unlock()
+	}
+}
+
 func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	hostname := req.URL.Hostname()
 	port := req.URL.Port()
@@ -257,7 +320,7 @@ func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	// session until evicted. attempt() already evicts on RoundTrip errors;
 	// here we retry once if the error looks stream-level and the body is
 	// resettable.
-	if err != nil && isStreamLevelError(err) && canResetBody(req) {
+	if err != nil && isRetryableFreshConnError(err) && canResetBody(req) {
 		if resetErr := resetReqBody(req); resetErr == nil {
 			resp, h2Conn, err = t.attempt(req, hostname, addr)
 		}
@@ -278,32 +341,36 @@ func (t *utlsRoundTripper) attempt(req *http.Request, hostname, addr string) (*h
 	}
 	resp, err := h2Conn.RoundTrip(req)
 	if err != nil {
-		t.evictConn(hostname, h2Conn)
+		if shouldEvictConnError(err) {
+			t.evictConn(hostname, h2Conn)
+		}
 		return nil, nil, err
 	}
+	t.maybeFillPool(hostname, addr)
 	return resp, h2Conn, nil
 }
 
-// evictConn removes one poisoned conn from the host pool without touching
-// siblings. The removed conn is drained instead of closed immediately so other
-// in-flight streams on the same HTTP/2 connection are not force-closed by cpa.
+// evictConn removes and immediately closes one poisoned conn without touching
+// siblings. A poisoned connection's other in-flight streams are expected to fail;
+// closing it makes that failure prompt instead of leaving them stuck until their
+// caller-side deadlines expire. Healthy saturated connections still use startDrain.
 func (t *utlsRoundTripper) evictConn(hostname string, conn h2ClientConn) {
-	var removedFrom *connPool
+	var removed bool
 	t.mu.Lock()
 	pool := t.pools[hostname]
 	if pool != nil {
 		for i, cached := range pool.conns {
 			if cached == conn {
 				pool.conns = append(pool.conns[:i], pool.conns[i+1:]...)
-				removedFrom = pool
+				removed = true
 				break
 			}
 		}
 	}
 	t.mu.Unlock()
 
-	if removedFrom != nil {
-		t.startDrain(removedFrom, conn)
+	if removed {
+		go func() { _ = conn.Close() }()
 	}
 }
 
@@ -316,8 +383,10 @@ func wrapBodyForEvict(resp *http.Response, t *utlsRoundTripper, hostname string,
 	}
 	resp.Body = &evictOnReadErrBody{
 		ReadCloser: resp.Body,
-		onErr: func() {
-			t.evictConn(hostname, conn)
+		onErr: func(err error) {
+			if shouldEvictConnError(err) {
+				t.evictConn(hostname, conn)
+			}
 		},
 	}
 	return resp
@@ -328,15 +397,33 @@ func wrapBodyForEvict(resp *http.Response, t *utlsRoundTripper, hostname string,
 type evictOnReadErrBody struct {
 	io.ReadCloser
 	once  sync.Once
-	onErr func()
+	onErr func(error)
 }
 
 func (b *evictOnReadErrBody) Read(p []byte) (int, error) {
 	n, err := b.ReadCloser.Read(p)
 	if err != nil && err != io.EOF {
-		b.once.Do(b.onErr)
+		b.once.Do(func() {
+			if b.onErr != nil {
+				b.onErr(err)
+			}
+		})
 	}
 	return n, err
+}
+
+func shouldEvictConnError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return true
+}
+
+func isRetryableFreshConnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return isStreamLevelError(err) || errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "unexpected EOF")
 }
 
 // isStreamLevelError matches HTTP/2 stream-level errors that suggest the

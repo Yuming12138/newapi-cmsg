@@ -46,3 +46,13 @@ func TestParseConfigBytes_StreamingBootstrapRetriesDefault(t *testing.T) {
 		t.Fatalf("bootstrap retries = %d, want %d", cfg.Streaming.BootstrapRetries, DefaultStreamingBootstrapRetries)
 	}
 }
+
+func TestParseConfigBytes_StreamingEagerHeaders(t *testing.T) {
+	cfg, err := ParseConfigBytes([]byte("streaming:\n  eager-headers: true\n"))
+	if err != nil {
+		t.Fatalf("ParseConfigBytes() error = %v", err)
+	}
+	if !cfg.Streaming.EagerHeaders {
+		t.Fatal("eager headers = false, want true")
+	}
+}

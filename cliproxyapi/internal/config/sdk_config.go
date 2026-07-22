@@ -71,4 +71,9 @@ type StreamingConfig struct {
 	// to allow auth rotation / transient recovery.
 	// <= 0 disables bootstrap retries. Default is 1 when loaded from config.
 	BootstrapRetries int `yaml:"bootstrap-retries,omitempty" json:"bootstrap-retries,omitempty"`
+
+	// EagerHeaders commits downstream streaming headers before the first upstream payload.
+	// This enables keep-alive heartbeats during long time-to-first-token waits, at the cost
+	// of disabling safe credential/model retries after headers have been committed.
+	EagerHeaders bool `yaml:"eager-headers,omitempty" json:"eager-headers,omitempty"`
 }

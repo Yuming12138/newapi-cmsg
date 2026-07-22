@@ -239,6 +239,9 @@ func NonStreamingKeepAliveInterval(cfg *config.SDKConfig) time.Duration {
 
 // StreamingBootstrapRetries returns how many times a streaming request may be retried before any bytes are sent.
 func StreamingBootstrapRetries(cfg *config.SDKConfig) int {
+	if StreamingEagerHeaders(cfg) {
+		return 0
+	}
 	retries := defaultStreamingBootstrapRetries
 	if cfg != nil {
 		retries = cfg.Streaming.BootstrapRetries
@@ -247,6 +250,12 @@ func StreamingBootstrapRetries(cfg *config.SDKConfig) int {
 		retries = 0
 	}
 	return retries
+}
+
+// StreamingEagerHeaders reports whether streaming responses should commit
+// downstream headers before the first upstream payload arrives.
+func StreamingEagerHeaders(cfg *config.SDKConfig) bool {
+	return cfg != nil && cfg.Streaming.EagerHeaders
 }
 
 // PassthroughHeadersEnabled returns whether upstream response headers should be forwarded to clients.
@@ -1235,7 +1244,14 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 			}
 		}
 	}
-	readInitialStreamChunks()
+	if StreamingEagerHeaders(h.Cfg) {
+		// Header-interceptor changes must be finalized before returning to the
+		// protocol handler because its keep-alive may commit the response at once.
+		applyStreamHeaderInit()
+		streamHeadersCommitted = true
+	} else {
+		readInitialStreamChunks()
+	}
 
 	go func() {
 		defer close(dataChan)
