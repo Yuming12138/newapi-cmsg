@@ -64,6 +64,7 @@ var defaultModelRatio = map[string]float64{
 	"gpt-4.1-nano":                     0.05, // $0.1 / 1M tokens
 	"gpt-4.1-nano-2025-04-14":          0.05, // $0.1 / 1M tokens
 	"gpt-image-1":                      2.5,  // $5 / 1M tokens
+	"gpt-image-1.5":                    2.5,  // use the Codex image billing profile
 	"gpt-image-2":                      2.5,  // $5 / 1M input tokens
 	"o1":                               7.5,  // $15 / 1M tokens
 	"o1-2024-12-17":                    7.5,  // $15 / 1M tokens
@@ -361,6 +362,7 @@ var defaultCompletionRatio = map[string]float64{
 	"gpt-4o-gizmo-*": 3,
 	"gpt-4-all":      2,
 	"gpt-image-1":    8,
+	"gpt-image-1.5":  2,
 	"gpt-image-2":    2,
 }
 

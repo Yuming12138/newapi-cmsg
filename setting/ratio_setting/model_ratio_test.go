@@ -41,3 +41,15 @@ func TestGPT56OfficialPricingRatios(t *testing.T) {
 		})
 	}
 }
+
+func TestGPTImage15UsesImage2Ratios(t *testing.T) {
+	if got := defaultModelRatio["gpt-image-1.5"]; got != defaultModelRatio["gpt-image-2"] {
+		t.Fatalf("model ratio = %v, want %v", got, defaultModelRatio["gpt-image-2"])
+	}
+	if got := defaultCompletionRatio["gpt-image-1.5"]; got != defaultCompletionRatio["gpt-image-2"] {
+		t.Fatalf("completion ratio = %v, want %v", got, defaultCompletionRatio["gpt-image-2"])
+	}
+	if got := defaultCacheRatio["gpt-image-1.5"]; got != defaultCacheRatio["gpt-image-2"] {
+		t.Fatalf("cache ratio = %v, want %v", got, defaultCacheRatio["gpt-image-2"])
+	}
+}

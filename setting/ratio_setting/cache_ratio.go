@@ -29,6 +29,7 @@ var defaultCacheRatio = map[string]float64{
 	"gpt-4.1":                      0.25,
 	"gpt-4.1-mini":                 0.25,
 	"gpt-4.1-nano":                 0.25,
+	"gpt-image-1.5":                0.25,
 	"gpt-image-2":                  0.25,
 	// OpenAI cached input is 10% of input price for these GPT-5-family models.
 	"gpt-5.5":                             0.1,
