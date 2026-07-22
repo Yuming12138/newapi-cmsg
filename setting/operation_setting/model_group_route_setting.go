@@ -15,7 +15,7 @@ var modelGroupRouteSetting = ModelGroupRouteSetting{
 	Enabled:        false,
 	UserGroups:     []string{"cmsg"},
 	SourceGroups:   []string{"asxs", "cmsg"},
-	ModelPrefixes:  []string{"gpt-5.6", "gpt-image"},
+	ModelPrefixes:  []string{"gpt-5.6-sol", "gpt-image"},
 	PreferredGroup: "cliproxy-codex",
 	FallbackGroup:  "asxs",
 }

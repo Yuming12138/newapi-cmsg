@@ -141,7 +141,7 @@ func withModelGroupRouteEnabled(t *testing.T) {
 	cfg.Enabled = true
 	cfg.UserGroups = []string{"cmsg"}
 	cfg.SourceGroups = []string{"asxs", "cmsg"}
-	cfg.ModelPrefixes = []string{"gpt-5.6", "gpt-image"}
+	cfg.ModelPrefixes = []string{"gpt-5.6-sol", "gpt-image"}
 	cfg.PreferredGroup = "cliproxy-codex"
 	cfg.FallbackGroup = "asxs"
 	t.Cleanup(func() { *cfg = original })

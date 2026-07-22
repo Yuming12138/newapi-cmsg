@@ -19,7 +19,7 @@ func TestResolveModelGroupRoute(t *testing.T) {
 	cfg.Enabled = true
 	cfg.UserGroups = []string{"cmsg"}
 	cfg.SourceGroups = []string{"asxs", "cmsg"}
-	cfg.ModelPrefixes = []string{"gpt-5.6", "gpt-image"}
+	cfg.ModelPrefixes = []string{"gpt-5.6-sol", "gpt-image"}
 	cfg.PreferredGroup = "cliproxy-codex"
 	cfg.FallbackGroup = "asxs"
 	t.Cleanup(func() { *cfg = original })
@@ -32,10 +32,12 @@ func TestResolveModelGroupRoute(t *testing.T) {
 		matched     bool
 	}{
 		{name: "canonical cmsg", userGroup: "cmsg", sourceGroup: "asxs", model: "gpt-5.6-sol", matched: true},
-		{name: "legacy asxs identity", userGroup: "asxs", sourceGroup: "asxs", model: "gpt-5.6-terra", matched: true},
+		{name: "legacy asxs identity", userGroup: "asxs", sourceGroup: "asxs", model: "gpt-5.6-sol", matched: true},
 		{name: "compact model", userGroup: "asxs", sourceGroup: "asxs", model: "gpt-5.6-sol-openai-compact", matched: true},
-		{name: "identity group fallback", userGroup: "cmsg", sourceGroup: "cmsg", model: "gpt-5.6-luna", matched: true},
+		{name: "identity group fallback", userGroup: "cmsg", sourceGroup: "cmsg", model: "gpt-5.6-sol", matched: true},
 		{name: "image model", userGroup: "cmsg", sourceGroup: "asxs", model: "gpt-image-2", matched: true},
+		{name: "terra stays in source group", userGroup: "cmsg", sourceGroup: "asxs", model: "gpt-5.6-terra", matched: false},
+		{name: "luna stays in source group", userGroup: "cmsg", sourceGroup: "asxs", model: "gpt-5.6-luna", matched: false},
 		{name: "explicit real 5.6 group", userGroup: "cmsg", sourceGroup: "asxs-gpt56", model: "gpt-5.6-sol", matched: false},
 		{name: "direct 5.5 request", userGroup: "cmsg", sourceGroup: "asxs", model: "gpt-5.5", matched: false},
 		{name: "outside user group", userGroup: "default", sourceGroup: "asxs", model: "gpt-5.6-sol", matched: false},
@@ -59,7 +61,7 @@ func TestCacheGetRandomSatisfiedChannelUsesPreferredThenFallbackGroup(t *testing
 	cfg.Enabled = true
 	cfg.UserGroups = []string{"cmsg"}
 	cfg.SourceGroups = []string{"asxs"}
-	cfg.ModelPrefixes = []string{"gpt-5.6", "gpt-image"}
+	cfg.ModelPrefixes = []string{"gpt-5.6-sol", "gpt-image"}
 	cfg.PreferredGroup = "cliproxy-codex"
 	cfg.FallbackGroup = "asxs"
 	t.Cleanup(func() { *cfg = originalCfg })
