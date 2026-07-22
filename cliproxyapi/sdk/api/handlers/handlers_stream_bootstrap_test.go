@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
@@ -141,6 +142,10 @@ type invalidJSONStreamExecutor struct{}
 
 type splitResponsesEventStreamExecutor struct{}
 
+type delayedFirstPayloadExecutor struct {
+	release chan struct{}
+}
+
 func (e *invalidJSONStreamExecutor) Identifier() string { return "codex" }
 
 func (e *invalidJSONStreamExecutor) Execute(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
@@ -198,6 +203,34 @@ func (e *splitResponsesEventStreamExecutor) HttpRequest(ctx context.Context, aut
 		Message:    "HttpRequest not implemented",
 		HTTPStatus: http.StatusNotImplemented,
 	}
+}
+
+func (e *delayedFirstPayloadExecutor) Identifier() string { return "codex" }
+
+func (e *delayedFirstPayloadExecutor) Execute(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+	return coreexecutor.Response{}, &coreauth.Error{Code: "not_implemented", Message: "Execute not implemented"}
+}
+
+func (e *delayedFirstPayloadExecutor) ExecuteStream(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+	ch := make(chan coreexecutor.StreamChunk, 1)
+	go func() {
+		<-e.release
+		ch <- coreexecutor.StreamChunk{Payload: []byte("ok")}
+		close(ch)
+	}()
+	return &coreexecutor.StreamResult{Chunks: ch}, nil
+}
+
+func (e *delayedFirstPayloadExecutor) Refresh(ctx context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
+	return auth, nil
+}
+
+func (e *delayedFirstPayloadExecutor) CountTokens(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+	return coreexecutor.Response{}, &coreauth.Error{Code: "not_implemented", Message: "CountTokens not implemented"}
+}
+
+func (e *delayedFirstPayloadExecutor) HttpRequest(context.Context, *coreauth.Auth, *http.Request) (*http.Response, error) {
+	return nil, &coreauth.Error{Code: "not_implemented", Message: "HttpRequest not implemented", HTTPStatus: http.StatusNotImplemented}
 }
 
 func (e *authAwareStreamExecutor) Identifier() string { return "codex" }
@@ -333,6 +366,66 @@ func TestExecuteStreamWithAuthManager_RetriesBeforeFirstByte(t *testing.T) {
 	upstreamAttemptHeader := upstreamHeaders.Get("X-Upstream-Attempt")
 	if upstreamAttemptHeader != "2" {
 		t.Fatalf("expected upstream header from retry attempt, got %q", upstreamAttemptHeader)
+	}
+}
+
+func TestExecuteStreamWithAuthManager_EagerHeadersReturnsBeforeFirstPayload(t *testing.T) {
+	executor := &delayedFirstPayloadExecutor{release: make(chan struct{})}
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(executor)
+	manager.SetConfig(&sdkconfig.Config{SDKConfig: sdkconfig.SDKConfig{
+		Streaming: sdkconfig.StreamingConfig{EagerHeaders: true},
+	}})
+
+	auth := &coreauth.Auth{ID: "auth-eager", Provider: "codex", Status: coreauth.StatusActive}
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatalf("manager.Register() error = %v", errRegister)
+	}
+	registry.GetGlobalRegistry().RegisterClient(auth.ID, auth.Provider, []*registry.ModelInfo{{ID: "test-model"}})
+	t.Cleanup(func() {
+		registry.GetGlobalRegistry().UnregisterClient(auth.ID)
+	})
+
+	handler := NewBaseAPIHandlers(&sdkconfig.SDKConfig{
+		Streaming: sdkconfig.StreamingConfig{
+			KeepAliveSeconds: 15,
+			BootstrapRetries: 1,
+			EagerHeaders:     true,
+		},
+	}, manager)
+
+	type streamChannels struct {
+		data <-chan []byte
+		err  <-chan *interfaces.ErrorMessage
+	}
+	returned := make(chan streamChannels, 1)
+	go func() {
+		dataChan, _, errChan := handler.ExecuteStreamWithAuthManager(context.Background(), "openai", "test-model", []byte(`{"model":"test-model"}`), "")
+		returned <- streamChannels{data: dataChan, err: errChan}
+	}()
+
+	var channels streamChannels
+	select {
+	case channels = <-returned:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("eager stream did not return before first payload")
+	}
+	if got := StreamingBootstrapRetries(handler.Cfg); got != 0 {
+		t.Fatalf("bootstrap retries = %d, want 0 with eager headers", got)
+	}
+
+	close(executor.release)
+	var got []byte
+	for chunk := range channels.data {
+		got = append(got, chunk...)
+	}
+	for msg := range channels.err {
+		if msg != nil {
+			t.Fatalf("unexpected stream error: %+v", msg)
+		}
+	}
+	if string(got) != "ok" {
+		t.Fatalf("payload = %q, want ok", string(got))
 	}
 }
 

@@ -620,6 +620,14 @@ func (m *Manager) cooldownDisabledForAuth(auth *Auth) bool {
 	return quotaCooldownDisabledForAuthWithConfig(auth, cfg)
 }
 
+func (m *Manager) streamingEagerHeadersEnabled() bool {
+	if m == nil {
+		return false
+	}
+	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
+	return cfg != nil && cfg.Streaming.EagerHeaders
+}
+
 func (m *Manager) clearDisabledCooldownStates(cfg *internalconfig.Config) bool {
 	if m == nil {
 		return false
@@ -1941,6 +1949,9 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			}
 			lastErr = errStream
 			continue
+		}
+		if m.streamingEagerHeadersEnabled() {
+			return m.wrapStreamResult(ctx, auth.Clone(), provider, resultModel, streamResult.Headers, nil, streamResult.Chunks, aliasResult), nil
 		}
 
 		buffered, closed, bootstrapErr := readStreamBootstrap(ctx, streamResult.Chunks)

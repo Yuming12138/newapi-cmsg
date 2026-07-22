@@ -186,24 +186,17 @@ func TestUtlsRoundTripperSaturatedReplacementDrainsDisplacedConn(t *testing.T) {
 	}
 }
 
-func TestUtlsRoundTripperEvictsAndDrainsOnlyPoisonedConn(t *testing.T) {
+func TestUtlsRoundTripperEvictsAndClosesOnlyPoisonedConn(t *testing.T) {
 	t.Parallel()
 
 	poisoned := newFakeH2Conn("poisoned", -1)
-	poisoned.shutdownStarted = make(chan struct{})
-	poisoned.shutdownRelease = make(chan struct{})
 	sibling := newFakeH2Conn("sibling", -1)
 	rt := newFakeUtlsRoundTripper(2)
 	pool := &connPool{conns: []h2ClientConn{poisoned, sibling}}
 	rt.pools["chatgpt.com"] = pool
 
 	rt.evictConn("chatgpt.com", poisoned)
-
-	select {
-	case <-poisoned.shutdownStarted:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for poisoned conn Shutdown to start")
-	}
+	waitForFakeClose(t, poisoned)
 
 	rt.mu.Lock()
 	conns := append([]h2ClientConn(nil), rt.pools["chatgpt.com"].conns...)
@@ -215,21 +208,141 @@ func TestUtlsRoundTripperEvictsAndDrainsOnlyPoisonedConn(t *testing.T) {
 	if got := sibling.closeCalls(); got != 0 {
 		t.Fatalf("sibling close calls = %d, want 0", got)
 	}
-	select {
-	case <-poisoned.closeCh:
-		t.Fatal("poisoned conn was closed before Shutdown returned")
-	default:
-	}
-
-	close(poisoned.shutdownRelease)
-	pool.drainWG.Wait()
-	waitForFakeClose(t, poisoned)
-
-	if got := poisoned.shutdownCalls(); got != 1 {
-		t.Fatalf("poisoned shutdown calls = %d, want 1", got)
+	if got := poisoned.shutdownCalls(); got != 0 {
+		t.Fatalf("poisoned shutdown calls = %d, want 0", got)
 	}
 	if got := poisoned.closeCalls(); got != 1 {
 		t.Fatalf("poisoned close calls = %d, want 1", got)
+	}
+}
+
+func TestUtlsRoundTripperDoesNotEvictCanceledConn(t *testing.T) {
+	t.Parallel()
+
+	conn := newFakeH2Conn("canceled", -1)
+	conn.roundTripErr = context.Canceled
+	rt := newFakeUtlsRoundTripper(1)
+	rt.pools["chatgpt.com"] = &connPool{conns: []h2ClientConn{conn}}
+
+	req, errRequest := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+	if errRequest != nil {
+		t.Fatalf("NewRequest() error = %v", errRequest)
+	}
+	_, errRoundTrip := rt.RoundTrip(req)
+	if !errors.Is(errRoundTrip, context.Canceled) {
+		t.Fatalf("RoundTrip() error = %v, want context canceled", errRoundTrip)
+	}
+
+	rt.mu.Lock()
+	conns := append([]h2ClientConn(nil), rt.pools["chatgpt.com"].conns...)
+	rt.mu.Unlock()
+	if len(conns) != 1 || conns[0] != conn {
+		t.Fatalf("remaining conns = %#v, want canceled conn retained", conns)
+	}
+	if got := conn.closeCalls(); got != 0 {
+		t.Fatalf("close calls = %d, want 0", got)
+	}
+}
+
+func TestUtlsRoundTripperDoesNotEvictConnOnCanceledBodyRead(t *testing.T) {
+	t.Parallel()
+
+	conn := newFakeH2Conn("body-canceled", -1)
+	conn.responseBody = &readErrorCloser{err: context.Canceled}
+	rt := newFakeUtlsRoundTripper(1)
+	rt.pools["chatgpt.com"] = &connPool{conns: []h2ClientConn{conn}}
+
+	req, _ := http.NewRequest(http.MethodGet, "https://chatgpt.com/backend-api/codex/responses", nil)
+	resp, errRoundTrip := rt.RoundTrip(req)
+	if errRoundTrip != nil {
+		t.Fatalf("RoundTrip() error = %v", errRoundTrip)
+	}
+	_, errRead := resp.Body.Read(make([]byte, 1))
+	if !errors.Is(errRead, context.Canceled) {
+		t.Fatalf("Read() error = %v, want context canceled", errRead)
+	}
+
+	rt.mu.Lock()
+	conns := append([]h2ClientConn(nil), rt.pools["chatgpt.com"].conns...)
+	rt.mu.Unlock()
+	if len(conns) != 1 || conns[0] != conn {
+		t.Fatalf("remaining conns = %#v, want conn retained", conns)
+	}
+	if got := conn.closeCalls(); got != 0 {
+		t.Fatalf("close calls = %d, want 0", got)
+	}
+}
+
+func TestUtlsRoundTripperEvictsConnOnProtocolBodyReadError(t *testing.T) {
+	t.Parallel()
+
+	conn := newFakeH2Conn("body-protocol-error", -1)
+	conn.responseBody = &readErrorCloser{err: errors.New("stream error: stream ID 7; PROTOCOL_ERROR; received from peer")}
+	rt := newFakeUtlsRoundTripper(1)
+	rt.pools["chatgpt.com"] = &connPool{conns: []h2ClientConn{conn}}
+
+	req, _ := http.NewRequest(http.MethodGet, "https://chatgpt.com/backend-api/codex/responses", nil)
+	resp, errRoundTrip := rt.RoundTrip(req)
+	if errRoundTrip != nil {
+		t.Fatalf("RoundTrip() error = %v", errRoundTrip)
+	}
+	_, errRead := resp.Body.Read(make([]byte, 1))
+	if errRead == nil {
+		t.Fatal("Read() error = nil, want protocol error")
+	}
+	waitForFakeClose(t, conn)
+
+	rt.mu.Lock()
+	remaining := len(rt.pools["chatgpt.com"].conns)
+	rt.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("remaining conns = %d, want 0", remaining)
+	}
+}
+
+func TestUtlsRoundTripperPrewarmsConfiguredPool(t *testing.T) {
+	t.Parallel()
+
+	first := newFakeH2Conn("first", -1)
+	second := newFakeH2Conn("second", -1)
+	third := newFakeH2Conn("third", -1)
+	rt := newFakeUtlsRoundTripper(3, first, second, third)
+
+	req, errRequest := http.NewRequest(http.MethodGet, "https://chatgpt.com/backend-api/codex/responses", nil)
+	if errRequest != nil {
+		t.Fatalf("NewRequest() error = %v", errRequest)
+	}
+	resp, errRoundTrip := rt.RoundTrip(req)
+	if errRoundTrip != nil {
+		t.Fatalf("RoundTrip() error = %v", errRoundTrip)
+	}
+	if errClose := resp.Body.Close(); errClose != nil {
+		t.Fatalf("response body close error = %v", errClose)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		rt.mu.Lock()
+		poolSize := len(rt.pools["chatgpt.com"].conns)
+		rt.mu.Unlock()
+		if poolSize == 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pool size = %d, want 3", poolSize)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	for i := 0; i < 3; i++ {
+		respNext, errNext := rt.RoundTrip(req.Clone(context.Background()))
+		if errNext != nil {
+			t.Fatalf("RoundTrip(%d) error = %v", i, errNext)
+		}
+		_ = respNext.Body.Close()
+	}
+	if first.roundTripCalls() == 0 || second.roundTripCalls() == 0 || third.roundTripCalls() == 0 {
+		t.Fatalf("round trips = first:%d second:%d third:%d, want every conn used", first.roundTripCalls(), second.roundTripCalls(), third.roundTripCalls())
 	}
 }
 
@@ -280,6 +393,7 @@ func newFakeUtlsRoundTripper(poolSize int, dialed ...*fakeH2Conn) *utlsRoundTrip
 	return &utlsRoundTripper{
 		pools:    make(map[string]*connPool),
 		pending:  make(map[string]*sync.Cond),
+		filling:  make(map[string]bool),
 		poolSize: normalizeUtlsPoolSize(poolSize),
 		createConn: func(_, _ string) (h2ClientConn, error) {
 			mu.Lock()
@@ -306,6 +420,7 @@ type fakeH2Conn struct {
 	closeOnce         sync.Once
 
 	roundTripErr    error
+	responseBody    io.ReadCloser
 	shutdownErr     error
 	shutdownStarted chan struct{}
 	shutdownRelease chan struct{}
@@ -332,10 +447,14 @@ func (f *fakeH2Conn) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
+	body := f.responseBody
+	if body == nil {
+		body = io.NopCloser(strings.NewReader("{}"))
+	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     make(http.Header),
-		Body:       io.NopCloser(strings.NewReader("{}")),
+		Body:       body,
 		Request:    req,
 	}, nil
 }
@@ -389,6 +508,12 @@ func (f *fakeH2Conn) closeCalls() int {
 	return f.closeCallsNum
 }
 
+func (f *fakeH2Conn) roundTripCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.roundTripCallsNum
+}
+
 func fakeConnSliceContains(conns []h2ClientConn, want *fakeH2Conn) bool {
 	for _, conn := range conns {
 		if conn == want {
@@ -406,6 +531,13 @@ func waitForFakeClose(t *testing.T, conn *fakeH2Conn) {
 		t.Fatalf("timed out waiting for %s to close", conn.name)
 	}
 }
+
+type readErrorCloser struct {
+	err error
+}
+
+func (r *readErrorCloser) Read([]byte) (int, error) { return 0, r.err }
+func (r *readErrorCloser) Close() error             { return nil }
 
 func resetUtlsRoundTripperCache(t *testing.T) {
 	t.Helper()
