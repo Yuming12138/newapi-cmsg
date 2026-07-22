@@ -3,6 +3,7 @@ package service
 import (
 	"strings"
 
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -35,6 +36,38 @@ func ResolveModelGroupRoute(userGroup, sourceGroup, modelName string) (ModelGrou
 		return ModelGroupRoute{}, false
 	}
 	return ModelGroupRoute{PreferredGroup: preferredGroup, FallbackGroup: fallbackGroup}, true
+}
+
+// GetModelGroupRouteModels returns preferred-group models that can be routed from sourceGroup.
+func GetModelGroupRouteModels(userGroup, sourceGroup string) []string {
+	cfg := operation_setting.GetModelGroupRouteSetting()
+	if cfg == nil || !cfg.Enabled {
+		return nil
+	}
+
+	preferredGroup := strings.TrimSpace(cfg.PreferredGroup)
+	if preferredGroup == "" {
+		return nil
+	}
+
+	routedModels := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, modelName := range model.GetGroupEnabledModels(preferredGroup) {
+		modelName = strings.TrimSpace(modelName)
+		if modelName == "" {
+			continue
+		}
+		route, ok := ResolveModelGroupRoute(userGroup, sourceGroup, modelName)
+		if !ok || !strings.EqualFold(route.PreferredGroup, preferredGroup) {
+			continue
+		}
+		if _, ok := seen[modelName]; ok {
+			continue
+		}
+		seen[modelName] = struct{}{}
+		routedModels = append(routedModels, modelName)
+	}
+	return routedModels
 }
 
 func containsFold(values []string, target string) bool {

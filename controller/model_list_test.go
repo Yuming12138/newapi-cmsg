@@ -133,6 +133,20 @@ func withSelfUseModeDisabled(t *testing.T) {
 	})
 }
 
+func withModelGroupRouteEnabled(t *testing.T) {
+	t.Helper()
+
+	cfg := operation_setting.GetModelGroupRouteSetting()
+	original := *cfg
+	cfg.Enabled = true
+	cfg.UserGroups = []string{"cmsg"}
+	cfg.SourceGroups = []string{"asxs", "cmsg"}
+	cfg.ModelPrefixes = []string{"gpt-5.6", "gpt-image"}
+	cfg.PreferredGroup = "cliproxy-codex"
+	cfg.FallbackGroup = "asxs"
+	t.Cleanup(func() { *cfg = original })
+}
+
 func decodeListModelsResponse(t *testing.T, recorder *httptest.ResponseRecorder) map[string]struct{} {
 	t.Helper()
 
@@ -242,6 +256,51 @@ func TestListModelsTokenLimitIncludesTieredBillingModel(t *testing.T) {
 	require.NotContains(t, ids, "zz-token-tiered-empty-expr-model")
 	require.NotContains(t, ids, "zz-token-tiered-missing-expr-model")
 	require.NotContains(t, ids, "zz-token-unpriced-model")
+}
+
+func TestListModelsIncludesModelsFromAutomaticGroupRoute(t *testing.T) {
+	withSelfUseModeDisabled(t)
+	withModelGroupRouteEnabled(t)
+	withTieredBillingConfig(t, map[string]string{
+		"gpt-5.5":                "tiered_expr",
+		"gpt-image-1.5":          "tiered_expr",
+		"gpt-image-2":            "tiered_expr",
+		"gpt-4o-route-unrelated": "tiered_expr",
+	}, map[string]string{
+		"gpt-5.5":                `tier("base", p + c)`,
+		"gpt-image-1.5":          `tier("base", p + c)`,
+		"gpt-image-2":            `tier("base", p + c)`,
+		"gpt-4o-route-unrelated": `tier("base", p + c)`,
+	})
+
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.Create(&model.User{
+		Id:       1002,
+		Username: "routed-model-list-user",
+		Password: "password",
+		Group:    "cmsg",
+		Status:   common.UserStatusEnabled,
+	}).Error)
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "asxs", Model: "gpt-5.5", ChannelId: 1, Enabled: true},
+		{Group: "cliproxy-codex", Model: "gpt-image-1.5", ChannelId: 23, Enabled: true},
+		{Group: "cliproxy-codex", Model: "gpt-image-2", ChannelId: 23, Enabled: true},
+		{Group: "cliproxy-codex", Model: "gpt-4o-route-unrelated", ChannelId: 23, Enabled: true},
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	ctx.Set("id", 1002)
+	common.SetContextKey(ctx, constant.ContextKeyTokenGroup, "asxs")
+
+	ListModels(ctx, constant.ChannelTypeOpenAI)
+
+	ids := decodeListModelsResponse(t, recorder)
+	require.Contains(t, ids, "gpt-5.5")
+	require.Contains(t, ids, "gpt-image-1.5")
+	require.Contains(t, ids, "gpt-image-2")
+	require.NotContains(t, ids, "gpt-4o-route-unrelated")
 }
 
 func TestCheckUpdatePasswordRequiresCurrentPassword(t *testing.T) {
