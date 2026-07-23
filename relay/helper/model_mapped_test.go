@@ -87,6 +87,22 @@ func TestApplyMappedBillingModel(t *testing.T) {
 	require.Equal(t, "gpt-5.5-openai-compact", info.OriginModelName)
 }
 
+func TestApplyMappedBillingModelUsesBaseModelForCompactWithoutMapping(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "gpt-5.5-openai-compact",
+		RelayMode:       relayconstant.RelayModeResponsesCompact,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelOtherSettings: dto.ChannelOtherSettings{
+				BillingByMappedModelEnabled: true,
+			},
+		},
+	}
+
+	require.NoError(t, ApplyMappedBillingModel(info, ""))
+	require.Equal(t, "gpt-5.5", info.BillingModelName)
+	require.Equal(t, "gpt-5.5-openai-compact", info.OriginModelName)
+}
+
 func TestModelMappedHelperPreservesRequestedCompactModelForMappedBilling(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())

@@ -60,7 +60,7 @@ func ApplyMappedBillingModel(info *relaycommon.RelayInfo, modelMapping string) e
 	if err != nil {
 		return err
 	}
-	if isMapped {
+	if isMapped || mappedModel != info.OriginModelName {
 		info.BillingModelName = mappedModel
 	}
 	return nil
