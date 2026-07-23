@@ -42,26 +42,8 @@ type cachedUtlsRoundTrippers struct {
 }
 
 type utlsRoundTripperCacheKey struct {
-	authID   string
-	authRef  *cliproxyauth.Auth
 	proxyURL string
 	poolSize int
-}
-
-func authTransportCacheIdentity(auth *cliproxyauth.Auth) (string, *cliproxyauth.Auth) {
-	if auth == nil {
-		return "", nil
-	}
-	if id := strings.TrimSpace(auth.ID); id != "" {
-		return "id:" + id, nil
-	}
-	if index := strings.TrimSpace(auth.Index); index != "" {
-		return "index:" + index, nil
-	}
-	// Runtime-created auth records should normally have a stable ID. Keep an
-	// unindexed record isolated by pointer rather than sharing its transport
-	// with unrelated credentials.
-	return "", auth
 }
 
 const maxCachedUtlsRoundTrippers = 128
@@ -359,21 +341,23 @@ func (t *utlsRoundTripper) attempt(req *http.Request, hostname, addr string) (*h
 	}
 	resp, err := h2Conn.RoundTrip(req)
 	if err != nil {
-		if shouldEvictConnError(err) {
-			t.evictConn(hostname, h2Conn, err)
-		}
+		t.handleConnError(hostname, h2Conn, err)
 		return nil, nil, err
 	}
 	t.maybeFillPool(hostname, addr)
 	return resp, h2Conn, nil
 }
 
-// evictConn removes one failed conn without touching siblings. HTTP/2 stream
-// errors only invalidate the affected stream, so the removed connection is
-// gracefully drained to let its other in-flight streams finish. Connection-
-// level failures are closed immediately because the transport is no longer
-// usable.
-func (t *utlsRoundTripper) evictConn(hostname string, conn h2ClientConn, err error) {
+// handleConnError applies the least disruptive action appropriate for err.
+// Selected stream errors retire the connection from new work but let existing
+// streams drain. Connection-level errors close it immediately. Request-local
+// errors leave the shared connection untouched.
+func (t *utlsRoundTripper) handleConnError(hostname string, conn h2ClientConn, err error) {
+	disposition := connectionErrorDisposition(err)
+	if disposition == connErrorKeep {
+		return
+	}
+
 	var removedFrom *connPool
 	t.mu.Lock()
 	pool := t.pools[hostname]
@@ -391,7 +375,7 @@ func (t *utlsRoundTripper) evictConn(hostname string, conn h2ClientConn, err err
 	if removedFrom == nil {
 		return
 	}
-	if isStreamLevelError(err) {
+	if disposition == connErrorDrain {
 		t.startDrain(removedFrom, conn)
 		return
 	}
@@ -408,9 +392,7 @@ func wrapBodyForEvict(resp *http.Response, t *utlsRoundTripper, hostname string,
 	resp.Body = &evictOnReadErrBody{
 		ReadCloser: resp.Body,
 		onErr: func(err error) {
-			if shouldEvictConnError(err) {
-				t.evictConn(hostname, conn, err)
-			}
+			t.handleConnError(hostname, conn, err)
 		},
 	}
 	return resp
@@ -436,11 +418,63 @@ func (b *evictOnReadErrBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func shouldEvictConnError(err error) bool {
+type connErrorDisposition uint8
+
+const (
+	connErrorKeep connErrorDisposition = iota
+	connErrorDrain
+	connErrorClose
+)
+
+func connectionErrorDisposition(err error) connErrorDisposition {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
+		return connErrorKeep
 	}
-	return true
+
+	var streamErr http2.StreamError
+	if errors.As(err, &streamErr) {
+		switch streamErr.Code {
+		case http2.ErrCodeProtocol, http2.ErrCodeInternal:
+			return connErrorDrain
+		default:
+			// REFUSED_STREAM and other stream-local failures do not make the
+			// underlying HTTP/2 connection unusable.
+			return connErrorKeep
+		}
+	}
+
+	var connErr http2.ConnectionError
+	if errors.As(err, &connErr) {
+		return connErrorClose
+	}
+	var goAwayErr http2.GoAwayError
+	if errors.As(err, &goAwayErr) {
+		return connErrorClose
+	}
+	var netErr *net.OpError
+	if errors.As(err, &netErr) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return connErrorClose
+	}
+
+	// Preserve narrow fallbacks for errors wrapped by older transport code
+	// without their concrete HTTP/2 type.
+	message := strings.ToUpper(err.Error())
+	if strings.Contains(message, "STREAM ERROR") {
+		if strings.Contains(message, "PROTOCOL_ERROR") || strings.Contains(message, "INTERNAL_ERROR") {
+			return connErrorDrain
+		}
+		return connErrorKeep
+	}
+	if strings.Contains(message, "CLIENT CONNECTION FORCE CLOSED") ||
+		strings.Contains(message, "CONNECTION RESET BY PEER") ||
+		strings.Contains(message, "BROKEN PIPE") ||
+		strings.Contains(message, "USE OF CLOSED NETWORK CONNECTION") ||
+		strings.Contains(message, "UNEXPECTED EOF") ||
+		strings.Contains(message, "SERVER SENT GOAWAY") ||
+		strings.Contains(message, "CONNECTION ERROR") {
+		return connErrorClose
+	}
+	return connErrorKeep
 }
 
 func isRetryableFreshConnError(err error) bool {
@@ -450,18 +484,26 @@ func isRetryableFreshConnError(err error) bool {
 	return isStreamLevelError(err) || errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "unexpected EOF")
 }
 
-// isStreamLevelError matches HTTP/2 stream-level errors that suggest the
-// underlying conn is poisoned and a fresh dial would likely succeed.
+// isStreamLevelError matches errors that are safe to retry before any response
+// bytes have been exposed. It does not decide whether the connection is usable.
 func isStreamLevelError(err error) bool {
 	if err == nil {
 		return false
 	}
-	s := err.Error()
-	return strings.Contains(s, "PROTOCOL_ERROR") ||
-		strings.Contains(s, "INTERNAL_ERROR") ||
-		strings.Contains(s, "REFUSED_STREAM") ||
-		strings.Contains(s, "stream error") ||
-		strings.Contains(s, "stream closed")
+	var streamErr http2.StreamError
+	if errors.As(err, &streamErr) {
+		switch streamErr.Code {
+		case http2.ErrCodeProtocol, http2.ErrCodeInternal, http2.ErrCodeRefusedStream:
+			return true
+		default:
+			return false
+		}
+	}
+	message := strings.ToUpper(err.Error())
+	return strings.Contains(message, "STREAM ERROR") &&
+		(strings.Contains(message, "PROTOCOL_ERROR") ||
+			strings.Contains(message, "INTERNAL_ERROR") ||
+			strings.Contains(message, "REFUSED_STREAM"))
 }
 
 // canResetBody reports whether the request body can be safely re-read for a retry.
@@ -507,12 +549,9 @@ func (f *fallbackRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	return f.fallback.RoundTrip(req)
 }
 
-func cachedRoundTrippers(proxyURL string, poolSize int, auth *cliproxyauth.Auth) cachedUtlsRoundTrippers {
+func cachedRoundTrippers(proxyURL string, poolSize int) cachedUtlsRoundTrippers {
 	normalizedPoolSize := normalizeUtlsPoolSize(poolSize)
-	authID, authRef := authTransportCacheIdentity(auth)
 	key := utlsRoundTripperCacheKey{
-		authID:   authID,
-		authRef:  authRef,
 		proxyURL: proxyURL,
 		poolSize: normalizedPoolSize,
 	}
@@ -570,7 +609,7 @@ func NewUtlsHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyau
 			fallback: ctxRoundTripper,
 		}
 	} else {
-		roundTrippers = cachedRoundTrippers(proxyURL, effectiveUtlsPoolSize(cfg), auth)
+		roundTrippers = cachedRoundTrippers(proxyURL, effectiveUtlsPoolSize(cfg))
 	}
 
 	client := &http.Client{
