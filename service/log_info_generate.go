@@ -52,6 +52,9 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = relayInfo.UpstreamModelName
 	}
+	if billingModelName := relayInfo.GetBillingModelName(); billingModelName != "" && billingModelName != relayInfo.OriginModelName {
+		other["billing_model_name"] = billingModelName
+	}
 
 	isSystemPromptOverwritten := common.GetContextKeyBool(ctx, constant.ContextKeySystemPromptOverride)
 	if isSystemPromptOverwritten {

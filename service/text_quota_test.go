@@ -68,6 +68,28 @@ func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 	require.Equal(t, 1488, chatSummary.Quota)
 }
 
+func TestCalculateTextQuotaSummaryKeepsRequestedAndBillingModelsSeparate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	relayInfo := &relaycommon.RelayInfo{
+		OriginModelName:  "gpt-5.5",
+		BillingModelName: "grok-4.5",
+		PriceData: types.PriceData{
+			ModelRatio:      1,
+			CompletionRatio: 1,
+			GroupRatioInfo: types.GroupRatioInfo{
+				GroupRatio: 1,
+			},
+		},
+		StartTime: time.Now(),
+	}
+
+	summary := calculateTextQuotaSummary(ctx, relayInfo, &dto.Usage{PromptTokens: 1, TotalTokens: 1})
+
+	require.Equal(t, "gpt-5.5", summary.ModelName)
+	require.Equal(t, "grok-4.5", summary.BillingModelName)
+}
+
 func TestCalculateTextQuotaSummaryUsesSplitClaudeCacheCreationRatios(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

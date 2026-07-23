@@ -158,6 +158,7 @@ export const channelFormSchema = z
     allow_inference_geo: z.boolean().optional(), // OpenAI/Anthropic: inference geography
     allow_speed: z.boolean().optional(), // Anthropic: speed mode control
     claude_beta_query: z.boolean().optional(), // Anthropic: beta query passthrough
+    billing_by_mapped_model_enabled: z.boolean().optional(),
     disable_task_polling_sleep: z.boolean().optional(),
     // Upstream model update settings (stored in settings JSON)
     upstream_model_update_check_enabled: z.boolean().optional(),
@@ -246,6 +247,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   allow_inference_geo: false,
   allow_speed: false,
   claude_beta_query: false,
+  billing_by_mapped_model_enabled: false,
   disable_task_polling_sleep: false,
   upstream_model_update_check_enabled: false,
   upstream_model_update_auto_sync_enabled: false,
@@ -301,6 +303,7 @@ export function transformChannelToFormDefaults(
   let allowInferenceGeo = false
   let allowSpeed = false
   let claudeBetaQuery = false
+  let billingByMappedModelEnabled = false
   let advancedCustom = ''
   let disableTaskPollingSleep = false
   let upstreamModelUpdateCheckEnabled = false
@@ -321,6 +324,8 @@ export function transformChannelToFormDefaults(
       allowInferenceGeo = parsed.allow_inference_geo === true
       allowSpeed = parsed.allow_speed === true
       claudeBetaQuery = parsed.claude_beta_query === true
+      billingByMappedModelEnabled =
+        parsed.billing_by_mapped_model_enabled === true
       if (parsed.advanced_custom) {
         advancedCustom = stringifyAdvancedCustomConfig(parsed.advanced_custom)
       }
@@ -380,6 +385,7 @@ export function transformChannelToFormDefaults(
     allow_inference_geo: allowInferenceGeo,
     allow_speed: allowSpeed,
     claude_beta_query: claudeBetaQuery,
+    billing_by_mapped_model_enabled: billingByMappedModelEnabled,
     disable_task_polling_sleep: disableTaskPollingSleep,
     allow_safety_identifier: allowSafetyIdentifier,
     upstream_model_update_check_enabled: upstreamModelUpdateCheckEnabled,
@@ -485,6 +491,8 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
 
   settingsObj.disable_task_polling_sleep =
     formData.disable_task_polling_sleep === true
+  settingsObj.billing_by_mapped_model_enabled =
+    formData.billing_by_mapped_model_enabled === true
 
   // Upstream model update settings (for model-fetchable channel types)
   if (MODEL_FETCHABLE_TYPES.has(formData.type)) {

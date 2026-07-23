@@ -3254,6 +3254,29 @@ export function ChannelMutateDrawer({
                           </FormItem>
                         )}
                       />
+
+                      <FormField
+                        control={form.control}
+                        name='billing_by_mapped_model_enabled'
+                        render={({ field }) => (
+                          <FormItem className='flex items-center justify-between px-4 py-3'>
+                            <div className='space-y-0.5'>
+                              <FormLabel>{t('Bill by Mapped Model')}</FormLabel>
+                              <FormDescription>
+                                {t(
+                                  'Use the final mapped upstream model for pricing while keeping the requested model in logs'
+                                )}
+                              </FormDescription>
+                            </div>
+                            <FormControl>
+                              <Switch
+                                checked={field.value}
+                                onCheckedChange={field.onChange}
+                              />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
                     </div>
 
                     <FormField
