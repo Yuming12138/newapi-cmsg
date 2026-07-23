@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	"golang.org/x/net/http2"
 )
 
 type utlsClientRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -108,8 +110,8 @@ func TestNewUtlsHTTPClientReusesCachedRoundTrippersForProxyKey(t *testing.T) {
 	resetUtlsRoundTripperCache(t)
 
 	cfg := &config.Config{SDKConfig: config.SDKConfig{ProxyURL: "direct", UtlsPoolSize: 2}}
-	first := NewUtlsHTTPClient(context.Background(), cfg, nil, 0)
-	second := NewUtlsHTTPClient(context.Background(), cfg, nil, 0)
+	first := NewUtlsHTTPClient(context.Background(), cfg, &cliproxyauth.Auth{ID: "auth-a"}, 0)
+	second := NewUtlsHTTPClient(context.Background(), cfg, &cliproxyauth.Auth{ID: "auth-b"}, 0)
 
 	firstUtls, firstFallback := utlsClientRoundTrippers(t, first)
 	secondUtls, secondFallback := utlsClientRoundTrippers(t, second)
@@ -121,26 +123,17 @@ func TestNewUtlsHTTPClientReusesCachedRoundTrippersForProxyKey(t *testing.T) {
 	}
 }
 
-func TestNewUtlsHTTPClientCacheSeparatesAuths(t *testing.T) {
+func TestNewUtlsHTTPClientCacheIsTransportScopedNotAuthScoped(t *testing.T) {
 	resetUtlsRoundTripperCache(t)
 
 	cfg := &config.Config{SDKConfig: config.SDKConfig{ProxyURL: "direct", UtlsPoolSize: 2}}
-	authA := &cliproxyauth.Auth{ID: "auth-a"}
-	authAClone := &cliproxyauth.Auth{ID: "auth-a"}
-	authB := &cliproxyauth.Auth{ID: "auth-b"}
-
-	first := NewUtlsHTTPClient(context.Background(), cfg, authA, 0)
-	second := NewUtlsHTTPClient(context.Background(), cfg, authB, 0)
-	third := NewUtlsHTTPClient(context.Background(), cfg, authAClone, 0)
+	first := NewUtlsHTTPClient(context.Background(), cfg, nil, 0)
+	second := NewUtlsHTTPClient(context.Background(), cfg, nil, 0)
 
 	firstUtls, firstFallback := utlsClientRoundTrippers(t, first)
 	secondUtls, secondFallback := utlsClientRoundTrippers(t, second)
-	thirdUtls, thirdFallback := utlsClientRoundTrippers(t, third)
-	if firstUtls == secondUtls || firstFallback == secondFallback {
-		t.Fatal("expected different auth IDs to use isolated RoundTrippers")
-	}
-	if firstUtls != thirdUtls || firstFallback != thirdFallback {
-		t.Fatal("expected the same auth ID to reuse cached RoundTrippers")
+	if firstUtls != secondUtls || firstFallback != secondFallback {
+		t.Fatal("expected transport-equivalent clients to reuse cached RoundTrippers")
 	}
 }
 
@@ -219,7 +212,7 @@ func TestUtlsRoundTripperEvictsAndDrainsOnlyStreamFailedConn(t *testing.T) {
 	pool := &connPool{conns: []h2ClientConn{poisoned, sibling}}
 	rt.pools["chatgpt.com"] = pool
 
-	rt.evictConn("chatgpt.com", poisoned, errors.New("stream error: stream ID 7; PROTOCOL_ERROR; received from peer"))
+	rt.handleConnError("chatgpt.com", poisoned, http2.StreamError{StreamID: 7, Code: http2.ErrCodeProtocol})
 	pool.drainWG.Wait()
 
 	rt.mu.Lock()
@@ -240,6 +233,40 @@ func TestUtlsRoundTripperEvictsAndDrainsOnlyStreamFailedConn(t *testing.T) {
 	}
 }
 
+func TestUtlsRoundTripperRetriesProtocolErrorOnReplacementConn(t *testing.T) {
+	t.Parallel()
+
+	failed := newFakeH2Conn("protocol-failed", -1)
+	failed.roundTripErr = http2.StreamError{StreamID: 7, Code: http2.ErrCodeProtocol}
+	replacement := newFakeH2Conn("replacement", -1)
+	rt := newFakeUtlsRoundTripper(1, replacement)
+	pool := &connPool{conns: []h2ClientConn{failed}}
+	rt.pools["chatgpt.com"] = pool
+
+	req, errRequest := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", strings.NewReader("{}"))
+	if errRequest != nil {
+		t.Fatalf("NewRequest() error = %v", errRequest)
+	}
+	resp, errRoundTrip := rt.RoundTrip(req)
+	if errRoundTrip != nil {
+		t.Fatalf("RoundTrip() error = %v", errRoundTrip)
+	}
+	if errClose := resp.Body.Close(); errClose != nil {
+		t.Fatalf("response body close error = %v", errClose)
+	}
+
+	pool.drainWG.Wait()
+	if got := failed.roundTripCalls(); got != 1 {
+		t.Fatalf("failed conn round trips = %d, want 1", got)
+	}
+	if got := failed.shutdownCalls(); got != 1 {
+		t.Fatalf("failed conn shutdown calls = %d, want 1", got)
+	}
+	if got := replacement.roundTripCalls(); got != 1 {
+		t.Fatalf("replacement conn round trips = %d, want 1", got)
+	}
+}
+
 func TestUtlsRoundTripperImmediatelyClosesConnectionFailedConn(t *testing.T) {
 	t.Parallel()
 
@@ -247,7 +274,7 @@ func TestUtlsRoundTripperImmediatelyClosesConnectionFailedConn(t *testing.T) {
 	rt := newFakeUtlsRoundTripper(1)
 	rt.pools["chatgpt.com"] = &connPool{conns: []h2ClientConn{failed}}
 
-	rt.evictConn("chatgpt.com", failed, errors.New("read tcp: connection reset by peer"))
+	rt.handleConnError("chatgpt.com", failed, http2.ConnectionError(http2.ErrCodeProtocol))
 	waitForFakeClose(t, failed)
 
 	if got := failed.shutdownCalls(); got != 0 {
@@ -255,6 +282,45 @@ func TestUtlsRoundTripperImmediatelyClosesConnectionFailedConn(t *testing.T) {
 	}
 	if got := failed.closeCalls(); got != 1 {
 		t.Fatalf("failed close calls = %d, want 1", got)
+	}
+}
+
+func TestUtlsRoundTripperKeepsConnForRefusedStream(t *testing.T) {
+	t.Parallel()
+
+	conn := newFakeH2Conn("refused-stream", -1)
+	rt := newFakeUtlsRoundTripper(1)
+	rt.pools["chatgpt.com"] = &connPool{conns: []h2ClientConn{conn}}
+
+	rt.handleConnError("chatgpt.com", conn, http2.StreamError{StreamID: 9, Code: http2.ErrCodeRefusedStream})
+
+	rt.mu.Lock()
+	conns := append([]h2ClientConn(nil), rt.pools["chatgpt.com"].conns...)
+	rt.mu.Unlock()
+	if len(conns) != 1 || conns[0] != conn {
+		t.Fatalf("remaining conns = %#v, want refused-stream conn retained", conns)
+	}
+	if got := conn.shutdownCalls(); got != 0 {
+		t.Fatalf("shutdown calls = %d, want 0", got)
+	}
+	if got := conn.closeCalls(); got != 0 {
+		t.Fatalf("close calls = %d, want 0", got)
+	}
+}
+
+func TestUtlsRoundTripperClosesNetOpFailure(t *testing.T) {
+	t.Parallel()
+
+	conn := newFakeH2Conn("net-op-failure", -1)
+	rt := newFakeUtlsRoundTripper(1)
+	rt.pools["chatgpt.com"] = &connPool{conns: []h2ClientConn{conn}}
+
+	errRead := &net.OpError{Op: "read", Net: "tcp", Err: io.ErrUnexpectedEOF}
+	rt.handleConnError("chatgpt.com", conn, errRead)
+	waitForFakeClose(t, conn)
+
+	if got := conn.shutdownCalls(); got != 0 {
+		t.Fatalf("shutdown calls = %d, want 0", got)
 	}
 }
 
@@ -321,7 +387,7 @@ func TestUtlsRoundTripperEvictsConnOnProtocolBodyReadError(t *testing.T) {
 	conn := newFakeH2Conn("body-protocol-error", -1)
 	conn.shutdownStarted = make(chan struct{})
 	conn.shutdownRelease = make(chan struct{})
-	conn.responseBody = &readErrorCloser{err: errors.New("stream error: stream ID 7; PROTOCOL_ERROR; received from peer")}
+	conn.responseBody = &readErrorCloser{err: http2.StreamError{StreamID: 7, Code: http2.ErrCodeProtocol}}
 	rt := newFakeUtlsRoundTripper(1)
 	pool := &connPool{conns: []h2ClientConn{conn}}
 	rt.pools["chatgpt.com"] = pool
