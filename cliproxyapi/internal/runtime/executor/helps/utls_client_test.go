@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
 type utlsClientRoundTripFunc func(*http.Request) (*http.Response, error)
@@ -120,6 +121,29 @@ func TestNewUtlsHTTPClientReusesCachedRoundTrippersForProxyKey(t *testing.T) {
 	}
 }
 
+func TestNewUtlsHTTPClientCacheSeparatesAuths(t *testing.T) {
+	resetUtlsRoundTripperCache(t)
+
+	cfg := &config.Config{SDKConfig: config.SDKConfig{ProxyURL: "direct", UtlsPoolSize: 2}}
+	authA := &cliproxyauth.Auth{ID: "auth-a"}
+	authAClone := &cliproxyauth.Auth{ID: "auth-a"}
+	authB := &cliproxyauth.Auth{ID: "auth-b"}
+
+	first := NewUtlsHTTPClient(context.Background(), cfg, authA, 0)
+	second := NewUtlsHTTPClient(context.Background(), cfg, authB, 0)
+	third := NewUtlsHTTPClient(context.Background(), cfg, authAClone, 0)
+
+	firstUtls, firstFallback := utlsClientRoundTrippers(t, first)
+	secondUtls, secondFallback := utlsClientRoundTrippers(t, second)
+	thirdUtls, thirdFallback := utlsClientRoundTrippers(t, third)
+	if firstUtls == secondUtls || firstFallback == secondFallback {
+		t.Fatal("expected different auth IDs to use isolated RoundTrippers")
+	}
+	if firstUtls != thirdUtls || firstFallback != thirdFallback {
+		t.Fatal("expected the same auth ID to reuse cached RoundTrippers")
+	}
+}
+
 func TestUtlsRoundTripperSaturatedReplacementDrainsDisplacedConn(t *testing.T) {
 	t.Parallel()
 
@@ -186,7 +210,7 @@ func TestUtlsRoundTripperSaturatedReplacementDrainsDisplacedConn(t *testing.T) {
 	}
 }
 
-func TestUtlsRoundTripperEvictsAndClosesOnlyPoisonedConn(t *testing.T) {
+func TestUtlsRoundTripperEvictsAndDrainsOnlyStreamFailedConn(t *testing.T) {
 	t.Parallel()
 
 	poisoned := newFakeH2Conn("poisoned", -1)
@@ -195,8 +219,8 @@ func TestUtlsRoundTripperEvictsAndClosesOnlyPoisonedConn(t *testing.T) {
 	pool := &connPool{conns: []h2ClientConn{poisoned, sibling}}
 	rt.pools["chatgpt.com"] = pool
 
-	rt.evictConn("chatgpt.com", poisoned)
-	waitForFakeClose(t, poisoned)
+	rt.evictConn("chatgpt.com", poisoned, errors.New("stream error: stream ID 7; PROTOCOL_ERROR; received from peer"))
+	pool.drainWG.Wait()
 
 	rt.mu.Lock()
 	conns := append([]h2ClientConn(nil), rt.pools["chatgpt.com"].conns...)
@@ -208,11 +232,29 @@ func TestUtlsRoundTripperEvictsAndClosesOnlyPoisonedConn(t *testing.T) {
 	if got := sibling.closeCalls(); got != 0 {
 		t.Fatalf("sibling close calls = %d, want 0", got)
 	}
-	if got := poisoned.shutdownCalls(); got != 0 {
-		t.Fatalf("poisoned shutdown calls = %d, want 0", got)
+	if got := poisoned.shutdownCalls(); got != 1 {
+		t.Fatalf("poisoned shutdown calls = %d, want 1", got)
 	}
 	if got := poisoned.closeCalls(); got != 1 {
 		t.Fatalf("poisoned close calls = %d, want 1", got)
+	}
+}
+
+func TestUtlsRoundTripperImmediatelyClosesConnectionFailedConn(t *testing.T) {
+	t.Parallel()
+
+	failed := newFakeH2Conn("connection-failed", -1)
+	rt := newFakeUtlsRoundTripper(1)
+	rt.pools["chatgpt.com"] = &connPool{conns: []h2ClientConn{failed}}
+
+	rt.evictConn("chatgpt.com", failed, errors.New("read tcp: connection reset by peer"))
+	waitForFakeClose(t, failed)
+
+	if got := failed.shutdownCalls(); got != 0 {
+		t.Fatalf("failed shutdown calls = %d, want 0", got)
+	}
+	if got := failed.closeCalls(); got != 1 {
+		t.Fatalf("failed close calls = %d, want 1", got)
 	}
 }
 
@@ -277,9 +319,12 @@ func TestUtlsRoundTripperEvictsConnOnProtocolBodyReadError(t *testing.T) {
 	t.Parallel()
 
 	conn := newFakeH2Conn("body-protocol-error", -1)
+	conn.shutdownStarted = make(chan struct{})
+	conn.shutdownRelease = make(chan struct{})
 	conn.responseBody = &readErrorCloser{err: errors.New("stream error: stream ID 7; PROTOCOL_ERROR; received from peer")}
 	rt := newFakeUtlsRoundTripper(1)
-	rt.pools["chatgpt.com"] = &connPool{conns: []h2ClientConn{conn}}
+	pool := &connPool{conns: []h2ClientConn{conn}}
+	rt.pools["chatgpt.com"] = pool
 
 	req, _ := http.NewRequest(http.MethodGet, "https://chatgpt.com/backend-api/codex/responses", nil)
 	resp, errRoundTrip := rt.RoundTrip(req)
@@ -290,7 +335,17 @@ func TestUtlsRoundTripperEvictsConnOnProtocolBodyReadError(t *testing.T) {
 	if errRead == nil {
 		t.Fatal("Read() error = nil, want protocol error")
 	}
-	waitForFakeClose(t, conn)
+
+	select {
+	case <-conn.shutdownStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for graceful Shutdown to start")
+	}
+	select {
+	case <-conn.closeCh:
+		t.Fatal("Close was called before other in-flight streams could drain")
+	default:
+	}
 
 	rt.mu.Lock()
 	remaining := len(rt.pools["chatgpt.com"].conns)
@@ -298,6 +353,10 @@ func TestUtlsRoundTripperEvictsConnOnProtocolBodyReadError(t *testing.T) {
 	if remaining != 0 {
 		t.Fatalf("remaining conns = %d, want 0", remaining)
 	}
+
+	close(conn.shutdownRelease)
+	pool.drainWG.Wait()
+	waitForFakeClose(t, conn)
 }
 
 func TestUtlsRoundTripperPrewarmsConfiguredPool(t *testing.T) {

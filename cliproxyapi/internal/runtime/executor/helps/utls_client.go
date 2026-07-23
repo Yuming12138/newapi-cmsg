@@ -42,8 +42,26 @@ type cachedUtlsRoundTrippers struct {
 }
 
 type utlsRoundTripperCacheKey struct {
+	authID   string
+	authRef  *cliproxyauth.Auth
 	proxyURL string
 	poolSize int
+}
+
+func authTransportCacheIdentity(auth *cliproxyauth.Auth) (string, *cliproxyauth.Auth) {
+	if auth == nil {
+		return "", nil
+	}
+	if id := strings.TrimSpace(auth.ID); id != "" {
+		return "id:" + id, nil
+	}
+	if index := strings.TrimSpace(auth.Index); index != "" {
+		return "index:" + index, nil
+	}
+	// Runtime-created auth records should normally have a stable ID. Keep an
+	// unindexed record isolated by pointer rather than sharing its transport
+	// with unrelated credentials.
+	return "", auth
 }
 
 const maxCachedUtlsRoundTrippers = 128
@@ -342,7 +360,7 @@ func (t *utlsRoundTripper) attempt(req *http.Request, hostname, addr string) (*h
 	resp, err := h2Conn.RoundTrip(req)
 	if err != nil {
 		if shouldEvictConnError(err) {
-			t.evictConn(hostname, h2Conn)
+			t.evictConn(hostname, h2Conn, err)
 		}
 		return nil, nil, err
 	}
@@ -350,28 +368,34 @@ func (t *utlsRoundTripper) attempt(req *http.Request, hostname, addr string) (*h
 	return resp, h2Conn, nil
 }
 
-// evictConn removes and immediately closes one poisoned conn without touching
-// siblings. A poisoned connection's other in-flight streams are expected to fail;
-// closing it makes that failure prompt instead of leaving them stuck until their
-// caller-side deadlines expire. Healthy saturated connections still use startDrain.
-func (t *utlsRoundTripper) evictConn(hostname string, conn h2ClientConn) {
-	var removed bool
+// evictConn removes one failed conn without touching siblings. HTTP/2 stream
+// errors only invalidate the affected stream, so the removed connection is
+// gracefully drained to let its other in-flight streams finish. Connection-
+// level failures are closed immediately because the transport is no longer
+// usable.
+func (t *utlsRoundTripper) evictConn(hostname string, conn h2ClientConn, err error) {
+	var removedFrom *connPool
 	t.mu.Lock()
 	pool := t.pools[hostname]
 	if pool != nil {
 		for i, cached := range pool.conns {
 			if cached == conn {
 				pool.conns = append(pool.conns[:i], pool.conns[i+1:]...)
-				removed = true
+				removedFrom = pool
 				break
 			}
 		}
 	}
 	t.mu.Unlock()
 
-	if removed {
-		go func() { _ = conn.Close() }()
+	if removedFrom == nil {
+		return
 	}
+	if isStreamLevelError(err) {
+		t.startDrain(removedFrom, conn)
+		return
+	}
+	go func() { _ = conn.Close() }()
 }
 
 // wrapBodyForEvict replaces resp.Body so that any non-EOF read error triggers
@@ -385,7 +409,7 @@ func wrapBodyForEvict(resp *http.Response, t *utlsRoundTripper, hostname string,
 		ReadCloser: resp.Body,
 		onErr: func(err error) {
 			if shouldEvictConnError(err) {
-				t.evictConn(hostname, conn)
+				t.evictConn(hostname, conn, err)
 			}
 		},
 	}
@@ -483,9 +507,15 @@ func (f *fallbackRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	return f.fallback.RoundTrip(req)
 }
 
-func cachedRoundTrippers(proxyURL string, poolSize int) cachedUtlsRoundTrippers {
+func cachedRoundTrippers(proxyURL string, poolSize int, auth *cliproxyauth.Auth) cachedUtlsRoundTrippers {
 	normalizedPoolSize := normalizeUtlsPoolSize(poolSize)
-	key := utlsRoundTripperCacheKey{proxyURL: proxyURL, poolSize: normalizedPoolSize}
+	authID, authRef := authTransportCacheIdentity(auth)
+	key := utlsRoundTripperCacheKey{
+		authID:   authID,
+		authRef:  authRef,
+		proxyURL: proxyURL,
+		poolSize: normalizedPoolSize,
+	}
 
 	utlsRoundTripperCache.mu.RLock()
 	cached, ok := utlsRoundTripperCache.items[key]
@@ -540,7 +570,7 @@ func NewUtlsHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyau
 			fallback: ctxRoundTripper,
 		}
 	} else {
-		roundTrippers = cachedRoundTrippers(proxyURL, effectiveUtlsPoolSize(cfg))
+		roundTrippers = cachedRoundTrippers(proxyURL, effectiveUtlsPoolSize(cfg), auth)
 	}
 
 	client := &http.Client{
