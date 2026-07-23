@@ -10,6 +10,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -42,10 +43,11 @@ func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	ctx.Set("group", "default")
 
 	info := &relaycommon.RelayInfo{
-		OriginModelName: "tiered-test-model",
-		UserGroup:       "default",
-		UsingGroup:      "default",
-		RequestHeaders:  map[string]string{"Content-Type": "application/json"},
+		OriginModelName:  "client-model-alias",
+		BillingModelName: "tiered-test-model",
+		UserGroup:        "default",
+		UsingGroup:       "default",
+		RequestHeaders:   map[string]string{"Content-Type": "application/json"},
 		BillingRequestInput: &billingexpr.RequestInput{
 			Headers: map[string]string{"Content-Type": "application/json"},
 			Body:    []byte(`{"stream":true}`),
@@ -58,6 +60,7 @@ func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	require.NotNil(t, info.TieredBillingSnapshot)
 	require.Equal(t, "stream", info.TieredBillingSnapshot.EstimatedTier)
 	require.Equal(t, billing_setting.BillingModeTieredExpr, info.TieredBillingSnapshot.BillingMode)
+	require.Equal(t, "tiered-test-model", info.TieredBillingSnapshot.ModelName)
 	require.Equal(t, common.QuotaPerUnit, info.TieredBillingSnapshot.QuotaPerUnit)
 }
 
@@ -80,4 +83,29 @@ func TestModelPriceHelperTreatsMimoAsFreeModel(t *testing.T) {
 	require.Zero(t, priceData.QuotaToPreConsume)
 	require.Zero(t, priceData.ModelRatio)
 	require.True(t, info.PriceData.FreeModel)
+}
+
+func TestModelPriceHelperUsesBillingModelName(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ratio_setting.InitRatioSettings()
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	ctx.Set("group", "default")
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName:  "gpt-4o",
+		BillingModelName: "gpt-4o-mini",
+		UserGroup:        "default",
+		UsingGroup:       "default",
+		UserId:           10001,
+	}
+
+	priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+	require.NoError(t, err)
+	wantModelRatio, ok, _ := ratio_setting.GetModelRatio("gpt-4o-mini")
+	require.True(t, ok)
+	require.Equal(t, wantModelRatio, priceData.ModelRatio)
+	require.Equal(t, ratio_setting.GetCompletionRatio("gpt-4o-mini"), priceData.CompletionRatio)
+	require.Equal(t, "gpt-4o", info.OriginModelName)
 }

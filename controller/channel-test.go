@@ -250,6 +250,13 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 
 	info.IsChannelTest = true
 	info.InitChannelMeta(c)
+	if err = helper.ApplyMappedBillingModel(info, c.GetString("model_mapping")); err != nil {
+		return testResult{
+			context:     c,
+			localErr:    err,
+			newAPIError: types.NewError(err, types.ErrorCodeChannelModelMappedError),
+		}
+	}
 
 	err = attachTestBillingRequestInput(info, request)
 	if err != nil {
