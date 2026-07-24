@@ -50,7 +50,10 @@ DEFAULT_CONFIG = {
     "balance_units_per_percent": 1.0,
     "dynamic_daily_budget_enabled": False,
     "timezone": "Asia/Shanghai",
-    "quota_reset_increase_threshold_percent": 0.25,
+    "quota_reset_increase_threshold_percent": 10.0,
+    "quota_reset_near_full_percent": 90.0,
+    "quota_reset_near_full_min_increase_percent": 5.0,
+    "quota_reset_confirmation_count": 2,
     "personal_plan_keywords": ["plus"],
     "protected_plan_keywords": ["pro"],
     "default_account_bucket": "protected",
@@ -1057,17 +1060,72 @@ def apply_dynamic_daily_budget(
     if not isinstance(budget_state, dict):
         budget_state = {}
 
-    increase_threshold = max(0.0, float(number(config.get("quota_reset_increase_threshold_percent")) or 0.25))
-    last_remaining = number(budget_state.get("last_remaining_percent"))
-    quota_increased = last_remaining is not None and current_remaining > last_remaining + increase_threshold
-    reset_changed = int(budget_state.get("reset_at") or 0) != int(snapshot["reset_at"])
-    should_reset = (
-        budget_state.get("day") != day_key
-        or budget_state.get("account_signature") != snapshot["account_signature"]
-        or reset_changed
-        or quota_increased
-        or number(budget_state.get("baseline_remaining_percent")) is None
+    previous_day = str(budget_state.get("day") or "")
+    previous_signature = str(budget_state.get("account_signature") or "")
+    previous_reset_at = int(budget_state.get("reset_at") or 0)
+    previous_baseline = number(budget_state.get("baseline_remaining_percent"))
+    low_watermark = number(budget_state.get("minimum_remaining_percent_seen"))
+    if low_watermark is None:
+        low_watermark = number(budget_state.get("last_remaining_percent"))
+    if low_watermark is None:
+        low_watermark = current_remaining
+    low_watermark = min(float(low_watermark), current_remaining)
+
+    increase_threshold = max(0.0, float(number(config.get("quota_reset_increase_threshold_percent")) or 10.0))
+    near_full_threshold = clamp_percent(config.get("quota_reset_near_full_percent"), 90.0)
+    near_full_min_increase = max(
+        0.0,
+        float(number(config.get("quota_reset_near_full_min_increase_percent")) or 5.0),
     )
+    refill_increase = max(0.0, current_remaining - low_watermark)
+    quota_refilled = refill_increase >= increase_threshold or (
+        current_remaining >= near_full_threshold and refill_increase >= near_full_min_increase
+    )
+    explicit_runtime_reset = int(number(nested(result, "auto_reconcile", "reset_count")) or 0) > 0
+
+    reset_reason = ""
+    should_reset = False
+    if previous_baseline is None:
+        should_reset = True
+        reset_reason = "baseline_missing"
+    elif previous_day != day_key:
+        should_reset = True
+        reset_reason = "day_changed"
+    elif explicit_runtime_reset:
+        should_reset = True
+        reset_reason = "runtime_quota_reset"
+    else:
+        candidate_reasons: list[str] = []
+        if previous_signature and previous_signature != snapshot["account_signature"]:
+            candidate_reasons.append("account_signature_changed")
+        if previous_reset_at and previous_reset_at != int(snapshot["reset_at"]):
+            candidate_reasons.append("weekly_reset_at_changed")
+        if quota_refilled:
+            candidate_reasons.append("weekly_quota_refilled")
+
+        if candidate_reasons:
+            candidate_key = "|".join([
+                ",".join(candidate_reasons),
+                str(snapshot["account_signature"]),
+                str(int(snapshot["reset_at"])),
+            ])
+            candidate = budget_state.get("reset_candidate")
+            if not isinstance(candidate, dict) or candidate.get("key") != candidate_key:
+                candidate = {"key": candidate_key, "count": 0, "first_observed_at": now}
+            candidate["count"] = int(candidate.get("count") or 0) + 1
+            candidate["last_observed_at"] = now
+            candidate["reasons"] = candidate_reasons
+            candidate["remaining_percent"] = round(current_remaining, 6)
+            candidate["increase_from_low_watermark_percent"] = round(refill_increase, 6)
+            budget_state["reset_candidate"] = candidate
+
+            confirmation_count = max(1, int(number(config.get("quota_reset_confirmation_count")) or 2))
+            if int(candidate["count"]) >= confirmation_count:
+                should_reset = True
+                reset_reason = "+".join(candidate_reasons)
+        else:
+            budget_state.pop("reset_candidate", None)
+
     if should_reset:
         baseline = current_remaining
         daily_limit = max(0.0, baseline - reserve_total) / int(snapshot["days_remaining"])
@@ -1077,23 +1135,35 @@ def apply_dynamic_daily_budget(
             "reset_at": int(snapshot["reset_at"]),
             "baseline_remaining_percent": round(baseline, 6),
             "daily_limit_percent": round(daily_limit, 6),
+            "minimum_remaining_percent_seen": round(current_remaining, 6),
+            "daily_exhausted": False,
+            "baseline_reset_reason": reset_reason,
+            "baseline_reset_at": now,
+            "baseline_reset_previous_percent": round(float(previous_baseline), 6) if previous_baseline is not None else None,
         }
+        low_watermark = current_remaining
 
     baseline = float(number(budget_state.get("baseline_remaining_percent")) or current_remaining)
     daily_limit = max(0.0, float(number(budget_state.get("daily_limit_percent")) or 0.0))
     consumed_today = max(0.0, baseline - current_remaining)
-    remaining_today = max(0.0, daily_limit - consumed_today)
+    calculated_remaining_today = max(0.0, daily_limit - consumed_today)
     minimum_remaining_7d = float(snapshot["minimum_remaining_percent_7d"])
     minimum_remaining_5h = number(snapshot.get("minimum_remaining_percent_5h"))
     hard_reserve_available = minimum_remaining_7d > reserve_per_account + 0.000001
     if minimum_remaining_5h is not None:
         hard_reserve_available = hard_reserve_available and minimum_remaining_5h > reserve_5h_per_account + 0.000001
-    daily_budget_available = remaining_today > 0.000001
+    daily_exhausted = bool(budget_state.get("daily_exhausted"))
+    daily_budget_available = not daily_exhausted and calculated_remaining_today > 0.000001
+    if not daily_budget_available and not daily_exhausted and calculated_remaining_today <= 0.000001:
+        daily_exhausted = True
+        budget_state["daily_exhausted_at"] = now
+    remaining_today = calculated_remaining_today if daily_budget_available else 0.0
     original_quota_ok = bool(result.get("quota_ok", result.get("within_share")))
     quota_ok = original_quota_ok and hard_reserve_available and daily_budget_available
 
     budget_state.update({
         "last_remaining_percent": round(current_remaining, 6),
+        "minimum_remaining_percent_seen": round(min(low_watermark, current_remaining), 6),
         "last_updated_at": now,
         "days_remaining": int(snapshot["days_remaining"]),
         "reset_after_seconds": int(snapshot["reset_after_seconds"]),
@@ -1101,7 +1171,9 @@ def apply_dynamic_daily_budget(
         "minimum_remaining_percent_7d": round(minimum_remaining_7d, 6),
         "minimum_remaining_percent_5h": round(minimum_remaining_5h, 6) if minimum_remaining_5h is not None else None,
         "consumed_today_percent": round(consumed_today, 6),
+        "calculated_remaining_today_percent": round(calculated_remaining_today, 6),
         "remaining_today_percent": round(remaining_today, 6),
+        "daily_exhausted": daily_exhausted,
         "quota_ok": quota_ok,
     })
     state["dynamic_daily_budget"] = budget_state
