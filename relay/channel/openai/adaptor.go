@@ -32,6 +32,8 @@ import (
 	"github.com/QuantumNous/new-api/setting/reasoning"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/samber/lo"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	"github.com/gin-gonic/gin"
 )
@@ -603,7 +605,67 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if info != nil && request.Reasoning != nil && request.Reasoning.Effort != "" {
 		info.ReasoningEffort = request.Reasoning.Effort
 	}
+	request, err := sanitizeGPTResponsesInputItemIDs(request, info)
+	if err != nil {
+		return nil, err
+	}
 	return request, nil
+}
+
+func sanitizeGPTResponsesInputItemIDs(request dto.OpenAIResponsesRequest, info *relaycommon.RelayInfo) (dto.OpenAIResponsesRequest, error) {
+	modelName := request.Model
+	if info != nil && strings.TrimSpace(info.UpstreamModelName) != "" {
+		modelName = info.UpstreamModelName
+	}
+	if !dto.IsOpenAIGPT5Model(strings.TrimSpace(modelName)) || len(request.Input) == 0 {
+		return request, nil
+	}
+
+	input := bytes.TrimSpace(request.Input)
+	if len(input) == 0 {
+		return request, nil
+	}
+	parsed := gjson.ParseBytes(input)
+	if !parsed.IsArray() {
+		return request, nil
+	}
+
+	updated := append([]byte(nil), input...)
+	changed := false
+	for i, item := range parsed.Array() {
+		if !item.IsObject() {
+			continue
+		}
+		itemType := strings.TrimSpace(item.Get("type").String())
+		itemID := strings.TrimSpace(item.Get("id").String())
+		if !shouldDropGPTResponsesInputItemID(itemType, itemID) {
+			continue
+		}
+		var err error
+		updated, err = sjson.DeleteBytes(updated, fmt.Sprintf("%d.id", i))
+		if err != nil {
+			return request, fmt.Errorf("sanitize responses input item id: %w", err)
+		}
+		changed = true
+	}
+	if changed {
+		request.Input = updated
+	}
+	return request, nil
+}
+
+func shouldDropGPTResponsesInputItemID(itemType string, itemID string) bool {
+	if itemID == "" {
+		return false
+	}
+	switch itemType {
+	case "custom_tool_call", "custom_tool_call_output":
+		return !strings.HasPrefix(itemID, "ctc")
+	case "function_call", "function_call_output":
+		return strings.HasPrefix(itemID, "fc_")
+	default:
+		return false
+	}
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
