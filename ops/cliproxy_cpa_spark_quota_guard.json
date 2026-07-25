@@ -1,0 +1,24 @@
+{
+  "docker": "/usr/bin/docker",
+  "database": {
+    "container": "new-api-postgres"
+  },
+  "channel_id": 28,
+  "env_path": "/opt/new-api/ops/cliproxy_cpa_quota_guard.env",
+  "state_path": "/opt/new-api/ops/cliproxy_cpa_spark_quota_guard_state.json",
+  "cpa_base_url": "http://127.0.0.1:8317",
+  "wham_usage_url": "https://chatgpt.com/backend-api/wham/usage",
+  "timeout_sec": 30,
+  "enabled": true,
+  "fail_closed_after_consecutive_failures": 3,
+  "balance_units_per_percent": 1.0,
+  "dynamic_daily_budget_enabled": false,
+  "prefer_cpa_quota_health_endpoint": false,
+  "auto_reconcile_runtime_quota": false,
+  "quota_feature": "codex_bengalfox",
+  "quota_feature_limit_name": "GPT-5.3-Codex-Spark",
+  "quota_feature_plan_keywords": [
+    "pro"
+  ],
+  "quota_feature_min_remaining_percent": 0.0
+}

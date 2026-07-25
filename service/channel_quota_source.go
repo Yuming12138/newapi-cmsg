@@ -196,11 +196,24 @@ func joinQuotaPoolGroups(groups map[string]struct{}) string {
 }
 
 func estimatedQuotaPoolChannelBalance(channel *model.Channel) (float64, float64, int64, bool, bool, bool, bool) {
+	if cliproxyCPAChannelIsModelQuota(channel) {
+		return 0, 0, 0, false, false, false, false
+	}
 	if balance, usableBalance, updatedAt, available, failed, ok := cliproxyCPAEstimatedChannelBalance(channel); ok {
 		return balance, usableBalance, updatedAt, available, failed, true, true
 	}
 	balance, usableBalance, updatedAt, available, failed, ok := quotaSourceChannelBalance(channel)
 	return balance, usableBalance, updatedAt, available, failed, false, ok
+}
+
+func cliproxyCPAChannelIsModelQuota(channel *model.Channel) bool {
+	if channel == nil {
+		return false
+	}
+	otherInfo := parseGuardObject(channel.OtherInfo)
+	guardInfo, _ := otherInfo["cliproxy_cpa_quota_guard"].(map[string]interface{})
+	quotaSource, _ := otherInfo[channelQuotaSourceInfoKey].(map[string]interface{})
+	return cliproxyCPAIsModelQuota(guardInfo, quotaSource)
 }
 
 func quotaSourceChannelBalance(channel *model.Channel) (float64, float64, int64, bool, bool, bool) {
@@ -244,6 +257,9 @@ func cliproxyCPAEstimatedChannelBalance(channel *model.Channel) (float64, float6
 	otherInfo := parseGuardObject(channel.OtherInfo)
 	guardInfo, hasGuard := otherInfo["cliproxy_cpa_quota_guard"].(map[string]interface{})
 	quotaSource, hasQuotaSource := otherInfo[channelQuotaSourceInfoKey].(map[string]interface{})
+	if cliproxyCPAIsModelQuota(guardInfo, quotaSource) {
+		return 0, 0, 0, false, false, false
+	}
 	isCPA := hasGuard
 	if rawSource, ok := quotaSource["raw_source"].(map[string]interface{}); ok {
 		if source, ok := rawSource["source"].(string); ok && strings.EqualFold(strings.TrimSpace(source), "cliproxy_cpa_quota_guard") {
@@ -302,6 +318,22 @@ func cliproxyCPAEstimatedChannelBalance(channel *model.Channel) (float64, float6
 	}
 	available := channel.Status == common.ChannelStatusEnabled && spendable && usableBalance > 0
 	return displayBalance, usableDisplayBalance, updatedAt, available, failed, true
+}
+
+func cliproxyCPAIsModelQuota(guardInfo map[string]interface{}, quotaSource map[string]interface{}) bool {
+	if sourceType, ok := quotaSource["source_type"].(string); ok && strings.EqualFold(strings.TrimSpace(sourceType), "model_quota_percent") {
+		return true
+	}
+	if rawSource, ok := quotaSource["raw_source"].(map[string]interface{}); ok {
+		if feature, ok := rawSource["quota_feature"].(string); ok && strings.TrimSpace(feature) != "" {
+			return true
+		}
+	}
+	health, _ := guardInfo["health"].(map[string]interface{})
+	if feature, ok := health["quota_feature"].(string); ok && strings.TrimSpace(feature) != "" {
+		return true
+	}
+	return false
 }
 
 func cliproxyCPAPlanWeightedEstimate(health map[string]interface{}) (float64, float64, bool) {
@@ -554,8 +586,21 @@ func buildCliproxyCPAQuotaSource(health map[string]interface{}, balance float64,
 	spendable := balance > 0
 	status, reason := cliproxyCPAQuotaSourceStatus(health, spendable)
 	sourceType := "rolling_window_quota"
-	if cliproxyCPAHasProtectedBucket(health) || len(reservePolicy) > 0 {
+	quotaFeature, _ := health["quota_feature"].(string)
+	quotaFeature = strings.TrimSpace(quotaFeature)
+	if quotaFeature != "" {
+		sourceType = "model_quota_percent"
+		unit = "percent"
+		reservePolicy = nil
+	} else if cliproxyCPAHasProtectedBucket(health) || len(reservePolicy) > 0 {
 		sourceType = "shared_protected_rolling_quota"
+	}
+	rawSource := map[string]interface{}{"source": "cliproxy_cpa_quota_guard"}
+	if quotaFeature != "" {
+		rawSource["quota_feature"] = quotaFeature
+		if limitName, ok := health["quota_feature_limit_name"].(string); ok && strings.TrimSpace(limitName) != "" {
+			rawSource["quota_feature_limit_name"] = strings.TrimSpace(limitName)
+		}
 	}
 	return buildQuotaSource(
 		sourceType,
@@ -567,7 +612,7 @@ func buildCliproxyCPAQuotaSource(health map[string]interface{}, balance float64,
 		reason,
 		reservePolicy,
 		nowTs,
-		map[string]interface{}{"source": "cliproxy_cpa_quota_guard"},
+		rawSource,
 	)
 }
 

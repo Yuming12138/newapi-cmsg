@@ -1,0 +1,13 @@
+[Unit]
+Description=New API CLIProxyAPI Spark quota guard
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/new-api
+ExecStart=/usr/bin/python3 /opt/new-api/ops/cliproxy_cpa_quota_guard.py /opt/new-api/ops/cliproxy_cpa_spark_quota_guard.json
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

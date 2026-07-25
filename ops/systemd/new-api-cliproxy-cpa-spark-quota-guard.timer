@@ -1,0 +1,11 @@
+[Unit]
+Description=Run New API CLIProxyAPI Spark quota guard every minute
+
+[Timer]
+OnBootSec=105s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=new-api-cliproxy-cpa-spark-quota-guard.service
+
+[Install]
+WantedBy=timers.target
