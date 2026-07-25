@@ -162,6 +162,10 @@ type CliproxyCPAQuotaAccount = {
 }
 
 type CliproxyCPAQuotaMeta = {
+  sourceType: string | null
+  unit: string | null
+  quotaFeature: string | null
+  quotaFeatureLimitName: string | null
   guardMode: string | null
   shareLimitPercent: number | null
   remainingSharePercent: number | null
@@ -435,6 +439,7 @@ function parseCliproxyCPAQuotaMeta(
   try {
     const parsed = asObject(JSON.parse(otherInfo))
     const quotaSource = asObject(parsed?.quota_source)
+    const quotaRawSource = asObject(quotaSource?.raw_source)
     const quotaSourceWindows = quotaSourceWindowsByName(quotaSource?.windows)
     const guard = asObject(parsed?.cliproxy_cpa_quota_guard)
     const health = asObject(guard?.health)
@@ -470,6 +475,23 @@ function parseCliproxyCPAQuotaMeta(
       .filter((value): value is number => value != null && value > 0)
 
     return {
+      sourceType:
+        typeof quotaSource?.source_type === 'string'
+          ? quotaSource.source_type
+          : null,
+      unit: typeof quotaSource?.unit === 'string' ? quotaSource.unit : null,
+      quotaFeature:
+        typeof health.quota_feature === 'string'
+          ? health.quota_feature
+          : typeof quotaRawSource?.quota_feature === 'string'
+            ? quotaRawSource.quota_feature
+            : null,
+      quotaFeatureLimitName:
+        typeof health.quota_feature_limit_name === 'string'
+          ? health.quota_feature_limit_name
+          : typeof quotaRawSource?.quota_feature_limit_name === 'string'
+            ? quotaRawSource.quota_feature_limit_name
+            : null,
       shareLimitPercent,
       remainingSharePercent: numberValue(health.remaining_share_percent),
       usableBalanceUnits:
@@ -533,6 +555,29 @@ function formatCompactTimestamp(timestamp: number | null | undefined): string {
 
 function formatCliproxyCPAUnits(value: number | null | undefined): string {
   return value == null || !Number.isFinite(value) ? '-' : formatBalance(value)
+}
+
+function isCliproxyCPAModelQuota(meta: CliproxyCPAQuotaMeta): boolean {
+  return (
+    meta.sourceType === 'model_quota_percent' ||
+    meta.guardMode === 'model_quota' ||
+    Boolean(meta.quotaFeature)
+  )
+}
+
+function getCliproxyCPAModelQuotaPercent(
+  meta: CliproxyCPAQuotaMeta
+): number | null {
+  return (
+    meta.usableBalanceUnits ??
+    meta.weekly?.remainingPercent ??
+    meta.fiveHour?.remainingPercent ??
+    null
+  )
+}
+
+function getCliproxyCPAModelQuotaLabel(meta: CliproxyCPAQuotaMeta): string {
+  return meta.quotaFeatureLimitName || meta.quotaFeature || '模型独立额度'
 }
 
 function formatResetCreditsAvailable(value: number | null | undefined): string {
@@ -695,6 +740,14 @@ function getCliproxyCPASummaryWindowPercent(
 }
 
 function formatCliproxyCPASummary(meta: CliproxyCPAQuotaMeta): string {
+  if (isCliproxyCPAModelQuota(meta)) {
+    const parts = [formatPercent(getCliproxyCPAModelQuotaPercent(meta))]
+    if (meta.nextResetAt != null) {
+      parts.push(`刷新 ${formatCompactTimestamp(meta.nextResetAt)}`)
+    }
+    return parts.join(' · ')
+  }
+
   const fiveHourPercent = getCliproxyCPASummaryWindowPercent(
     meta.fiveHour,
     meta.guardMode
@@ -1183,6 +1236,57 @@ function CliproxyCPABucketDetails({
   )
 }
 
+function CliproxyCPAModelQuotaDetails({
+  meta,
+}: {
+  meta: CliproxyCPAQuotaMeta
+}) {
+  const availablePercent = getCliproxyCPAModelQuotaPercent(meta)
+
+  return (
+    <div className='text-foreground w-[320px] max-w-[calc(100vw-2rem)] space-y-2'>
+      <div className='bg-background border-border space-y-3 rounded-md border p-3 shadow-sm'>
+        <div className='flex items-start justify-between gap-3'>
+          <div className='min-w-0'>
+            <p className='truncate text-xs font-semibold'>
+              {getCliproxyCPAModelQuotaLabel(meta)}
+            </p>
+            <p className='text-foreground/70 text-[11px]'>Pro 专属模型额度</p>
+          </div>
+          <div className='shrink-0 text-right tabular-nums'>
+            <p className='text-sm font-semibold'>
+              {formatPercent(availablePercent)}
+            </p>
+            <p className='text-foreground/70 text-[11px]'>剩余</p>
+          </div>
+        </div>
+        {meta.fiveHour && (
+          <CliproxyCPAQuotaProgress
+            label='5h 剩余'
+            window={meta.fiveHour}
+            updatedAt={meta.updatedAt}
+          />
+        )}
+        {meta.weekly && (
+          <CliproxyCPAQuotaProgress
+            label='7d 剩余'
+            window={meta.weekly}
+            updatedAt={meta.updatedAt}
+          />
+        )}
+      </div>
+      {meta.updatedAt && (
+        <div className='text-foreground/70 flex justify-between gap-2 text-[11px]'>
+          <span>数据更新时间</span>
+          <span className='tabular-nums'>
+            {formatCompactTimestamp(meta.updatedAt)}
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function CliproxyCPAQuotaDetails({
   meta,
   channelId,
@@ -1192,6 +1296,10 @@ function CliproxyCPAQuotaDetails({
   channelId: number
   onRequestResetCredit: (account: CliproxyCPAQuotaAccount) => void
 }) {
+  if (isCliproxyCPAModelQuota(meta)) {
+    return <CliproxyCPAModelQuotaDetails meta={meta} />
+  }
+
   const unavailableAccounts = meta.accounts.filter(
     (account) => !isCliproxyCPAAccountAvailable(account)
   )
@@ -1445,10 +1553,15 @@ function BalanceCell({ channel }: { channel: Channel }) {
     tokenSuffix && value !== '-' ? `${value}${tokenSuffix}` : value
 
   const usedDisplay = withSuffix(formatQuotaValue(usedQuota))
-  const remainingDisplay = withSuffix(formatBalance(balance))
+  const storedRemainingDisplay = withSuffix(formatBalance(balance))
   const maskedUsedLabel = `${t('Used:')} ${SENSITIVE_MASK}`
   const maskedRemainingLabel = `${t('Remaining:')} ${SENSITIVE_MASK}`
   const cliproxyCPAQuota = parseCliproxyCPAQuotaMeta(channel.other_info)
+  const cliproxyCPAModelQuota =
+    cliproxyCPAQuota != null && isCliproxyCPAModelQuota(cliproxyCPAQuota)
+  const remainingDisplay = cliproxyCPAModelQuota
+    ? formatPercent(getCliproxyCPAModelQuotaPercent(cliproxyCPAQuota))
+    : storedRemainingDisplay
 
   // Tag row: only show cumulative used quota
   if (isTagRow) {
@@ -1556,7 +1669,9 @@ function BalanceCell({ channel }: { channel: Channel }) {
                   ? channel.type === 57
                     ? t('Click to view Codex usage')
                     : cliproxyCPAQuota
-                      ? `CPA 可用额度: ${remainingDisplay}`
+                      ? cliproxyCPAModelQuota
+                        ? `${getCliproxyCPAModelQuotaLabel(cliproxyCPAQuota)}: ${remainingDisplay}`
+                        : `CPA 可用额度: ${remainingDisplay}`
                       : `${t('Remaining:')} ${remainingDisplay}`
                   : maskedRemainingLabel}
               </p>
