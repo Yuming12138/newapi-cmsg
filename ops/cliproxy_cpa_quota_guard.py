@@ -62,6 +62,10 @@ DEFAULT_CONFIG = {
     "auto_reconcile_runtime_quota": True,
     "auto_reconcile_confirmation_count": 2,
     "auto_reconcile_reset_tolerance_sec": 60,
+    "quota_feature": "",
+    "quota_feature_limit_name": "",
+    "quota_feature_plan_keywords": [],
+    "quota_feature_min_remaining_percent": 0.0,
 }
 
 OPTION_CONFIG_MAP = {
@@ -382,6 +386,20 @@ def string_list(value: Any) -> list[str]:
     return []
 
 
+def quota_feature_plan_selected(config: dict[str, Any], plan_type: str) -> bool:
+    if not str(config.get("quota_feature") or "").strip():
+        return True
+    keywords = string_list(config.get("quota_feature_plan_keywords"))
+    if not keywords:
+        return True
+    normalized = str(plan_type or "").strip().lower()
+    return any(keyword in normalized for keyword in keywords)
+
+
+def quota_feature_plan_is_known(plan_type: str) -> bool:
+    return str(plan_type or "").strip().lower() not in {"", "unknown"}
+
+
 def classify_account_bucket(
     config: dict[str, Any],
     auth_entry: dict[str, Any],
@@ -478,15 +496,17 @@ def call_wham_usages(config: dict[str, Any], env: dict[str, str]) -> list[dict[s
     entries = codex_auth_entries(auth_payload)
     accounts: list[dict[str, Any]] = []
     successful = 0
+    quota_feature_mode = bool(str(config.get("quota_feature") or "").strip())
 
     for auth_entry in entries:
         auth_index, _, account_id_hash = account_identity(auth_entry)
         bucket = classify_account_bucket(config, auth_entry, None, account_id_hash, auth_index)
+        plan_type = plan_type_from_entry(auth_entry)
         base_account = {
             "auth_index": auth_index,
             "account_id_hash": account_id_hash,
             "account_label": account_label_from_entry(auth_entry),
-            "plan_type": plan_type_from_entry(auth_entry),
+            "plan_type": plan_type,
             "bucket": bucket,
             "disabled": bool(auth_entry.get("disabled")),
             "unavailable": bool(auth_entry.get("unavailable")),
@@ -501,9 +521,36 @@ def call_wham_usages(config: dict[str, Any], env: dict[str, str]) -> list[dict[s
                 "reason": "auth_disabled",
             })
             continue
+        if (
+            quota_feature_mode
+            and quota_feature_plan_is_known(plan_type)
+            and not quota_feature_plan_selected(config, plan_type)
+        ):
+            accounts.append({
+                **base_account,
+                "ok": False,
+                "schedulable": False,
+                "skipped": True,
+                "reason": "quota_feature_plan_not_selected",
+            })
+            continue
         try:
             usage = call_wham_usage_for_auth(config, base_url, headers, timeout, auth_entry)
-            account = evaluate_account_quota(config, auth_entry, usage)
+            resolved_plan_type = plan_type_from_entry(auth_entry, usage)
+            if quota_feature_mode and not quota_feature_plan_selected(config, resolved_plan_type):
+                accounts.append({
+                    **base_account,
+                    "plan_type": resolved_plan_type,
+                    "ok": False,
+                    "schedulable": False,
+                    "skipped": True,
+                    "reason": "quota_feature_plan_not_selected",
+                })
+                continue
+            if quota_feature_mode:
+                account = evaluate_quota_feature_account(config, auth_entry, usage)
+            else:
+                account = evaluate_account_quota(config, auth_entry, usage)
             accounts.append(account)
             successful += 1
         except Exception as exc:
@@ -554,6 +601,22 @@ def call_cpa_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[s
 
 
 def call_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
+    quota_feature = str(config.get("quota_feature") or "").strip()
+    if quota_feature:
+        accounts = call_wham_usages(config, env)
+        result = evaluate_quota(config, accounts)
+        result.update({
+            "guard_mode": "model_quota",
+            "quota_feature": quota_feature,
+            "quota_feature_limit_name": str(config.get("quota_feature_limit_name") or "").strip(),
+            "quota_feature_min_remaining_percent": clamp_percent(
+                config.get("quota_feature_min_remaining_percent"),
+                0.0,
+            ),
+            "quota_health_source": "python_guard_feature",
+        })
+        return result
+
     if bool_value(config.get("prefer_cpa_quota_health_endpoint"), True):
         try:
             return call_cpa_quota_health(config, env)
@@ -703,8 +766,11 @@ def number(value: Any) -> float | None:
     return None
 
 
-def quota_windows(usage: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    rate_limit = first_non_empty(usage.get("rate_limit"), usage.get("rateLimit"))
+def rate_limit_windows(
+    rate_limit: dict[str, Any],
+    *,
+    require_weekly: bool,
+) -> dict[str, dict[str, Any]]:
     if not isinstance(rate_limit, dict):
         raise RuntimeError("missing_rate_limit")
     candidates = [
@@ -731,9 +797,43 @@ def quota_windows(usage: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "reset_at": int(reset_at) if reset_at else None,
             "reset_after_seconds": int(reset_after) if reset_after else None,
         }
-    if "7d" not in out:
+    if not out:
+        raise RuntimeError("missing_quota_window")
+    if require_weekly and "7d" not in out:
         raise RuntimeError("missing_required_7d_quota_window")
     return out
+
+
+def quota_windows(usage: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    rate_limit = first_non_empty(usage.get("rate_limit"), usage.get("rateLimit"))
+    if not isinstance(rate_limit, dict):
+        raise RuntimeError("missing_rate_limit")
+    return rate_limit_windows(rate_limit, require_weekly=True)
+
+
+def quota_feature_rate_limit(config: dict[str, Any], usage: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
+    feature = str(config.get("quota_feature") or "").strip()
+    limit_name = str(config.get("quota_feature_limit_name") or "").strip()
+    raw_limits = first_non_empty(usage.get("additional_rate_limits"), usage.get("additionalRateLimits"))
+    if not isinstance(raw_limits, list):
+        raise RuntimeError("missing_additional_rate_limits")
+
+    normalized_feature = feature.lower()
+    normalized_name = limit_name.lower()
+    for raw in raw_limits:
+        if not isinstance(raw, dict):
+            continue
+        item_feature = str(first_non_empty(raw.get("metered_feature"), raw.get("meteredFeature")) or "").strip()
+        item_name = str(first_non_empty(raw.get("limit_name"), raw.get("limitName")) or "").strip()
+        if normalized_feature and item_feature.lower() != normalized_feature:
+            continue
+        if not normalized_feature and normalized_name and item_name.lower() != normalized_name:
+            continue
+        rate_limit = first_non_empty(raw.get("rate_limit"), raw.get("rateLimit"))
+        if not isinstance(rate_limit, dict):
+            raise RuntimeError("quota_feature_missing_rate_limit")
+        return item_feature or feature, item_name or limit_name, rate_limit
+    raise RuntimeError("quota_feature_not_available")
 
 
 def account_window_remaining(windows: dict[str, dict[str, Any]], key: str) -> float:
@@ -826,6 +926,72 @@ def evaluate_account_quota(config: dict[str, Any], auth_entry: dict[str, Any], u
     }
 
 
+def evaluate_quota_feature_account(
+    config: dict[str, Any],
+    auth_entry: dict[str, Any],
+    usage: dict[str, Any],
+) -> dict[str, Any]:
+    feature, limit_name, rate_limit = quota_feature_rate_limit(config, usage)
+    windows = rate_limit_windows(rate_limit, require_weekly=False)
+    remaining_values = [
+        float(value)
+        for value in (
+            number(window.get("remaining_percent"))
+            for window in windows.values()
+            if isinstance(window, dict)
+        )
+        if value is not None
+    ]
+    if not remaining_values:
+        raise RuntimeError("quota_feature_missing_remaining_percent")
+
+    threshold = clamp_percent(config.get("quota_feature_min_remaining_percent"), 0.0)
+    raw_remaining = max(0.0, min(100.0, min(remaining_values)))
+    allowed = bool_value(first_non_empty(rate_limit.get("allowed"), True), True)
+    limit_reached = bool_value(first_non_empty(rate_limit.get("limit_reached"), rate_limit.get("limitReached")), False)
+    disabled = bool(auth_entry.get("disabled"))
+    runtime_unavailable = bool(auth_entry.get("unavailable"))
+    quota_available = allowed and not limit_reached and raw_remaining > threshold + 0.000001
+    reason: str | None = None
+    if disabled:
+        reason = "auth_disabled"
+    elif runtime_unavailable:
+        reason = "auth_unavailable"
+    elif not quota_available:
+        reason = "quota_feature_exhausted" if raw_remaining <= 0.000001 or limit_reached or not allowed else "quota_feature_low_watermark"
+
+    guard_auth = usage.get("_guard_auth") if isinstance(usage.get("_guard_auth"), dict) else {}
+    auth_index = str(guard_auth.get("auth_index") or "").strip()
+    account_id_hash = str(guard_auth.get("account_id_hash") or "").strip()
+    units_per_percent = max(0.0, float(number(config.get("balance_units_per_percent")) or 1.0))
+    usable_remaining = raw_remaining if reason is None else 0.0
+    return {
+        "ok": True,
+        "schedulable": reason is None,
+        "auth_index": auth_index,
+        "account_id_hash": account_id_hash,
+        "account_label": account_label_from_entry(auth_entry),
+        "bucket": "personal",
+        "can_exhaust": True,
+        "quota_feature": feature,
+        "quota_feature_limit_name": limit_name,
+        "quota_feature_min_remaining_percent": threshold,
+        "remaining_share_percent": round(usable_remaining, 6),
+        "raw_remaining_percent": round(raw_remaining, 6),
+        "balance_units": round(raw_remaining * units_per_percent, 6),
+        "usable_balance_units": round(usable_remaining * units_per_percent, 6),
+        "plan_type": usage.get("plan_type") or usage.get("planType") or guard_auth.get("plan_type_hint"),
+        "disabled": disabled,
+        "unavailable": runtime_unavailable,
+        "runtime_unavailable": runtime_unavailable,
+        "reason": reason,
+        "windows": windows,
+        "quota_exhausted_window": exhausted_quota_window(windows),
+        "allowed": allowed,
+        "limit_reached": limit_reached,
+    }
+
+
 def aggregate_windows(accounts: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for name in ("5h", "7d"):
@@ -897,6 +1063,11 @@ def account_summary(account: dict[str, Any]) -> dict[str, Any]:
         "protected_reserve_warning",
         "reset_credits_available",
         "windows",
+        "quota_feature",
+        "quota_feature_limit_name",
+        "quota_feature_min_remaining_percent",
+        "allowed",
+        "limit_reached",
     ]
     return {key: account.get(key) for key in keys if key in account}
 
@@ -1300,12 +1471,19 @@ def build_quota_source(result: dict[str, Any], balance: float, spendable: bool, 
         status = "available"
         reason = "within_budget"
 
-    source_type = "shared_protected_rolling_quota" if (
-        quota_source_has_protected_bucket(result) or quota_source_reserve_policy(result)
-    ) else "rolling_window_quota"
+    quota_feature = str(result.get("quota_feature") or "").strip()
+    source_type = "model_quota_percent" if quota_feature else (
+        "shared_protected_rolling_quota"
+        if quota_source_has_protected_bucket(result) or quota_source_reserve_policy(result)
+        else "rolling_window_quota"
+    )
+    raw_source: dict[str, Any] = {"source": "cliproxy_cpa_quota_guard"}
+    if quota_feature:
+        raw_source["quota_feature"] = quota_feature
+        raw_source["quota_feature_limit_name"] = str(result.get("quota_feature_limit_name") or "").strip()
     return {
         "source_type": source_type,
-        "unit": "quota_unit",
+        "unit": "percent" if quota_feature else "quota_unit",
         "balance": round(max(float(balance), 0.0), 6),
         "windows": quota_source_windows(result),
         "spendable": bool(spendable and status == "available"),
@@ -1313,7 +1491,7 @@ def build_quota_source(result: dict[str, Any], balance: float, spendable: bool, 
         "status_reason": reason,
         "reserve_policy": quota_source_reserve_policy(result),
         "updated_at": now,
-        "raw_source": {"source": "cliproxy_cpa_quota_guard"},
+        "raw_source": raw_source,
     }
 
 
@@ -1393,6 +1571,9 @@ def main() -> int:
     state = load_json(state_path, {})
     db = db_from_config(config)
     config = deep_merge(config, load_option_overrides(db))
+    if str(config.get("quota_feature") or "").strip():
+        config["dynamic_daily_budget_enabled"] = False
+        config["auto_reconcile_runtime_quota"] = False
 
     try:
         result = call_quota_health(config, env)

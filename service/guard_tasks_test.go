@@ -90,6 +90,37 @@ func TestSummarizeEstimatedQuotaPoolIncludesASXSAndCliproxySources(t *testing.T)
 	}
 }
 
+func TestSummarizeEstimatedQuotaPoolSkipsModelQuotaPercent(t *testing.T) {
+	channels := []*model.Channel{
+		{
+			Id:      1,
+			Name:    "asxs-cgm-1.2",
+			Group:   "asxs",
+			Status:  common.ChannelStatusEnabled,
+			Balance: 25,
+			OtherInfo: `{
+				"quota_source":{"source_type":"stored_value_usd","balance":25,"spendable":true,"status":"available"}
+			}`,
+		},
+		{
+			Id:      28,
+			Name:    "cliproxy-codex-spark",
+			Group:   "asxs",
+			Status:  common.ChannelStatusEnabled,
+			Balance: 100,
+			OtherInfo: `{
+				"cliproxy_cpa_quota_guard":{"managed":true,"health":{"ok":true,"quota_feature":"codex_bengalfox","usable_balance_units":100}},
+				"quota_source":{"source_type":"model_quota_percent","unit":"percent","balance":100,"spendable":true,"status":"available","raw_source":{"source":"cliproxy_cpa_quota_guard","quota_feature":"codex_bengalfox"}}
+			}`,
+		},
+	}
+
+	got := summarizeEstimatedQuotaPool(channels, 500000)
+	if got.ChannelCount != 1 || got.EstimatedUSD != 25 || got.UsableEstimatedUSD != 25 || got.RemainingQuota != 12500000 {
+		t.Fatalf("summarizeEstimatedQuotaPool() = %+v", got)
+	}
+}
+
 func TestInGuardMinuteWindow(t *testing.T) {
 	start, err := parseGuardHHMM("09:00")
 	if err != nil {
@@ -234,6 +265,39 @@ func TestUpdateCliproxyCPAQuotaGuardBalanceUsesBuckets(t *testing.T) {
 	}
 	if !handled || math.Abs(balance-55.75) > 0.000001 || math.Abs(channel.Balance-55.75) > 0.000001 {
 		t.Fatalf("balance=%v handled=%v channel.Balance=%v", balance, handled, channel.Balance)
+	}
+}
+
+func TestUpdateCliproxyCPAQuotaGuardBalanceUsesModelQuotaPercent(t *testing.T) {
+	channel := &model.Channel{
+		Id:      28,
+		Name:    "cliproxy-codex-spark",
+		Balance: 0,
+		OtherInfo: `{
+			"cliproxy_cpa_quota_guard": {
+				"managed": true,
+				"health": {
+					"ok": true,
+					"quota_feature": "codex_bengalfox",
+					"quota_feature_limit_name": "GPT-5.3-Codex-Spark",
+					"usable_balance_units": 100,
+					"windows": {"7d": {"remaining_percent": 100, "used_percent": 0}}
+				}
+			}
+		}`,
+	}
+
+	balance, handled, err := UpdateCliproxyCPAQuotaGuardBalance(channel)
+	if err != nil {
+		t.Fatalf("UpdateCliproxyCPAQuotaGuardBalance() error = %v", err)
+	}
+	if !handled || balance != 100 || channel.Balance != 100 {
+		t.Fatalf("balance=%v handled=%v channel.Balance=%v", balance, handled, channel.Balance)
+	}
+	otherInfo := parseGuardObject(channel.OtherInfo)
+	source, ok := otherInfo[channelQuotaSourceInfoKey].(map[string]interface{})
+	if !ok || source["source_type"] != "model_quota_percent" || source["unit"] != "percent" {
+		t.Fatalf("quota_source = %#v", otherInfo[channelQuotaSourceInfoKey])
 	}
 }
 

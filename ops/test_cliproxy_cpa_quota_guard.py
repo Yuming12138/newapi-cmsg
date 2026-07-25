@@ -27,6 +27,34 @@ def weekly_only_usage(used_percent: float, plan_type: str) -> dict:
     }
 
 
+def spark_usage(used_percent: float, *, allowed: bool = True, limit_reached: bool = False) -> dict:
+    return {
+        "plan_type": "pro",
+        "additional_rate_limits": [
+            {
+                "limit_name": "GPT-5.3-Codex-Spark",
+                "metered_feature": "codex_bengalfox",
+                "rate_limit": {
+                    "allowed": allowed,
+                    "limit_reached": limit_reached,
+                    "primary_window": {
+                        "limit_window_seconds": guard.WINDOW_7D_SECONDS,
+                        "used_percent": used_percent,
+                        "reset_at": 1_805_600_367,
+                        "reset_after_seconds": guard.WINDOW_7D_SECONDS - 825,
+                    },
+                    "secondary_window": None,
+                },
+            }
+        ],
+        "_guard_auth": {
+            "auth_index": "pro-auth-index",
+            "account_id_hash": "pro-account-hash",
+            "plan_type_hint": "pro",
+        },
+    }
+
+
 def runtime_quota_account(runtime_reset_at: int, upstream_reset_at: int, *, quota: bool = True) -> dict:
     return {
         "auth_index": "auth-index-a",
@@ -110,6 +138,82 @@ class QuotaWindowCompatibilityTest(unittest.TestCase):
         self.assertTrue(pro["protected_reserve_warning"])
         self.assertTrue(pro["schedulable"])
         self.assertIsNone(pro["reason"])
+
+
+class QuotaFeatureTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.config = dict(guard.DEFAULT_CONFIG)
+        self.config.update({
+            "quota_feature": "codex_bengalfox",
+            "quota_feature_limit_name": "GPT-5.3-Codex-Spark",
+            "quota_feature_plan_keywords": ["pro"],
+            "quota_feature_min_remaining_percent": 0.0,
+            "balance_units_per_percent": 1.0,
+        })
+
+    def test_spark_quota_is_evaluated_independently(self) -> None:
+        result = guard.evaluate_quota_feature_account(self.config, {}, spark_usage(0.0))
+
+        self.assertTrue(result["schedulable"])
+        self.assertEqual("codex_bengalfox", result["quota_feature"])
+        self.assertEqual(100.0, result["raw_remaining_percent"])
+        self.assertEqual(100.0, result["usable_balance_units"])
+        self.assertEqual(guard.WINDOW_7D_SECONDS, result["windows"]["7d"]["duration_seconds"])
+
+    def test_spark_quota_can_be_fully_exhausted(self) -> None:
+        result = guard.evaluate_quota_feature_account(
+            self.config,
+            {},
+            spark_usage(100.0, allowed=False, limit_reached=True),
+        )
+
+        self.assertFalse(result["schedulable"])
+        self.assertEqual("quota_feature_exhausted", result["reason"])
+        self.assertEqual(0.0, result["usable_balance_units"])
+
+    def test_feature_plan_filter_skips_plus_accounts(self) -> None:
+        self.assertTrue(guard.quota_feature_plan_selected(self.config, "pro"))
+        self.assertFalse(guard.quota_feature_plan_selected(self.config, "plus"))
+
+    def test_unknown_auth_plan_is_resolved_from_usage_before_filtering(self) -> None:
+        entries = [
+            {"provider": "codex", "auth_index": "pro-auth", "account_id": "pro-account"},
+            {"provider": "codex", "auth_index": "plus-auth", "account_id": "plus-account"},
+        ]
+        plus_usage = weekly_only_usage(10.0, "plus")
+        with (
+            mock.patch.object(guard, "request_json", return_value={"files": entries}),
+            mock.patch.object(
+                guard,
+                "call_wham_usage_for_auth",
+                side_effect=[spark_usage(20.0), plus_usage],
+            ) as usage_request,
+        ):
+            accounts = guard.call_wham_usages(
+                {**self.config, "cpa_base_url": "http://127.0.0.1:8317"},
+                {"CPA_MANAGEMENT_KEY": "test-management-key"},
+            )
+
+        self.assertEqual(2, usage_request.call_count)
+        self.assertTrue(accounts[0]["ok"])
+        self.assertEqual("pro", accounts[0]["plan_type"])
+        self.assertTrue(accounts[1]["skipped"])
+        self.assertEqual("plus", accounts[1]["plan_type"])
+        self.assertEqual("quota_feature_plan_not_selected", accounts[1]["reason"])
+
+    def test_feature_quota_source_uses_percent_units(self) -> None:
+        account = guard.evaluate_quota_feature_account(self.config, {}, spark_usage(25.0))
+        result = guard.evaluate_quota(self.config, [account])
+        result.update({
+            "quota_feature": "codex_bengalfox",
+            "quota_feature_limit_name": "GPT-5.3-Codex-Spark",
+        })
+
+        source = guard.build_quota_source(result, 75.0, True, 1_800_000_000)
+
+        self.assertEqual("model_quota_percent", source["source_type"])
+        self.assertEqual("percent", source["unit"])
+        self.assertEqual("codex_bengalfox", source["raw_source"]["quota_feature"])
 
 
 class DynamicDailyBudgetTest(unittest.TestCase):
