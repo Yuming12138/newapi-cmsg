@@ -30,7 +30,14 @@ func setupUserDeleteControllerTest(t *testing.T) {
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserOAuthBinding{}, &model.Token{}))
+	require.NoError(t, db.AutoMigrate(
+		&model.User{},
+		&model.UserOAuthBinding{},
+		&model.Token{},
+		&model.TwoFA{},
+		&model.TwoFABackupCode{},
+		&model.PasskeyCredential{},
+	))
 
 	model.DB = db
 	common.RedisEnabled = false
