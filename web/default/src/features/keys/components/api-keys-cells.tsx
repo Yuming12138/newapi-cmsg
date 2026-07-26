@@ -20,6 +20,7 @@ import { useState, useCallback } from 'react'
 import { Check, Copy, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { copyToClipboard } from '@/lib/copy-to-clipboard'
+import { formatQuota } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import {
   Popover,
@@ -137,6 +138,27 @@ export function ApiKeyCell({ apiKey }: { apiKey: ApiKey }) {
         </TooltipContent>
       </Tooltip>
     </div>
+  )
+}
+
+export function UnlimitedQuotaBadge({ used }: { used: number }) {
+  const { t } = useTranslation()
+
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className='inline-flex cursor-help' />}>
+        <StatusBadge
+          label={t('Unlimited')}
+          variant='neutral'
+          copyable={false}
+        />
+      </TooltipTrigger>
+      <TooltipContent side='top'>
+        <span className='text-xs'>
+          {t('Used:')} {formatQuota(used)}
+        </span>
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
