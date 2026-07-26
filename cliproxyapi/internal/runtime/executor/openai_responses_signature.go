@@ -20,6 +20,7 @@ func sanitizeOpenAIResponsesReasoningEncryptedContent(ctx context.Context, provi
 	if provider == "" {
 		provider = "openai responses upstream"
 	}
+	stripOrphanReasoningIDs := !gjson.GetBytes(body, "store").Bool()
 
 	updated := body
 	for index, item := range input.Array() {
@@ -27,9 +28,24 @@ func sanitizeOpenAIResponsesReasoningEncryptedContent(ctx context.Context, provi
 			continue
 		}
 
+		itemIDPath := fmt.Sprintf("input.%d.id", index)
+		itemID := strings.TrimSpace(item.Get("id").String())
+		if itemID == "" {
+			itemID = fmt.Sprintf("input[%d]", index)
+		}
+
 		encryptedContentPath := fmt.Sprintf("input.%d.encrypted_content", index)
 		encryptedContent := gjson.GetBytes(updated, encryptedContentPath)
 		if !encryptedContent.Exists() {
+			if stripOrphanReasoningIDs && item.Get("id").Exists() {
+				next, err := sjson.DeleteBytes(updated, itemIDPath)
+				if err != nil {
+					helps.LogWithRequestID(ctx).Debugf("%s: failed to drop orphan reasoning id at input[%d]: %v", provider, index, err)
+					continue
+				}
+				updated = next
+				helps.LogWithRequestID(ctx).Debugf("%s: dropped orphan reasoning id at input[%d] item_id=%q reason=missing encrypted_content with store disabled", provider, index, itemID)
+			}
 			continue
 		}
 
@@ -57,11 +73,14 @@ func sanitizeOpenAIResponsesReasoningEncryptedContent(ctx context.Context, provi
 			continue
 		}
 		updated = next
-
-		itemID := strings.TrimSpace(gjson.GetBytes(updated, fmt.Sprintf("input.%d.id", index)).String())
-		if itemID == "" {
-			itemID = fmt.Sprintf("input[%d]", index)
+		if stripOrphanReasoningIDs && item.Get("id").Exists() {
+			if next, err = sjson.DeleteBytes(updated, itemIDPath); err != nil {
+				helps.LogWithRequestID(ctx).Debugf("%s: failed to drop reasoning id after invalid encrypted_content at input[%d]: %v", provider, index, err)
+			} else {
+				updated = next
+			}
 		}
+
 		helps.LogWithRequestID(ctx).Debugf("%s: dropped invalid reasoning encrypted_content at input[%d] item_id=%q reason=%s", provider, index, itemID, reason)
 	}
 	return updated
