@@ -29,7 +29,8 @@ func (h *Handler) ConsumeCodexResetCredit(c *gin.Context) {
 	}
 
 	var req struct {
-		AuthIndex string `json:"auth_index"`
+		AuthIndex       string `json:"auth_index"`
+		RedeemRequestID string `json:"redeem_request_id"`
 	}
 	if errBindJSON := c.ShouldBindJSON(&req); errBindJSON != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -52,7 +53,11 @@ func (h *Handler) ConsumeCodexResetCredit(c *gin.Context) {
 		return
 	}
 
-	redeemID := uuid.NewString()
+	redeemID, errRedeemID := codexResetRedeemRequestID(req.RedeemRequestID)
+	if errRedeemID != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": errRedeemID.Error()})
+		return
+	}
 	token, errToken := h.codexAccessTokenForReset(c.Request.Context(), auth)
 	if errToken != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": errToken.Error()})
@@ -92,6 +97,18 @@ func (h *Handler) ConsumeCodexResetCredit(c *gin.Context) {
 		"auth_index": authIndex,
 		"models":     models,
 	})
+}
+
+func codexResetRedeemRequestID(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return uuid.NewString(), nil
+	}
+	parsed, errParse := uuid.Parse(value)
+	if errParse != nil {
+		return "", fmt.Errorf("redeem_request_id must be a valid UUID")
+	}
+	return parsed.String(), nil
 }
 
 var errCodexResetUnauthorized = fmt.Errorf("codex reset unauthorized")

@@ -23,6 +23,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -62,6 +63,13 @@ DEFAULT_CONFIG = {
     "auto_reconcile_runtime_quota": True,
     "auto_reconcile_confirmation_count": 2,
     "auto_reconcile_reset_tolerance_sec": 60,
+    "reset_credit_grace_enabled": False,
+    "reset_credit_release_before_sec": 24 * 60 * 60,
+    "reset_credit_auto_consume_before_sec": 10 * 60,
+    "reset_credit_auto_consume_remaining_percent": 1.0,
+    "reset_credit_retry_interval_sec": 60,
+    "reset_credit_confirmation_timeout_sec": 5 * 60,
+    "reset_credit_plan_keywords": ["pro"],
     "quota_feature": "",
     "quota_feature_limit_name": "",
     "quota_feature_plan_keywords": [],
@@ -74,6 +82,10 @@ OPTION_CONFIG_MAP = {
     "cliproxy_cpa_quota_guard.min_remaining_percent_7d": ("min_remaining_percent_7d", "float"),
     "cliproxy_cpa_quota_guard.dynamic_daily_budget_enabled": ("dynamic_daily_budget_enabled", "bool"),
     "cliproxy_cpa_quota_guard.quota_reset_increase_threshold_percent": ("quota_reset_increase_threshold_percent", "float"),
+    "cliproxy_cpa_quota_guard.reset_credit_grace_enabled": ("reset_credit_grace_enabled", "bool"),
+    "cliproxy_cpa_quota_guard.reset_credit_release_before_sec": ("reset_credit_release_before_sec", "float"),
+    "cliproxy_cpa_quota_guard.reset_credit_auto_consume_before_sec": ("reset_credit_auto_consume_before_sec", "float"),
+    "cliproxy_cpa_quota_guard.reset_credit_auto_consume_remaining_percent": ("reset_credit_auto_consume_remaining_percent", "float"),
 }
 
 
@@ -1207,6 +1219,363 @@ def protected_weekly_budget_snapshot(result: dict[str, Any], now: int) -> dict[s
     }
 
 
+def reset_credit_timestamp(value: Any) -> int | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return int(parsed.timestamp())
+
+
+def reset_credit_account_key(account: dict[str, Any]) -> str:
+    return str(first_non_empty(account.get("account_id_hash"), account.get("auth_index")) or "").strip()
+
+
+def reset_credit_plan_selected(config: dict[str, Any], account: dict[str, Any]) -> bool:
+    plan = str(account.get("plan_type") or "").strip().lower()
+    keywords = string_list(config.get("reset_credit_plan_keywords")) or ["pro"]
+    return bool(plan) and any(keyword.lower() in plan for keyword in keywords)
+
+
+def reset_credit_current(account: dict[str, Any]) -> dict[str, Any] | None:
+    credits = account.get("reset_credits")
+    if not isinstance(credits, list):
+        return None
+    candidates: list[dict[str, Any]] = []
+    for raw_credit in credits:
+        if not isinstance(raw_credit, dict):
+            continue
+        status = str(raw_credit.get("status") or "available").strip().lower()
+        if status != "available":
+            continue
+        expires_at = str(raw_credit.get("expires_at") or "").strip()
+        expires_ts = reset_credit_timestamp(expires_at)
+        if expires_ts is None:
+            continue
+        reset_type = str(raw_credit.get("reset_type") or "codex_rate_limits").strip()
+        id_suffix = str(raw_credit.get("id_suffix") or "").strip()
+        credit_key = hashlib.sha256(
+            f"{reset_type}|{id_suffix}|{expires_at}".encode("utf-8")
+        ).hexdigest()[:24]
+        candidates.append({
+            "credit_key": credit_key,
+            "expires_at": expires_at,
+            "expires_ts": expires_ts,
+            "reset_type": reset_type,
+            "id_suffix": id_suffix,
+        })
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: int(item["expires_ts"]))
+
+
+def reset_credit_quota_snapshot(account: dict[str, Any]) -> dict[str, Any]:
+    windows = account.get("windows")
+    if not isinstance(windows, dict):
+        return {"minimum_remaining_percent": None, "reset_at": {}}
+    remaining: list[float] = []
+    reset_at: dict[str, int] = {}
+    for window_name in ("5h", "7d"):
+        window = windows.get(window_name)
+        if not isinstance(window, dict):
+            continue
+        remaining_percent = number(window.get("remaining_percent"))
+        if remaining_percent is not None:
+            remaining.append(max(0.0, float(remaining_percent)))
+        reset_timestamp = number(window.get("reset_at"))
+        if reset_timestamp is not None and reset_timestamp > 0:
+            reset_at[window_name] = int(reset_timestamp)
+    return {
+        "minimum_remaining_percent": min(remaining) if remaining else None,
+        "reset_at": reset_at,
+    }
+
+
+def reset_credit_quota_refilled(config: dict[str, Any], previous: dict[str, Any], current: dict[str, Any]) -> bool:
+    previous_reset_at = previous.get("reset_at") if isinstance(previous.get("reset_at"), dict) else {}
+    current_reset_at = current.get("reset_at") if isinstance(current.get("reset_at"), dict) else {}
+    for window_name, current_value in current_reset_at.items():
+        previous_value = int(number(previous_reset_at.get(window_name)) or 0)
+        if int(current_value) > previous_value:
+            return True
+
+    previous_remaining = number(previous.get("minimum_remaining_percent"))
+    current_remaining = number(current.get("minimum_remaining_percent"))
+    increase_threshold = max(
+        0.0,
+        float(number(config.get("quota_reset_increase_threshold_percent")) or 10.0),
+    )
+    return (
+        previous_remaining is not None
+        and current_remaining is not None
+        and current_remaining - previous_remaining >= increase_threshold
+    )
+
+
+def reset_credit_redeem_request_id(account_key: str, credit_key: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"https://cmsg666.xyz/cpa/reset-credit/{account_key}/{credit_key}"))
+
+
+def consume_reset_credit(
+    config: dict[str, Any],
+    env: dict[str, str],
+    auth_index: str,
+    redeem_request_id: str,
+) -> dict[str, Any]:
+    auth_index = str(auth_index or "").strip()
+    if not auth_index:
+        raise RuntimeError("missing_auth_index")
+    base_url = str(config.get("cpa_base_url") or "").rstrip("/")
+    if not base_url:
+        raise RuntimeError("empty_cpa_base_url")
+    headers = management_headers(env, base_url)
+    if not headers.get("Authorization") and not headers.get("X-Management-Key"):
+        raise RuntimeError("missing_cpa_management_credentials")
+    payload = request_json(
+        base_url + "/v0/management/consume-codex-reset-credit",
+        headers,
+        int(config.get("timeout_sec") or 30),
+        {
+            "auth_index": auth_index,
+            "redeem_request_id": redeem_request_id,
+        },
+    )
+    if str(payload.get("status") or "").lower() != "ok":
+        raise RuntimeError("reset_credit_consume_invalid_response")
+    return payload
+
+
+def apply_reset_credit_grace(
+    config: dict[str, Any],
+    env: dict[str, str],
+    result: dict[str, Any],
+    state: dict[str, Any],
+    now: int | None = None,
+    allow_consume: bool = True,
+) -> dict[str, Any]:
+    now_ts = int(time.time()) if now is None else int(now)
+    enabled = bool_value(config.get("reset_credit_grace_enabled"), False) and not str(
+        config.get("quota_feature") or ""
+    ).strip()
+    summary: dict[str, Any] = {
+        "enabled": enabled,
+        "active": False,
+        "active_account_count": 0,
+        "confirmed_reset_count": 0,
+        "manual_reset_count": 0,
+        "auto_reset_count": 0,
+        "expired_without_reset_count": 0,
+        "consume_success_count": 0,
+        "consume_error_count": 0,
+        "updated_at": now_ts,
+    }
+    if not enabled or not result.get("ok"):
+        result["reset_credit_grace"] = summary
+        return result
+
+    accounts = result.get("accounts")
+    if not isinstance(accounts, list):
+        result["reset_credit_grace"] = summary
+        return result
+
+    grace_state = state.setdefault("reset_credit_grace", {})
+    account_states = grace_state.setdefault("accounts", {})
+    history = grace_state.setdefault("history", [])
+    credit_overrides: dict[str, dict[str, Any]] = {}
+    current_accounts: dict[str, dict[str, Any]] = {}
+    for account in accounts:
+        if not isinstance(account, dict) or not account.get("ok") or not reset_credit_plan_selected(config, account):
+            continue
+        account_key = reset_credit_account_key(account)
+        if account_key:
+            current_accounts[account_key] = account
+
+    confirmation_timeout = max(
+        0,
+        int(number(config.get("reset_credit_confirmation_timeout_sec")) or 300),
+    )
+    for account_key, account_state in list(account_states.items()):
+        if not isinstance(account_state, dict) or account_state.get("status") not in {
+            "active",
+            "consume_error",
+            "awaiting_confirmation",
+        }:
+            continue
+        account = current_accounts.get(account_key)
+        if account is None:
+            continue
+        current_credit = reset_credit_current(account)
+        previous_credit_key = str(account_state.get("credit_key") or "")
+        same_credit = current_credit is not None and current_credit.get("credit_key") == previous_credit_key
+        expires_ts = int(number(account_state.get("expires_ts")) or 0)
+        if same_credit and (
+            now_ts < expires_ts
+            or (
+                account_state.get("auto_reset_succeeded_at")
+                and now_ts <= expires_ts + confirmation_timeout
+            )
+        ):
+            continue
+
+        current_snapshot = reset_credit_quota_snapshot(account)
+        previous_snapshot = account_state.get("quota_snapshot")
+        if not isinstance(previous_snapshot, dict):
+            previous_snapshot = {}
+        quota_refilled = reset_credit_quota_refilled(config, previous_snapshot, current_snapshot)
+        before_expiry = expires_ts > 0 and now_ts < expires_ts
+        auto_attempted = int(account_state.get("auto_reset_attempt_count") or 0) > 0
+        previous_available = number(account_state.get("baseline_available_count"))
+        current_available = number(account.get("reset_credits_available"))
+        credit_count_decreased = (
+            previous_available is not None
+            and current_available is not None
+            and current_available < previous_available
+        )
+        reset_confirmed = (
+            quota_refilled
+            or (before_expiry and not same_credit and credit_count_decreased)
+        )
+        if not reset_confirmed and before_expiry:
+            credit_overrides[account_key] = {
+                "credit_key": previous_credit_key,
+                "expires_at": account_state.get("expires_at"),
+                "expires_ts": expires_ts,
+                "reset_type": account_state.get("reset_type"),
+                "id_suffix": "",
+            }
+            continue
+        event = {
+            "account_key": account_key,
+            "credit_key": previous_credit_key,
+            "expires_at": account_state.get("expires_at"),
+            "completed_at": now_ts,
+        }
+        if reset_confirmed:
+            reset_kind = "auto" if auto_attempted else "manual"
+            account_state["status"] = "completed"
+            account_state["reset_kind"] = reset_kind
+            account_state["completed_at"] = now_ts
+            summary["confirmed_reset_count"] += 1
+            summary[f"{reset_kind}_reset_count"] += 1
+            event["event"] = reset_kind + "_reset_confirmed"
+        else:
+            account_state["status"] = "expired"
+            account_state["completed_at"] = now_ts
+            summary["expired_without_reset_count"] += 1
+            event["event"] = "expired_without_reset"
+        history.append(event)
+
+    release_before = max(0, int(number(config.get("reset_credit_release_before_sec")) or 86_400))
+    auto_before = max(0, int(number(config.get("reset_credit_auto_consume_before_sec")) or 600))
+    early_remaining = clamp_percent(config.get("reset_credit_auto_consume_remaining_percent"), 1.0)
+    retry_interval = max(1, int(number(config.get("reset_credit_retry_interval_sec")) or 60))
+    active_accounts: list[dict[str, Any]] = []
+
+    for account_key, account in current_accounts.items():
+        credit = credit_overrides.get(account_key) or reset_credit_current(account)
+        if credit is None:
+            continue
+        seconds_until_expiry = int(credit["expires_ts"]) - now_ts
+        if seconds_until_expiry <= 0 or seconds_until_expiry > release_before:
+            continue
+
+        account_state = account_states.get(account_key)
+        if not isinstance(account_state, dict) or account_state.get("credit_key") != credit["credit_key"]:
+            account_state = {
+                "status": "active",
+                "credit_key": credit["credit_key"],
+                "expires_at": credit["expires_at"],
+                "expires_ts": credit["expires_ts"],
+                "reset_type": credit["reset_type"],
+                "grace_started_at": now_ts,
+                "redeem_request_id": reset_credit_redeem_request_id(account_key, str(credit["credit_key"])),
+                "baseline_available_count": int(number(account.get("reset_credits_available")) or 0),
+                "quota_snapshot": reset_credit_quota_snapshot(account),
+                "auto_reset_attempt_count": 0,
+            }
+            account_states[account_key] = account_state
+
+        if account_state.get("status") in {"completed", "expired"}:
+            continue
+        account_state["last_seen_at"] = now_ts
+        account_state["seconds_until_expiry"] = seconds_until_expiry
+        snapshot = reset_credit_quota_snapshot(account)
+        minimum_remaining = number(snapshot.get("minimum_remaining_percent"))
+        due_reason = ""
+        if minimum_remaining is not None and minimum_remaining <= early_remaining + 0.000001:
+            due_reason = "quota_near_exhaustion"
+        elif seconds_until_expiry <= auto_before:
+            due_reason = "credit_expiring"
+
+        last_attempt_at = int(account_state.get("auto_reset_last_attempt_at") or 0)
+        can_attempt = (
+            allow_consume
+            and due_reason != ""
+            and not account_state.get("auto_reset_succeeded_at")
+            and now_ts - last_attempt_at >= retry_interval
+        )
+        if can_attempt:
+            account_state["auto_reset_last_attempt_at"] = now_ts
+            account_state["auto_reset_attempt_count"] = int(account_state.get("auto_reset_attempt_count") or 0) + 1
+            account_state["auto_reset_reason"] = due_reason
+            try:
+                consume_reset_credit(
+                    config,
+                    env,
+                    str(account.get("auth_index") or "").strip(),
+                    str(account_state["redeem_request_id"]),
+                )
+            except (urllib.error.URLError, urllib.error.HTTPError, socket.timeout, TimeoutError, RuntimeError) as exc:
+                account_state["status"] = "consume_error"
+                account_state["last_error"] = str(exc)[:180]
+                account_state["last_error_at"] = now_ts
+                summary["consume_error_count"] += 1
+            else:
+                account_state["status"] = "awaiting_confirmation"
+                account_state["auto_reset_succeeded_at"] = now_ts
+                account_state["last_error"] = None
+                summary["consume_success_count"] += 1
+
+        account["reset_credit_grace_active"] = True
+        account["reset_credit_grace_expires_at"] = credit["expires_at"]
+        account["reset_credit_auto_consume_at"] = dt.datetime.fromtimestamp(
+            int(credit["expires_ts"]) - auto_before,
+            dt.timezone.utc,
+        ).isoformat().replace("+00:00", "Z")
+        account["reset_credit_grace_state"] = account_state.get("status")
+        active_accounts.append({
+            "account_key": account_key,
+            "plan_type": account.get("plan_type"),
+            "expires_at": credit["expires_at"],
+            "auto_consume_at": account["reset_credit_auto_consume_at"],
+            "seconds_until_expiry": seconds_until_expiry,
+            "minimum_remaining_percent": minimum_remaining,
+            "state": account_state.get("status"),
+            "auto_reset_reason": account_state.get("auto_reset_reason"),
+        })
+
+    history[:] = history[-50:]
+    grace_state["updated_at"] = now_ts
+    summary["active"] = bool(active_accounts)
+    summary["active_account_count"] = len(active_accounts)
+    if active_accounts:
+        summary["accounts"] = active_accounts
+        summary["earliest_expires_at"] = min(item["expires_at"] for item in active_accounts)
+        summary["next_auto_reset_at"] = min(item["auto_consume_at"] for item in active_accounts)
+        summary["limits_released"] = True
+    else:
+        summary["limits_released"] = False
+    result["reset_credit_grace"] = summary
+    return result
+
+
 def apply_dynamic_daily_budget(
     config: dict[str, Any],
     result: dict[str, Any],
@@ -1214,6 +1583,19 @@ def apply_dynamic_daily_budget(
     now: int | None = None,
 ) -> dict[str, Any]:
     if not bool_value(config.get("dynamic_daily_budget_enabled"), False) or not result.get("ok"):
+        return result
+
+    reset_credit_grace = result.get("reset_credit_grace")
+    if isinstance(reset_credit_grace, dict) and reset_credit_grace.get("active"):
+        result["guard_mode"] = "bucket_reset_credit_grace"
+        result["dynamic_daily_budget"] = {
+            "enabled": True,
+            "applied": False,
+            "bypassed": True,
+            "reason": "reset_credit_grace_active",
+        }
+        if result.get("quota_ok", result.get("within_share")):
+            result["reason"] = "reset_credit_grace_active"
         return result
 
     now = int(time.time()) if now is None else int(now)
@@ -1253,6 +1635,7 @@ def apply_dynamic_daily_budget(
         current_remaining >= near_full_threshold and refill_increase >= near_full_min_increase
     )
     explicit_runtime_reset = int(number(nested(result, "auto_reconcile", "reset_count")) or 0) > 0
+    explicit_reset_credit = int(number(nested(result, "reset_credit_grace", "confirmed_reset_count")) or 0) > 0
 
     reset_reason = ""
     should_reset = False
@@ -1262,6 +1645,9 @@ def apply_dynamic_daily_budget(
     elif previous_day != day_key:
         should_reset = True
         reset_reason = "day_changed"
+    elif explicit_reset_credit:
+        should_reset = True
+        reset_reason = "reset_credit_consumed"
     elif explicit_runtime_reset:
         should_reset = True
         reset_reason = "runtime_quota_reset"
@@ -1574,6 +1960,7 @@ def main() -> int:
     if str(config.get("quota_feature") or "").strip():
         config["dynamic_daily_budget_enabled"] = False
         config["auto_reconcile_runtime_quota"] = False
+        config["reset_credit_grace_enabled"] = False
 
     try:
         result = call_quota_health(config, env)
@@ -1582,6 +1969,7 @@ def main() -> int:
             result = call_quota_health(config, env)
         if any(reconcile_summary.values()):
             result["auto_reconcile"] = reconcile_summary
+        result = apply_reset_credit_grace(config, env, result, state)
         result = apply_dynamic_daily_budget(config, result, state)
         state["failure_count"] = 0
         state["last_success_at"] = int(time.time())
