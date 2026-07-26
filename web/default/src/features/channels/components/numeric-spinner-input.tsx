@@ -24,6 +24,7 @@ import { Label } from '@/components/ui/label'
 interface NumericSpinnerInputProps {
   value: number | null | undefined
   onChange: (value: number) => void
+  onCommit?: () => void
   min?: number
   max?: number
   step?: number
@@ -35,6 +36,7 @@ interface NumericSpinnerInputProps {
 export function NumericSpinnerInput({
   value,
   onChange,
+  onCommit,
   min = 0,
   max,
   step = 1,
@@ -106,10 +108,20 @@ export function NumericSpinnerInput({
     }
   }
 
+  const handleControlBlur = (e: React.FocusEvent<HTMLDivElement>) => {
+    if (
+      e.relatedTarget instanceof Node &&
+      e.currentTarget.contains(e.relatedTarget)
+    ) {
+      return
+    }
+    onCommit?.()
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       e.preventDefault()
-      commitValue()
+      inputRef.current?.blur()
     } else if (e.key === 'Escape') {
       setEditing(false)
       setLocalValue(String(value ?? 0))
@@ -125,8 +137,9 @@ export function NumericSpinnerInput({
         <Label className='text-muted-foreground mr-1.5 text-xs'>{label}</Label>
       )}
       <div
+        onBlur={handleControlBlur}
         className={cn(
-          'group/spinner inline-flex h-7 items-center gap-0 rounded-md transition-colors',
+          'group/spinner border-input inline-flex h-7 items-center gap-0 rounded-md border transition-colors',
           !disabled && 'hover:bg-muted/60',
           editing && 'bg-muted/60 ring-primary/30 ring-1'
         )}
@@ -164,8 +177,9 @@ export function NumericSpinnerInput({
             type='button'
             onClick={handleStartEdit}
             disabled={disabled}
+            title={localValue}
             className={cn(
-              'h-7 min-w-8 cursor-text px-1 text-center font-mono text-sm tabular-nums',
+              'h-7 min-w-8 max-w-16 cursor-text truncate px-1 text-center font-mono text-sm tabular-nums',
               disabled && 'cursor-default opacity-50'
             )}
           >
