@@ -132,3 +132,42 @@ git log --oneline origin/dev/cmsg..origin/<branch-name>
 - `cmsg-root:/opt/new-api` 和 `cmsg-root:/opt/cliproxyapi` 只作为运行环境。
 - 服务器上的 Git 历史、源码目录和临时文件不能作为后续开发基线。
 - 上线后需要验证容器状态、健康检查和相关功能页面或 API。
+
+## 上游同步记录
+
+### 2026-07-26：New API 与 CPA 稳定性批次
+
+本轮采用逐项审查和手工移植，不直接整体合并上游主分支。审查基线：
+
+| 上游 | 审查 commit |
+|------|-------------|
+| `QuantumNous/new-api` | `3e1e728279884d83358811aec00980dd55f6ad4e` |
+| `router-for-me/CLIProxyAPI` | `42a00a2a6521b867c27f7ad096d08699db8e6d19` |
+
+本轮累计移植 **16 个逻辑改进**，由两个集成批次合入 `dev/cmsg`：
+
+| 集成 commit | 内容 |
+|-------------|------|
+| `14264dc43` | 第一批 12 项 New API 管理端、relay 与 CPA Codex 输入/工具调用防护 |
+| `6324679ed` | 第二批 4 项剩余可靠性改进 |
+
+第二批包含：
+
+1. 无限额度 API Key 仍显示实际已用额度。
+2. New API 代理 URL 校验、规范化客户端缓存和定向失效。
+3. CPA token accounting v2，避免缓存 token 与 reasoning token 重叠计算。
+4. 工具转换后没有可用工具时，CPA 不再发送 `tool_choice` 和 `parallel_tool_calls`。
+
+完成的整体验证：
+
+- New API：`go test ./...`
+- 默认前端：`cd web/default && bun run build:check`
+- CPA：`cd cliproxyapi && go test ./...`
+- CPA：`cd cliproxyapi && go build -o test-output ./cmd/server`
+
+暂缓项目：
+
+- Playground `auto` 分组模型列表：有实际需求，但 CMSG 默认前端需要单独适配，不能直接 cherry-pick。
+- 用户搜索防抖、充值金额可完全清空：低风险但不紧急，留待后续前端维护批次。
+- Gemini 新图片模型注册：仅在准备开放对应模型时移植。
+- CPA WebSocket、Multi-Agent V2、Claude 特定转换和 WebRTC 改动：当前现网路径未启用或回归风险较高，暂不合并。
