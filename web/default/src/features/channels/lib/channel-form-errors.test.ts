@@ -99,4 +99,47 @@ describe('channel form errors', () => {
     assert.ok(errors.advanced_custom?.length)
     assert.equal(hasAdvancedSettingsErrors(errors), true)
   })
+
+  test('accepts supported proxy URLs without path, query, or fragment', () => {
+    for (const proxy of [
+      'http://proxy.example:8080',
+      'https://proxy.example:8443/',
+      'socks5://proxy.example:1080',
+      'socks5h://proxy.example',
+    ]) {
+      const result = channelFormSchema.safeParse({
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'OpenAI',
+        type: 1,
+        key: 'sk-test',
+        models: 'gpt-4o',
+        group: ['default'],
+        proxy,
+      })
+
+      assert.equal(result.success, true, proxy)
+    }
+  })
+
+  test('rejects unsupported proxy URLs and legacy suffixes', () => {
+    for (const proxy of [
+      'ftp://proxy.example',
+      'http://proxy.example/path',
+      'http://proxy.example?token=x',
+      'http://proxy.example#fragment',
+      'http://proxy.example:0',
+    ]) {
+      const result = channelFormSchema.safeParse({
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'OpenAI',
+        type: 1,
+        key: 'sk-test',
+        models: 'gpt-4o',
+        group: ['default'],
+        proxy,
+      })
+
+      assert.equal(result.success, false, proxy)
+    }
+  })
 })

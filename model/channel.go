@@ -948,6 +948,9 @@ func (channel *Channel) ValidateSettings() error {
 			return err
 		}
 	}
+	if _, err := common.ParseProxyURLStrict(channelParams.Proxy); err != nil {
+		return fmt.Errorf("invalid channel proxy: %w", err)
+	}
 	channelOtherSettings := channel.GetOtherSettings()
 	if channel.Type == constant.ChannelTypeAdvancedCustom {
 		if channelOtherSettings.AdvancedCustom == nil {

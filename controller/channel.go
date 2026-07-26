@@ -461,6 +461,9 @@ func validateTwoFactorAuth(twoFA *model.TwoFA, code string) bool {
 
 // validateChannel 通用的渠道校验函数
 func validateChannel(channel *model.Channel, isAdd bool) error {
+	if channel == nil {
+		return fmt.Errorf("channel cannot be empty")
+	}
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
@@ -468,7 +471,7 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 
 	// 如果是添加操作，检查 channel 和 key 是否为空
 	if isAdd {
-		if channel == nil || channel.Key == "" {
+		if channel.Key == "" {
 			return fmt.Errorf("channel cannot be empty")
 		}
 
@@ -682,7 +685,6 @@ func AddChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	service.ResetProxyClientCache()
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -692,6 +694,13 @@ func AddChannel(c *gin.Context) {
 
 func DeleteChannel(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
+	channelProxy := ""
+	channelLookupFailed := false
+	if existing, err := model.GetChannelById(id, false); err == nil && existing != nil {
+		channelProxy = existing.GetSetting().Proxy
+	} else {
+		channelLookupFailed = true
+	}
 	channel := model.Channel{Id: id}
 	err := channel.Delete()
 	if err != nil {
@@ -699,6 +708,11 @@ func DeleteChannel(c *gin.Context) {
 		return
 	}
 	model.InitChannelCache()
+	if channelLookupFailed {
+		service.ResetProxyClientCache()
+	} else {
+		service.InvalidateProxyClient(channelProxy)
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -713,6 +727,9 @@ func DeleteDisabledChannel(c *gin.Context) {
 		return
 	}
 	model.InitChannelCache()
+	if rows > 0 {
+		service.ResetProxyClientCache()
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -749,6 +766,7 @@ func DisableTagChannels(c *gin.Context) {
 		return
 	}
 	model.InitChannelCache()
+	service.ResetProxyClientCache()
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -891,6 +909,13 @@ func UpdateChannel(c *gin.Context) {
 		})
 		return
 	}
+	originProxy := originChannel.GetSetting().Proxy
+	proxyChanged := false
+	if channel.Setting != nil {
+		newProxy, _ := service.NormalizeProxyURL(channel.GetSetting().Proxy)
+		normalizedOriginProxy, originProxyErr := service.NormalizeProxyURL(originProxy)
+		proxyChanged = originProxyErr != nil || normalizedOriginProxy != newProxy
+	}
 
 	// Always copy the original ChannelInfo so that fields like IsMultiKey and MultiKeySize are retained.
 	channel.ChannelInfo = originChannel.ChannelInfo
@@ -986,7 +1011,9 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 	model.InitChannelCache()
-	service.ResetProxyClientCache()
+	if proxyChanged {
+		service.InvalidateProxyClient(originProxy)
+	}
 	channel.Key = ""
 	clearChannelInfo(&channel.Channel)
 	c.JSON(http.StatusOK, gin.H{
