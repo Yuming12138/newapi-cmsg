@@ -33,8 +33,7 @@ git push origin dev/cmsg
 
 | 路径 | 说明 |
 |------|------|
-| `web/default/` | 当前主要前端，CMSG UI 修改优先放这里 |
-| `web/classic/` | 旧版前端，除非明确需要兼容，否则不作为主要修改目标 |
+| `web/default/` | 唯一前端（`web/classic/` 已于 2026-07-26 退役删除） |
 | `ops/` | 余额刷新、渠道守卫、额度管理等生产辅助脚本 |
 | `cliproxyapi/` | CMSG 使用的 CLIProxyAPI/CPA 中转站源码 |
 | `docs/proposals/` | 重要架构调整和上线方案记录 |
@@ -204,7 +203,7 @@ git log --oneline origin/dev/cmsg..origin/<branch-name>
 
 1. 上游前端提交只作参考，有价值的修复以**手工移植**方式进入 `web/default/`；同类修复优先只取后端部分（参照 `4aa08f917` 的处理）。
 2. 路径映射：上游 `web/src/<x>` ↔ CMSG `web/default/src/<x>`。搬迁 905/978 为纯改名，`src/` 内部结构两侧仍同构，移植时先做前缀替换再核对内容分歧。
-3. `web/classic/` 与 theme 切换机制由 CMSG 独立保留（上游已删）。若确认生产无 `theme=classic` 用户，可另行评估退役。
+3. `web/classic/` 与 theme 切换机制已于 2026-07-26 退役删除（确认生产无 `theme=classic` 用户后执行，`cleanup/retire-classic-frontend` 分支）。数据库中残留的 `theme` option 为惰性数据，无需清理。
 4. 后端同步策略不变：继续逐项审查、手工移植上游后端提交。
 
 关联暂缓项：上游 auth 重构（`31d70fca3` 后端部分：无状态 token、会话吊销、分布式强制下线，约 76 个后端文件，含 `controller/auth_session.go`、`model/user_session.go` 870 行等）作为独立安全项目排期移植，方案见 `docs/proposals/auth-stateless-session-port.md`。注意其上线会使全体已登录用户登出一次，需选窗口期；`172114422`（限流时保持登录态）依赖该重构，一并顺延。
