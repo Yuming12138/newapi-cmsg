@@ -28,7 +28,9 @@ plans
 
 electron/node_modules
 electron/dist
-data/
+# Runtime data directory only (anchored): a bare "data/" would also ignore
+# source dirs like web/default/src/features/usage-logs/data/.
+/data/
 .gomodcache/
 .gocache-temp
 .gopath
