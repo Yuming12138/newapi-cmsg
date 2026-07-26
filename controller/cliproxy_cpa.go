@@ -21,7 +21,8 @@ const (
 )
 
 type cliproxyCPAResetCreditRequest struct {
-	AuthIndex string `json:"auth_index"`
+	AuthIndex       string `json:"auth_index"`
+	RedeemRequestID string `json:"redeem_request_id,omitempty"`
 }
 
 func ConsumeCliproxyCPAResetCredit(c *gin.Context) {
@@ -153,7 +154,11 @@ func proxyCliproxyCPAManagementAuthAction(c *gin.Context, managementPath string,
 		return
 	}
 
-	payload, err := common.Marshal(gin.H{"auth_index": authIndex})
+	payloadData := gin.H{"auth_index": authIndex}
+	if redeemRequestID := strings.TrimSpace(req.RedeemRequestID); redeemRequestID != "" {
+		payloadData["redeem_request_id"] = redeemRequestID
+	}
+	payload, err := common.Marshal(payloadData)
 	if err != nil {
 		common.ApiError(c, err)
 		return

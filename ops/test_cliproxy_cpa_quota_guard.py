@@ -100,6 +100,40 @@ def dynamic_budget_result(remaining_percent: float, reset_at: int = 1_800_604_80
     }
 
 
+def reset_credit_result(
+    now: int,
+    expires_after: int,
+    *,
+    remaining_percent: float = 50.0,
+    available_count: int = 1,
+    include_credit: bool = True,
+    reset_at: int = 1_800_604_800,
+) -> dict:
+    result = dynamic_budget_result(remaining_percent, reset_at=reset_at)
+    account = result["accounts"][0]
+    account.update({
+        "auth_index": "pro-auth-index",
+        "account_id_hash": "pro-account-hash",
+        "plan_type": "pro",
+        "can_exhaust": False,
+        "schedulable": remaining_percent > 0,
+        "reset_credits_available": available_count,
+    })
+    if include_credit:
+        expires_at = guard.dt.datetime.fromtimestamp(
+            now + expires_after,
+            guard.dt.timezone.utc,
+        ).isoformat().replace("+00:00", "Z")
+        account["reset_credits"] = [{
+            "status": "available",
+            "reset_type": "codex_rate_limits",
+            "id_suffix": "credit-a",
+            "expires_at": expires_at,
+        }]
+        account["reset_credits_earliest_expires_at"] = expires_at
+    return result
+
+
 class QuotaWindowCompatibilityTest(unittest.TestCase):
     def test_weekly_only_window_is_accepted(self) -> None:
         windows = guard.quota_windows(weekly_only_usage(25.0, "plus"))
@@ -304,6 +338,161 @@ class DynamicDailyBudgetTest(unittest.TestCase):
         self.assertEqual(100.0, result["dynamic_daily_budget"]["baseline_remaining_percent"])
         self.assertEqual(0.0, result["dynamic_daily_budget"]["consumed_today_percent"])
         self.assertEqual("runtime_quota_reset", result["dynamic_daily_budget"]["baseline_reset_reason"])
+
+
+class ResetCreditGraceTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.config = dict(guard.DEFAULT_CONFIG)
+        self.config.update({
+            "dynamic_daily_budget_enabled": True,
+            "reset_credit_grace_enabled": True,
+            "reset_credit_release_before_sec": 24 * 60 * 60,
+            "reset_credit_auto_consume_before_sec": 10 * 60,
+            "reset_credit_auto_consume_remaining_percent": 1.0,
+            "reset_credit_retry_interval_sec": 60,
+            "timezone": "UTC",
+            "cpa_base_url": "http://127.0.0.1:8317",
+        })
+        self.env = {"CPA_MANAGEMENT_KEY": "test-management-key"}
+        self.now = 1_800_000_000
+
+    def test_grace_bypasses_dynamic_daily_budget_within_twenty_four_hours(self) -> None:
+        state: dict = {}
+        result = reset_credit_result(self.now, 12 * 60 * 60)
+
+        guarded = guard.apply_reset_credit_grace(self.config, self.env, result, state, self.now)
+        guarded = guard.apply_dynamic_daily_budget(self.config, guarded, state, self.now)
+
+        self.assertTrue(guarded["reset_credit_grace"]["active"])
+        self.assertTrue(guarded["reset_credit_grace"]["limits_released"])
+        self.assertTrue(guarded["dynamic_daily_budget"]["bypassed"])
+        self.assertEqual("reset_credit_grace_active", guarded["reason"])
+
+    def test_auto_reset_retries_with_same_redeem_request_id(self) -> None:
+        state: dict = {}
+        first_result = reset_credit_result(self.now, 10 * 60)
+        second_result = reset_credit_result(self.now, 10 * 60)
+
+        with mock.patch.object(
+            guard,
+            "consume_reset_credit",
+            side_effect=[TimeoutError("lost response"), {"status": "ok"}],
+        ) as consume:
+            first = guard.apply_reset_credit_grace(self.config, self.env, first_result, state, self.now)
+            second = guard.apply_reset_credit_grace(self.config, self.env, second_result, state, self.now + 60)
+
+        self.assertEqual(1, first["reset_credit_grace"]["consume_error_count"])
+        self.assertEqual(1, second["reset_credit_grace"]["consume_success_count"])
+        self.assertEqual(2, consume.call_count)
+        self.assertEqual(consume.call_args_list[0].args[3], consume.call_args_list[1].args[3])
+
+    def test_auto_reset_triggers_early_when_quota_is_nearly_exhausted(self) -> None:
+        state: dict = {}
+        result = reset_credit_result(self.now, 6 * 60 * 60, remaining_percent=0.5)
+
+        with mock.patch.object(guard, "consume_reset_credit", return_value={"status": "ok"}) as consume:
+            guarded = guard.apply_reset_credit_grace(self.config, self.env, result, state, self.now)
+
+        consume.assert_called_once()
+        self.assertEqual("quota_near_exhaustion", guarded["reset_credit_grace"]["accounts"][0]["auto_reset_reason"])
+
+    def test_manual_reset_restores_budget_and_rebuilds_baseline(self) -> None:
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(
+            self.config,
+            dynamic_budget_result(80.0),
+            state,
+            self.now - 60,
+        )
+        guard.apply_reset_credit_grace(
+            self.config,
+            self.env,
+            reset_credit_result(self.now, 12 * 60 * 60, remaining_percent=80.0),
+            state,
+            self.now,
+        )
+        reset_result = reset_credit_result(
+            self.now,
+            12 * 60 * 60,
+            remaining_percent=100.0,
+            available_count=0,
+            include_credit=False,
+            reset_at=1_801_209_600,
+        )
+
+        reset_result = guard.apply_reset_credit_grace(
+            self.config,
+            self.env,
+            reset_result,
+            state,
+            self.now + 60,
+        )
+        reset_result = guard.apply_dynamic_daily_budget(self.config, reset_result, state, self.now + 60)
+
+        self.assertFalse(reset_result["reset_credit_grace"]["active"])
+        self.assertEqual(1, reset_result["reset_credit_grace"]["manual_reset_count"])
+        self.assertEqual("reset_credit_consumed", reset_result["dynamic_daily_budget"]["baseline_reset_reason"])
+
+    def test_expired_credit_without_reset_does_not_report_confirmation(self) -> None:
+        state: dict = {}
+        guard.apply_reset_credit_grace(
+            self.config,
+            self.env,
+            reset_credit_result(self.now, 60, remaining_percent=40.0),
+            state,
+            self.now,
+            allow_consume=False,
+        )
+        expired_result = reset_credit_result(
+            self.now,
+            60,
+            remaining_percent=40.0,
+            available_count=0,
+            include_credit=False,
+        )
+
+        expired_result = guard.apply_reset_credit_grace(
+            self.config,
+            self.env,
+            expired_result,
+            state,
+            self.now + 61,
+            allow_consume=False,
+        )
+
+        self.assertFalse(expired_result["reset_credit_grace"]["active"])
+        self.assertEqual(0, expired_result["reset_credit_grace"]["confirmed_reset_count"])
+        self.assertEqual(1, expired_result["reset_credit_grace"]["expired_without_reset_count"])
+
+    def test_transient_reset_credit_probe_failure_keeps_grace_active(self) -> None:
+        state: dict = {}
+        guard.apply_reset_credit_grace(
+            self.config,
+            self.env,
+            reset_credit_result(self.now, 12 * 60 * 60),
+            state,
+            self.now,
+        )
+        transient = reset_credit_result(
+            self.now,
+            12 * 60 * 60,
+            available_count=0,
+            include_credit=False,
+        )
+        account = transient["accounts"][0]
+        account["reset_credits_available"] = None
+        account["reset_credits_error"] = "temporary upstream failure"
+
+        transient = guard.apply_reset_credit_grace(
+            self.config,
+            self.env,
+            transient,
+            state,
+            self.now + 60,
+        )
+
+        self.assertTrue(transient["reset_credit_grace"]["active"])
+        self.assertEqual(0, transient["reset_credit_grace"]["confirmed_reset_count"])
 
 
 class RuntimeQuotaReconcileTest(unittest.TestCase):

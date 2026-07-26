@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
@@ -135,6 +136,7 @@ func TestResetQuota_DoesNotAcceptAuthIDOrFileName(t *testing.T) {
 
 func TestConsumeCodexResetCredit_PostsUpstreamAndClearsQuota(t *testing.T) {
 	t.Setenv("MANAGEMENT_PASSWORD", "")
+	const redeemRequestID = "fb4bde11-6a89-52d8-ae65-3eec8d82be96"
 
 	manager := coreauth.NewManager(nil, nil, nil)
 	next := time.Now().Add(time.Hour)
@@ -185,8 +187,8 @@ func TestConsumeCodexResetCredit_PostsUpstreamAndClearsQuota(t *testing.T) {
 		if errDecode := json.NewDecoder(r.Body).Decode(&body); errDecode != nil {
 			t.Fatalf("failed to decode body: %v", errDecode)
 		}
-		if strings.TrimSpace(body["redeem_request_id"]) == "" {
-			t.Fatalf("redeem_request_id is required")
+		if body["redeem_request_id"] != redeemRequestID {
+			t.Fatalf("redeem_request_id = %q, want %q", body["redeem_request_id"], redeemRequestID)
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -200,7 +202,7 @@ func TestConsumeCodexResetCredit_PostsUpstreamAndClearsQuota(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(rec)
-	req := httptest.NewRequest(http.MethodPost, "/v0/management/consume-codex-reset-credit", strings.NewReader(`{"auth_index":"`+authIndex+`"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v0/management/consume-codex-reset-credit", strings.NewReader(`{"auth_index":"`+authIndex+`","redeem_request_id":"`+redeemRequestID+`"}`))
 	req.Header.Set("Content-Type", "application/json")
 	ctx.Request = req
 	h.ConsumeCodexResetCredit(ctx)
@@ -221,6 +223,30 @@ func TestConsumeCodexResetCredit_PostsUpstreamAndClearsQuota(t *testing.T) {
 	}
 	if updated.Quota.Exceeded || updated.Quota.Reason != "" || !updated.Quota.NextRecoverAt.IsZero() || updated.Quota.BackoffLevel != 0 {
 		t.Fatalf("updated auth quota = %+v, want cleared", updated.Quota)
+	}
+}
+
+func TestCodexResetRedeemRequestID(t *testing.T) {
+	const provided = "fb4bde11-6a89-52d8-ae65-3eec8d82be96"
+
+	generated, errGenerated := codexResetRedeemRequestID("")
+	if errGenerated != nil {
+		t.Fatalf("generated redeem request id: %v", errGenerated)
+	}
+	if _, errParse := uuid.Parse(generated); errParse != nil {
+		t.Fatalf("generated redeem request id = %q: %v", generated, errParse)
+	}
+
+	got, errProvided := codexResetRedeemRequestID("  " + provided + "  ")
+	if errProvided != nil {
+		t.Fatalf("provided redeem request id: %v", errProvided)
+	}
+	if got != provided {
+		t.Fatalf("provided redeem request id = %q, want %q", got, provided)
+	}
+
+	if _, errInvalid := codexResetRedeemRequestID("not-a-uuid"); errInvalid == nil {
+		t.Fatal("expected invalid redeem request id to fail")
 	}
 }
 
