@@ -168,14 +168,7 @@ func ListModels(c *gin.Context, modelType int) {
 		}
 		var models []string
 		if tokenGroup == "auto" {
-			for _, autoGroup := range service.GetUserAutoGroup(userGroup) {
-				groupModels := model.GetGroupEnabledModels(autoGroup)
-				for _, g := range groupModels {
-					if !common.StringsContains(models, g) {
-						models = append(models, g)
-					}
-				}
-			}
+			models = service.GetGroupsEnabledModels(service.GetUserAutoGroup(userGroup))
 		} else {
 			models = model.GetGroupEnabledModels(group)
 			for _, routedModel := range service.GetModelGroupRouteModels(userGroup, group) {

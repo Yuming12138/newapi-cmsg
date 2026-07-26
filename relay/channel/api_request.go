@@ -426,10 +426,12 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	return targetConn, nil
 }
 
-func startPingKeepAlive(c *gin.Context, info *common.RelayInfo, pingInterval time.Duration) context.CancelFunc {
+func startPingKeepAlive(c *gin.Context, info *common.RelayInfo, pingInterval time.Duration) (context.CancelFunc, <-chan struct{}) {
 	pingerCtx, stopPinger := context.WithCancel(context.Background())
+	done := make(chan struct{})
 
 	gopool.Go(func() {
+		defer close(done)
 		defer func() {
 			// 增加panic恢复处理
 			if r := recover(); r != nil {
@@ -491,43 +493,29 @@ func startPingKeepAlive(c *gin.Context, info *common.RelayInfo, pingInterval tim
 		}
 	})
 
-	return stopPinger
+	return stopPinger, done
 }
 
 func sendPingData(c *gin.Context, info *common.RelayInfo, mutex *sync.Mutex) error {
-	// 增加超时控制，防止锁死等待
-	done := make(chan error, 1)
-	go func() {
-		mutex.Lock()
-		defer mutex.Unlock()
+	mutex.Lock()
+	defer mutex.Unlock()
 
-		var err error
-		if info != nil && info.RelayFormat == types.RelayFormatClaude {
-			err = helper.ClaudePingData(c)
-		} else {
-			err = helper.PingData(c)
-		}
-		if err != nil {
-			logger.LogError(c, "SSE ping error: "+err.Error())
-			done <- err
-			return
-		}
-
-		if common2.DebugEnabled {
-			println("SSE ping data sent.")
-		}
-		done <- nil
-	}()
-
-	// 设置发送ping数据的超时时间
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(10 * time.Second):
-		return errors.New("SSE ping data send timeout")
-	case <-c.Request.Context().Done():
-		return errors.New("request context cancelled during ping")
+	// Bound the write so a slow client cannot block this goroutine forever;
+	// doRequest's defer waits for the pinger to exit before returning.
+	helper.ExtendWriteDeadline(c)
+	var err error
+	if info != nil && info.RelayFormat == types.RelayFormatClaude {
+		err = helper.ClaudePingData(c)
+	} else {
+		err = helper.PingData(c)
 	}
+	if err != nil {
+		logger.LogError(c, "SSE ping error: "+err.Error())
+		return err
+	}
+
+	logger.LogDebug(c, "SSE ping data sent")
+	return nil
 }
 
 func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
@@ -546,20 +534,20 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	}
 
 	var stopPinger context.CancelFunc
+	var pingerDone <-chan struct{}
 	if info.IsStream {
 		helper.SetEventStreamHeaders(c)
 		// 处理流式请求的 ping 保活
 		generalSettings := operation_setting.GetGeneralSetting()
 		if generalSettings.PingIntervalEnabled && !info.DisablePing {
 			pingInterval := time.Duration(generalSettings.PingIntervalSeconds) * time.Second
-			stopPinger = startPingKeepAlive(c, info, pingInterval)
+			stopPinger, pingerDone = startPingKeepAlive(c, info, pingInterval)
 			// 使用defer确保在任何情况下都能停止ping goroutine
 			defer func() {
 				if stopPinger != nil {
 					stopPinger()
-					if common2.DebugEnabled {
-						println("SSE ping goroutine stopped by defer")
-					}
+					<-pingerDone
+					logger.LogDebug(c, "SSE ping goroutine stopped by defer")
 				}
 			}()
 		}
