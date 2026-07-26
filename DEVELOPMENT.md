@@ -171,3 +171,21 @@ git log --oneline origin/dev/cmsg..origin/<branch-name>
 - 用户搜索防抖、充值金额可完全清空：低风险但不紧急，留待后续前端维护批次。
 - Gemini 新图片模型注册：仅在准备开放对应模型时移植。
 - CPA WebSocket、Multi-Agent V2、Claude 特定转换和 WebRTC 改动：当前现网路径未启用或回归风险较高，暂不合并。
+
+### 2026-07-26 补充批次（sync/upstream-20260726-followup）
+
+上游 HEAD 与本轮审查基线一致（无新提交），本批次移植主轮遗漏项并修复一处仓库损坏：
+
+| 上游 commit | 内容 |
+|-------------|------|
+| `dfc0d6324` | 用户设置缓存加固：`updateUserCache` 只刷新非额度字段，避免覆盖原子额度缓存；`PUT /api/user/self` 加 CriticalRateLimit |
+| `153d7f01a` | 客户端断连后停止写流：cleanup 前无条件 `wg.Wait`、断连立即关闭上游 body 停止计费、每次写加 write deadline |
+| `4aa08f917` | Playground `auto` 分组模型列表（复评：实为纯后端改动）：`GetUserModels` 支持 `?group=` 参数，`auto` 展开为实际分组；新增 `service.GetGroupsEnabledModels` |
+
+仓库修复：根 `.gitignore` 的裸 `data/` 规则误忽略了 `web/default/src/features/usage-logs/data/`，导致 5 个文件 import 的 schema 模块从未入库、`bun run build:check` 在 `dev/cmsg` 上失败。规则锚定为 `/data/`，并从上游原样恢复 `schema.ts`。
+
+保留的 CMSG 定制：ListModels 的模型分组路由（`GetModelGroupRouteModels`）、Codex SSE header 透传、Claude 格式 ping、ping RecordPing 统计。未采纳上游 `ownerGroups` 重构。
+
+验证：`go test ./...` 全绿；`cd web/default && bun run build:check` 通过（修复前失败）。
+
+注意：`4aa08f917` 的前端部分（playground 传 `?group=auto`）在上游新 `web/` 布局中，CMSG 默认前端如需展示 auto 分组模型仍要单独适配；后端已就绪且向后兼容。
