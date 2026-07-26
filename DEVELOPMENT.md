@@ -189,3 +189,22 @@ git log --oneline origin/dev/cmsg..origin/<branch-name>
 验证：`go test ./...` 全绿；`cd web/default && bun run build:check` 通过（修复前失败）。
 
 注意：`4aa08f917` 的前端部分（playground 传 `?group=auto`）在上游新 `web/` 布局中，CMSG 默认前端如需展示 auto 分组模型仍要单独适配；后端已就绪且向后兼容。
+
+## 前端同步策略（2026-07-26 决定）
+
+**`web/default/` 为 CMSG 自主维护的前端，不再跟随上游前端整体同步。**
+
+背景与依据：
+
+- 上游 `31d70fca3`（2026-07-20，#6329）将前端从 `web/default/` 整体迁至 `web/`（905 个纯改名 + 73 个 auth 相关内容修改），并**删除了整个 `web/classic/`**（424 文件）与 theme 切换机制。
+- 更早的分歧才是主因：上游 7 月上旬的 design-system 大改版（±11 万行）CMSG 从未跟进，CMSG 自有前端定制已达 154 文件 / +1.5 万行。即使路径对齐，内容层面 cherry-pick 也无法应用。
+- CMSG 前端事实上等于「上游 6 月底状态 + CMSG 定制」，7/20 的搬迁只是把分叉显性化。
+
+执行规则：
+
+1. 上游前端提交只作参考，有价值的修复以**手工移植**方式进入 `web/default/`；同类修复优先只取后端部分（参照 `4aa08f917` 的处理）。
+2. 路径映射：上游 `web/src/<x>` ↔ CMSG `web/default/src/<x>`。搬迁 905/978 为纯改名，`src/` 内部结构两侧仍同构，移植时先做前缀替换再核对内容分歧。
+3. `web/classic/` 与 theme 切换机制由 CMSG 独立保留（上游已删）。若确认生产无 `theme=classic` 用户，可另行评估退役。
+4. 后端同步策略不变：继续逐项审查、手工移植上游后端提交。
+
+关联暂缓项：上游 auth 重构（`31d70fca3` 后端部分：无状态 token、会话吊销、分布式强制下线，约 76 个后端文件，含 `controller/auth_session.go`、`model/user_session.go` 870 行等）作为独立安全项目排期移植，方案见 `docs/proposals/auth-stateless-session-port.md`。注意其上线会使全体已登录用户登出一次，需选窗口期；`172114422`（限流时保持登录态）依赖该重构，一并顺延。
