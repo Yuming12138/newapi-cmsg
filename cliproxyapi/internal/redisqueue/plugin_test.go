@@ -60,6 +60,9 @@ func TestUsageQueuePluginPayloadIncludesStableFieldsAndSuccess(t *testing.T) {
 		requireStringField(t, payload, "service_tier", "priority")
 		requireStringField(t, payload, "request_service_tier", "priority")
 		requireStringField(t, payload, "response_service_tier", "default")
+		requireIntField(t, payload, "accounting_version", coreusage.TokenAccountingSchemaVersion)
+		requireValidTokenBreakdown(t, payload)
+		requireTokenBoolField(t, payload, "cache_read_tokens_present", true)
 		requireHeaderField(t, payload, "response_headers", "X-Upstream-Request-Id", []string{"upstream-req-1"})
 		requireHeaderField(t, payload, "response_headers", "Retry-After", []string{"30"})
 		requireBoolField(t, payload, "failed", false)
@@ -316,6 +319,52 @@ func requireBoolField(t *testing.T, payload map[string]json.RawMessage, key stri
 	if got != want {
 		t.Fatalf("%s = %t, want %t", key, got, want)
 	}
+}
+
+func requireIntField(t *testing.T, payload map[string]json.RawMessage, key string, want int) {
+	t.Helper()
+
+	raw, ok := payload[key]
+	if !ok {
+		t.Fatalf("payload missing %q", key)
+	}
+	var got int
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal %q: %v", key, err)
+	}
+	if got != want {
+		t.Fatalf("%s = %d, want %d", key, got, want)
+	}
+}
+
+func requireValidTokenBreakdown(t *testing.T, payload map[string]json.RawMessage) {
+	t.Helper()
+
+	raw, ok := payload["token_breakdown"]
+	if !ok {
+		t.Fatal("payload missing token_breakdown")
+	}
+	var breakdown coreusage.TokenBreakdown
+	if err := json.Unmarshal(raw, &breakdown); err != nil {
+		t.Fatalf("unmarshal token_breakdown: %v", err)
+	}
+	if !breakdown.Valid() {
+		t.Fatalf("token_breakdown is invalid: %+v", breakdown)
+	}
+}
+
+func requireTokenBoolField(t *testing.T, payload map[string]json.RawMessage, key string, want bool) {
+	t.Helper()
+
+	raw, ok := payload["tokens"]
+	if !ok {
+		t.Fatal("payload missing tokens")
+	}
+	var tokens map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &tokens); err != nil {
+		t.Fatalf("unmarshal tokens: %v", err)
+	}
+	requireBoolField(t, tokens, key, want)
 }
 
 func requireFailField(t *testing.T, payload map[string]json.RawMessage, wantStatus int, wantBody string) {
