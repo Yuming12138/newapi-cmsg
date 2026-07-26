@@ -17,7 +17,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
-import { CHANNEL_STATUS, MODEL_FETCHABLE_TYPES } from '../constants'
+import {
+  CHANNEL_STATUS,
+  ERROR_MESSAGES,
+  MODEL_FETCHABLE_TYPES,
+} from '../constants'
 import type { Channel } from '../types'
 import {
   CHANNEL_TYPE_ADVANCED_CUSTOM,
@@ -30,6 +34,38 @@ import {
 // ============================================================================
 // Form Validation Schema
 // ============================================================================
+
+const SUPPORTED_PROXY_PROTOCOLS = new Set([
+  'http:',
+  'https:',
+  'socks5:',
+  'socks5h:',
+])
+
+function isOptionalProxyURL(value: string | undefined): boolean {
+  const trimmedValue = value?.trim() || ''
+  if (!trimmedValue) return true
+
+  const schemeSeparatorIndex = trimmedValue.indexOf('://')
+  if (schemeSeparatorIndex <= 0) return false
+
+  const authorityAndSuffix = trimmedValue.slice(schemeSeparatorIndex + 3)
+  const suffixIndex = authorityAndSuffix.search(/[/?#]/)
+  if (suffixIndex >= 0 && authorityAndSuffix.slice(suffixIndex) !== '/') {
+    return false
+  }
+
+  try {
+    const parsedURL = new URL(trimmedValue)
+    return (
+      SUPPORTED_PROXY_PROTOCOLS.has(parsedURL.protocol) &&
+      Boolean(parsedURL.hostname) &&
+      parsedURL.port !== '0'
+    )
+  } catch {
+    return false
+  }
+}
 
 function parseOptionalJson(value: string | undefined): unknown {
   if (!value?.trim()) return undefined
@@ -140,7 +176,10 @@ export const channelFormSchema = z
     // Channel extra settings (stored in setting JSON, not sent directly)
     force_format: z.boolean().optional(),
     thinking_to_content: z.boolean().optional(),
-    proxy: z.string().optional(),
+    proxy: z
+      .string()
+      .optional()
+      .refine(isOptionalProxyURL, ERROR_MESSAGES.INVALID_PROXY),
     pass_through_body_enabled: z.boolean().optional(),
     system_prompt: z.string().optional(),
     system_prompt_override: z.boolean().optional(),
@@ -401,7 +440,7 @@ function buildSettingJSON(formData: ChannelFormValues): string {
   const settingObj = {
     force_format: formData.force_format || false,
     thinking_to_content: formData.thinking_to_content || false,
-    proxy: formData.proxy || '',
+    proxy: formData.proxy?.trim() || '',
     pass_through_body_enabled: formData.pass_through_body_enabled || false,
     system_prompt: formData.system_prompt || '',
     system_prompt_override: formData.system_prompt_override || false,
