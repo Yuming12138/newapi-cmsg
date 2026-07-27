@@ -113,7 +113,7 @@ func (h *Handler) GetQuotaHealth(c *gin.Context) {
 		return
 	}
 
-	if successful == 0 && !quotaHealthAllSkipped(accounts) {
+	if successful == 0 && !quotaHealthAllIntentionallySkipped(accounts) {
 		c.JSON(http.StatusOK, quotaHealthProbeFailedResult(accounts))
 		return
 	}
@@ -723,10 +723,13 @@ func quotaHealthSchedulableAccounts(accounts []map[string]any) []map[string]any 
 	return out
 }
 
-func quotaHealthAllSkipped(accounts []map[string]any) bool {
+func quotaHealthAllIntentionallySkipped(accounts []map[string]any) bool {
 	for _, account := range accounts {
 		skipped, _ := account["skipped"].(bool)
 		if !skipped {
+			return false
+		}
+		if errText, _ := account["error"].(string); strings.TrimSpace(errText) != "" {
 			return false
 		}
 	}

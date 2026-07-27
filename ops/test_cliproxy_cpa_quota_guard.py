@@ -252,6 +252,46 @@ class QuotaFeatureTest(unittest.TestCase):
         self.assertEqual("plus", accounts[1]["plan_type"])
         self.assertEqual("quota_feature_plan_not_selected", accounts[1]["reason"])
 
+    def test_unavailable_account_probe_error_is_not_treated_as_zero_quota(self) -> None:
+        entries = [{
+            "provider": "codex",
+            "auth_index": "pro-auth",
+            "account_id": "pro-account",
+            "plan_type": "pro",
+            "unavailable": True,
+        }]
+        with (
+            mock.patch.object(guard, "request_json", return_value={"files": entries}),
+            mock.patch.object(
+                guard,
+                "call_wham_usage_for_auth",
+                side_effect=RuntimeError("wham_usage_http_503"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "wham_usage_all_accounts_failed"):
+                guard.call_wham_usages(
+                    {**self.config, "cpa_base_url": "http://127.0.0.1:8317"},
+                    {"CPA_MANAGEMENT_KEY": "test-management-key"},
+                )
+
+    def test_intentionally_disabled_accounts_still_report_zero_quota(self) -> None:
+        entries = [{
+            "provider": "codex",
+            "auth_index": "pro-auth",
+            "account_id": "pro-account",
+            "plan_type": "pro",
+            "disabled": True,
+        }]
+        with mock.patch.object(guard, "request_json", return_value={"files": entries}):
+            accounts = guard.call_wham_usages(
+                {**self.config, "cpa_base_url": "http://127.0.0.1:8317"},
+                {"CPA_MANAGEMENT_KEY": "test-management-key"},
+            )
+
+        self.assertEqual(1, len(accounts))
+        self.assertTrue(accounts[0]["skipped"])
+        self.assertEqual("auth_disabled", accounts[0]["reason"])
+
     def test_feature_quota_source_uses_percent_units(self) -> None:
         account = guard.evaluate_quota_feature_account(self.config, {}, spark_usage(25.0))
         result = guard.evaluate_quota(self.config, [account])
@@ -265,6 +305,26 @@ class QuotaFeatureTest(unittest.TestCase):
         self.assertEqual("model_quota_percent", source["source_type"])
         self.assertEqual("percent", source["unit"])
         self.assertEqual("codex_bengalfox", source["raw_source"]["quota_feature"])
+
+
+class QuotaHealthEndpointTest(unittest.TestCase):
+    def test_probe_failure_payload_falls_back_instead_of_reporting_zero_quota(self) -> None:
+        payload = {
+            "ok": False,
+            "guard_mode": "bucket_low_watermark",
+            "reason": "quota_probe_failed",
+            "error": "wham_usage_http_503",
+            "accounts": [{"skipped": True, "error": "wham_usage_http_503"}],
+        }
+        with mock.patch.object(guard, "request_json", return_value=payload):
+            with self.assertRaisesRegex(RuntimeError, "cpa_quota_health_probe_failed"):
+                guard.call_cpa_quota_health(
+                    {
+                        **guard.DEFAULT_CONFIG,
+                        "cpa_base_url": "http://127.0.0.1:8317",
+                    },
+                    {"CPA_MANAGEMENT_KEY": "test-management-key"},
+                )
 
 
 class DynamicDailyBudgetTest(unittest.TestCase):

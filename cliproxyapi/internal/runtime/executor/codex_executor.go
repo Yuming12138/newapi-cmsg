@@ -797,7 +797,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	requestPath := helps.PayloadRequestPath(opts)
 	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
 	body, _ = sjson.SetBytes(body, "model", baseModel)
-	body = normalizeCodexSparkReasoningContext(body, baseModel)
+	body = normalizeCodexSparkReasoning(body, baseModel)
 	body, _ = sjson.SetBytes(body, "stream", true)
 	body, _ = sjson.DeleteBytes(body, "previous_response_id")
 	body, _ = sjson.DeleteBytes(body, "prompt_cache_retention")
@@ -979,7 +979,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	requestPath := helps.PayloadRequestPath(opts)
 	body = helps.ApplyPayloadConfigWithRequest(e.cfg, baseModel, to.String(), from.String(), "", body, originalTranslated, requestedModel, requestPath, opts.Headers)
 	body, _ = sjson.SetBytes(body, "model", baseModel)
-	body = normalizeCodexSparkReasoningContext(body, baseModel)
+	body = normalizeCodexSparkReasoning(body, baseModel)
 	body, _ = sjson.DeleteBytes(body, "stream")
 	body = normalizeCodexInstructions(body)
 	body = sanitizeOpenAIResponsesReasoningEncryptedContent(ctx, "codex executor", body)
@@ -1089,7 +1089,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	body, _ = sjson.DeleteBytes(body, "safety_identifier")
 	body, _ = sjson.DeleteBytes(body, "stream_options")
 	body, _ = sjson.SetBytes(body, "model", baseModel)
-	body = normalizeCodexSparkReasoningContext(body, baseModel)
+	body = normalizeCodexSparkReasoning(body, baseModel)
 	body = normalizeCodexInstructions(body)
 	if e.cfg == nil || e.cfg.DisableImageGeneration == config.DisableImageGenerationOff {
 		body = ensureImageGenerationTool(body, baseModel, auth, opts.Headers)
@@ -1800,15 +1800,15 @@ func normalizeCodexInstructions(body []byte) []byte {
 	return body
 }
 
-func normalizeCodexSparkReasoningContext(body []byte, baseModel string) []byte {
+func normalizeCodexSparkReasoning(body []byte, baseModel string) []byte {
 	if !strings.EqualFold(strings.TrimSpace(baseModel), "gpt-5.3-codex-spark") {
 		return body
 	}
 	contextMode := gjson.GetBytes(body, "reasoning.context")
-	if contextMode.Type != gjson.String || contextMode.String() != "all_turns" {
-		return body
+	if contextMode.Type == gjson.String && contextMode.String() == "all_turns" {
+		body, _ = sjson.SetBytes(body, "reasoning.context", "auto")
 	}
-	body, _ = sjson.SetBytes(body, "reasoning.context", "auto")
+	body, _ = sjson.DeleteBytes(body, "reasoning.summary")
 	return body
 }
 
