@@ -4667,6 +4667,23 @@
     "Free": "Свободно",
     "We could not load instances.": "Не удалось загрузить экземпляры.",
     "Nodes reporting from this deployment and their latest heartbeat.": "Узлы этого развертывания и их последнее сердцебиение.",
-    "No instances have reported yet.": "Экземпляры еще не отправляли данные."
+    "No instances have reported yet.": "Экземпляры еще не отправляли данные.",
+    "dashboard": {
+      "overview": {
+        "codexRadar": {
+          "title": "Интеллектуальная эффективность GPT-5.6",
+          "description": "Результаты распределенного теста; стоимость теста не является тарифом CMSG",
+          "unavailable": "Данные Codex Radar временно недоступны",
+          "model": "Модель",
+          "iq": "IQ",
+          "cost": "Стоимость теста",
+          "duration": "Среднее время",
+          "minutes": "{{count}} мин",
+          "updatedAt": "Обновлено {{time}}",
+          "cached": "· данные из кеша",
+          "attribution": "Данные Codex Radar codexradar.com"
+        }
+      }
+    }
   }
 }

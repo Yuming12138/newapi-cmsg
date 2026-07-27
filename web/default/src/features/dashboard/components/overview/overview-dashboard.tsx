@@ -55,6 +55,7 @@ import type { ApiKey } from '@/features/keys/types'
 import { useApiInfo } from '../../hooks/use-status-data'
 import { AnnouncementsPanel } from './announcements-panel'
 import { ApiInfoPanel } from './api-info-panel'
+import { CodexRadarPanel } from './codex-radar-panel'
 import { FAQPanel } from './faq-panel'
 import { SummaryCards } from './summary-cards'
 import { UptimePanel } from './uptime-panel'
@@ -714,13 +715,16 @@ export function OverviewDashboard() {
       <CardStaggerContainer className='grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]'>
         <div className='grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2'>
           <CardStaggerItem>
-            <ApiInfoPanel />
+            <CodexRadarPanel />
           </CardStaggerItem>
           <CardStaggerItem>
             <AnnouncementsPanel />
           </CardStaggerItem>
           <CardStaggerItem>
             <FAQPanel />
+          </CardStaggerItem>
+          <CardStaggerItem>
+            <ApiInfoPanel />
           </CardStaggerItem>
         </div>
         <CardStaggerItem>

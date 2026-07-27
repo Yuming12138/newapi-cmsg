@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { api } from '@/lib/api'
 import type {
   ChannelQuotaDataItem,
+  CodexRadarOverview,
   QuotaDataItem,
   UptimeGroupResult,
 } from './types'
@@ -84,4 +85,12 @@ export async function getUptimeStatus() {
     '/api/uptime/status'
   )
   return res.data
+}
+
+export async function getCodexRadarOverview() {
+  const res = await api.get<{
+    success: boolean
+    data: CodexRadarOverview
+  }>('/api/codex-radar/overview')
+  return res.data.data
 }
