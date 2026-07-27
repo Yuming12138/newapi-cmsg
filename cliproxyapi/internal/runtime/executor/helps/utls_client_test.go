@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -264,6 +265,133 @@ func TestUtlsRoundTripperRetriesProtocolErrorOnReplacementConn(t *testing.T) {
 	}
 	if got := replacement.roundTripCalls(); got != 1 {
 		t.Fatalf("replacement conn round trips = %d, want 1", got)
+	}
+}
+
+func TestUtlsRoundTripperRetriesClientConnEstablishmentError(t *testing.T) {
+	t.Parallel()
+
+	failed := newFakeH2Conn("client-conn-failed", -1)
+	failed.roundTripErr = errors.New("http2: client conn could not be established")
+	sibling := newFakeH2Conn("old-route-sibling", -1)
+	sibling.shutdownStarted = make(chan struct{})
+	sibling.shutdownRelease = make(chan struct{})
+	replacement := newFakeH2Conn("replacement", -1)
+	rt := newFakeUtlsRoundTripper(2, replacement)
+	pool := &connPool{conns: []h2ClientConn{failed, sibling}}
+	rt.pools["chatgpt.com"] = pool
+
+	req, errRequest := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", strings.NewReader("{}"))
+	if errRequest != nil {
+		t.Fatalf("NewRequest() error = %v", errRequest)
+	}
+	resp, errRoundTrip := rt.RoundTrip(req)
+	if errRoundTrip != nil {
+		t.Fatalf("RoundTrip() error = %v", errRoundTrip)
+	}
+	if errClose := resp.Body.Close(); errClose != nil {
+		t.Fatalf("response body close error = %v", errClose)
+	}
+
+	waitForFakeClose(t, failed)
+	if got := failed.roundTripCalls(); got != 1 {
+		t.Fatalf("failed conn round trips = %d, want 1", got)
+	}
+	if got := failed.closeCalls(); got != 1 {
+		t.Fatalf("failed conn close calls = %d, want 1", got)
+	}
+	if got := replacement.roundTripCalls(); got != 1 {
+		t.Fatalf("replacement conn round trips = %d, want 1", got)
+	}
+	if got := sibling.roundTripCalls(); got != 0 {
+		t.Fatalf("old-route sibling round trips = %d, want 0", got)
+	}
+	select {
+	case <-sibling.shutdownStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for old-route sibling to start draining")
+	}
+	select {
+	case <-sibling.closeCh:
+		t.Fatal("old-route sibling closed before its healthy streams drained")
+	default:
+	}
+	close(sibling.shutdownRelease)
+	pool.drainWG.Wait()
+	if got := sibling.closeCalls(); got != 1 {
+		t.Fatalf("old-route sibling close calls = %d, want 1", got)
+	}
+}
+
+func TestUtlsRoundTripperDiscardsDialStartedBeforeRouteRetirement(t *testing.T) {
+	t.Parallel()
+
+	stale := newFakeH2Conn("stale-dial", -1)
+	replacement := newFakeH2Conn("replacement", -1)
+	dialStarted := make(chan struct{})
+	releaseDial := make(chan struct{})
+	var dialCalls atomic.Int32
+
+	rt := newFakeUtlsRoundTripper(1)
+	rt.createConn = func(_, _ string) (h2ClientConn, error) {
+		switch dialCalls.Add(1) {
+		case 1:
+			close(dialStarted)
+			<-releaseDial
+			return stale, nil
+		case 2:
+			return replacement, nil
+		default:
+			return nil, errors.New("unexpected extra dial")
+		}
+	}
+
+	result := make(chan h2ClientConn, 1)
+	errResult := make(chan error, 1)
+	go func() {
+		conn, err := rt.getOrCreateConnection("chatgpt.com", "chatgpt.com:443")
+		if err != nil {
+			errResult <- err
+			return
+		}
+		result <- conn
+	}()
+
+	select {
+	case <-dialStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stale dial to start")
+	}
+	rt.mu.Lock()
+	rt.poolForHostLocked("chatgpt.com").generation++
+	rt.mu.Unlock()
+	close(releaseDial)
+
+	select {
+	case err := <-errResult:
+		t.Fatalf("getOrCreateConnection() error = %v", err)
+	case conn := <-result:
+		if conn != replacement {
+			t.Fatalf("connection = %v, want replacement", conn)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for replacement connection")
+	}
+	waitForFakeClose(t, stale)
+}
+
+func TestConnectionErrorDispositionClosesClientConnEstablishmentError(t *testing.T) {
+	t.Parallel()
+
+	conn := newFakeH2Conn("client-conn-failed", -1)
+	rt := newFakeUtlsRoundTripper(1)
+	rt.pools["chatgpt.com"] = &connPool{conns: []h2ClientConn{conn}}
+
+	rt.handleConnError("chatgpt.com", conn, errors.New("http2: client conn could not be established"))
+	waitForFakeClose(t, conn)
+
+	if got := conn.closeCalls(); got != 1 {
+		t.Fatalf("failed conn close calls = %d, want 1", got)
 	}
 }
 
