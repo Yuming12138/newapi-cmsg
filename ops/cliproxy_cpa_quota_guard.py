@@ -1157,7 +1157,12 @@ def guard_timezone(config: dict[str, Any]) -> dt.tzinfo:
         return dt.timezone.utc
 
 
-def protected_weekly_budget_snapshot(result: dict[str, Any], now: int) -> dict[str, Any] | None:
+def protected_weekly_budget_snapshot(
+    config: dict[str, Any],
+    result: dict[str, Any],
+    now: int,
+    previous_plans: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
     accounts = result.get("accounts")
     if not isinstance(accounts, list):
         return None
@@ -1175,48 +1180,155 @@ def protected_weekly_budget_snapshot(result: dict[str, Any], now: int) -> dict[s
     if not protected:
         return None
 
+    previous_by_account = {
+        str(plan.get("account_key") or ""): plan
+        for plan in previous_plans or []
+        if isinstance(plan, dict) and str(plan.get("account_key") or "")
+    }
+    credit_planning_enabled = bool_value(config.get("reset_credit_grace_enabled"), False) and not str(
+        config.get("quota_feature") or ""
+    ).strip()
+    auto_consume_before = max(
+        0,
+        int(number(config.get("reset_credit_auto_consume_before_sec")) or 600),
+    )
+
     remaining_total = 0.0
     weekly_remaining_values: list[float] = []
     five_hour_remaining_values: list[float] = []
-    reset_after_values: list[float] = []
-    reset_at_values: list[float] = []
     identities: list[str] = []
-    for account in protected:
+    account_plans: list[dict[str, Any]] = []
+    credit_probe_degraded_account_count = 0
+    fallback_credit_probe_failed = bool(result.get("quota_health_endpoint_error")) or (
+        result.get("quota_health_source") == "python_guard_fallback"
+    )
+    for index, account in enumerate(protected):
         weekly = account["windows"]["7d"]
-        remaining_total += max(0.0, float(number(weekly.get("remaining_percent")) or 0.0))
-        weekly_remaining_values.append(max(0.0, float(number(weekly.get("remaining_percent")) or 0.0)))
+        remaining_percent = max(0.0, float(number(weekly.get("remaining_percent")) or 0.0))
+        remaining_total += remaining_percent
+        weekly_remaining_values.append(remaining_percent)
         five_hour = account["windows"].get("5h")
         five_hour_remaining = number(five_hour.get("remaining_percent")) if isinstance(five_hour, dict) else None
         if five_hour_remaining is not None:
             five_hour_remaining_values.append(max(0.0, float(five_hour_remaining)))
+
         reset_after = number(weekly.get("reset_after_seconds"))
         reset_at = number(weekly.get("reset_at"))
-        if reset_after is not None and reset_after >= 0:
-            reset_after_values.append(reset_after)
         if reset_at is not None and reset_at > 0:
-            reset_at_values.append(reset_at)
-        identity = str(first_non_empty(account.get("account_id_hash"), account.get("auth_index"), "unknown"))
-        identities.append(identity)
+            weekly_reset_at = int(reset_at)
+        elif reset_after is not None and reset_after >= 0:
+            weekly_reset_at = now + int(reset_after)
+        else:
+            weekly_reset_at = now + WINDOW_7D_SECONDS
 
-    reset_at = int(min(reset_at_values)) if reset_at_values else 0
-    if reset_after_values:
-        reset_after_seconds = max(0, int(min(reset_after_values)))
-    elif reset_at > 0:
-        reset_after_seconds = max(0, reset_at - now)
-    else:
-        reset_after_seconds = WINDOW_7D_SECONDS
-    days_remaining = max(1, min(7, int(math.ceil(max(reset_after_seconds, 1) / 86_400))))
+        identity = str(first_non_empty(account.get("account_id_hash"), account.get("auth_index"), f"unknown-{index}"))
+        identities.append(identity)
+        previous_plan = previous_by_account.get(identity)
+        reset_credit = None
+        reset_credit_observation = "none"
+        if credit_planning_enabled and reset_credit_plan_selected(config, account):
+            reset_credit = reset_credit_current(account)
+            if reset_credit is not None:
+                reset_credit_observation = "live"
+            elif account.get("reset_credits_error") or fallback_credit_probe_failed:
+                credit_probe_degraded_account_count += 1
+                reset_credit_observation = "unavailable"
+                if isinstance(previous_plan, dict):
+                    cached_auto_consume_at = int(number(previous_plan.get("reset_credit_auto_consume_at")) or 0)
+                    cached_expires_at = int(number(previous_plan.get("reset_credit_expires_at")) or 0)
+                    if cached_auto_consume_at > now and cached_expires_at > cached_auto_consume_at:
+                        reset_credit = {
+                            "credit_key": str(previous_plan.get("reset_credit_key") or "cached"),
+                            "expires_at": previous_plan.get("reset_credit_expires_at_iso"),
+                            "expires_ts": cached_expires_at,
+                            "auto_consume_at": cached_auto_consume_at,
+                        }
+                        reset_credit_observation = "cached"
+
+        reset_credit_auto_consume_at = 0
+        reset_credit_expires_at = 0
+        reset_credit_key = ""
+        reset_credit_expires_at_iso = None
+        if reset_credit is not None:
+            reset_credit_expires_at = int(number(reset_credit.get("expires_ts")) or 0)
+            reset_credit_auto_consume_at = int(
+                number(reset_credit.get("auto_consume_at"))
+                or (reset_credit_expires_at - auto_consume_before)
+            )
+            if reset_credit_auto_consume_at <= now:
+                reset_credit = None
+                reset_credit_observation = "none"
+                reset_credit_auto_consume_at = 0
+                reset_credit_expires_at = 0
+            else:
+                reset_credit_key = str(reset_credit.get("credit_key") or "")
+                reset_credit_expires_at_iso = reset_credit.get("expires_at")
+
+        effective_reset_at = weekly_reset_at
+        effective_reset_source = "weekly"
+        if reset_credit is not None and reset_credit_auto_consume_at < weekly_reset_at:
+            effective_reset_at = reset_credit_auto_consume_at
+            effective_reset_source = "reset_credit"
+        days_remaining = max(1, int(math.ceil(max(effective_reset_at - now, 1) / 86_400)))
+        account_plans.append({
+            "account_key": identity,
+            "plan_type": account.get("plan_type"),
+            "remaining_percent": round(remaining_percent, 6),
+            "weekly_reset_at": weekly_reset_at,
+            "effective_reset_at": effective_reset_at,
+            "effective_reset_source": effective_reset_source,
+            "days_remaining": days_remaining,
+            "reset_credit_key": reset_credit_key or None,
+            "reset_credit_expires_at": reset_credit_expires_at or None,
+            "reset_credit_expires_at_iso": reset_credit_expires_at_iso,
+            "reset_credit_auto_consume_at": reset_credit_auto_consume_at or None,
+            "reset_credit_observation": reset_credit_observation,
+        })
+
+    weekly_reset_at = min(int(plan["weekly_reset_at"]) for plan in account_plans)
+    effective_reset_at = min(int(plan["effective_reset_at"]) for plan in account_plans)
+    effective_sources = {
+        str(plan["effective_reset_source"])
+        for plan in account_plans
+        if int(plan["effective_reset_at"]) == effective_reset_at
+    }
+    effective_reset_source = next(iter(effective_sources)) if len(effective_sources) == 1 else "mixed"
+    reset_after_seconds = max(0, weekly_reset_at - now)
+    days_remaining = min(int(plan["days_remaining"]) for plan in account_plans)
     signature = hashlib.sha256("|".join(sorted(identities)).encode("utf-8")).hexdigest()[:16]
+    weekly_signature = hashlib.sha256("|".join(sorted(
+        f'{plan["account_key"]}:{plan["weekly_reset_at"]}' for plan in account_plans
+    )).encode("utf-8")).hexdigest()[:16]
+    planning_signature = hashlib.sha256("|".join(sorted(
+        f'{plan["account_key"]}:{plan["weekly_reset_at"]}:{plan["effective_reset_at"]}:{plan["effective_reset_source"]}'
+        for plan in account_plans
+    )).encode("utf-8")).hexdigest()[:16]
     return {
         "account_count": len(protected),
         "account_signature": signature,
+        "weekly_signature": weekly_signature,
+        "planning_signature": planning_signature,
+        "account_plans": account_plans,
         "remaining_percent": round(remaining_total, 6),
         "minimum_remaining_percent_7d": round(min(weekly_remaining_values), 6),
         "minimum_remaining_percent_5h": round(min(five_hour_remaining_values), 6) if five_hour_remaining_values else None,
-        "reset_at": reset_at,
+        "reset_at": weekly_reset_at,
+        "weekly_reset_at": weekly_reset_at,
+        "effective_reset_at": effective_reset_at,
+        "effective_reset_source": effective_reset_source,
         "reset_after_seconds": reset_after_seconds,
         "days_remaining": days_remaining,
+        "credit_probe_degraded_account_count": credit_probe_degraded_account_count,
     }
+
+
+def protected_dynamic_daily_limit(account_plans: list[dict[str, Any]], reserve_per_account: float) -> float:
+    return sum(
+        max(0.0, float(number(plan.get("remaining_percent")) or 0.0) - reserve_per_account)
+        / max(1, int(number(plan.get("days_remaining")) or 1))
+        for plan in account_plans
+        if isinstance(plan, dict)
+    )
 
 
 def reset_credit_timestamp(value: Any) -> int | None:
@@ -1599,7 +1711,13 @@ def apply_dynamic_daily_budget(
         return result
 
     now = int(time.time()) if now is None else int(now)
-    snapshot = protected_weekly_budget_snapshot(result, now)
+    budget_state = state.get("dynamic_daily_budget")
+    if not isinstance(budget_state, dict):
+        budget_state = {}
+    previous_plans = budget_state.get("account_plans")
+    if not isinstance(previous_plans, list):
+        previous_plans = []
+    snapshot = protected_weekly_budget_snapshot(config, result, now, previous_plans)
     if snapshot is None:
         result["dynamic_daily_budget"] = {"enabled": True, "applied": False, "reason": "protected_7d_window_unavailable"}
         return result
@@ -1609,12 +1727,11 @@ def apply_dynamic_daily_budget(
     reserve_5h_per_account = clamp_percent(config.get("min_remaining_percent_5h"), 15.0)
     reserve_total = reserve_per_account * int(snapshot["account_count"])
     current_remaining = float(snapshot["remaining_percent"])
-    budget_state = state.get("dynamic_daily_budget")
-    if not isinstance(budget_state, dict):
-        budget_state = {}
 
     previous_day = str(budget_state.get("day") or "")
     previous_signature = str(budget_state.get("account_signature") or "")
+    previous_weekly_signature = str(budget_state.get("weekly_signature") or "")
+    previous_planning_signature = str(budget_state.get("planning_signature") or "")
     previous_reset_at = int(budget_state.get("reset_at") or 0)
     previous_baseline = number(budget_state.get("baseline_remaining_percent"))
     low_watermark = number(budget_state.get("minimum_remaining_percent_seen"))
@@ -1651,12 +1768,23 @@ def apply_dynamic_daily_budget(
     elif explicit_runtime_reset:
         should_reset = True
         reset_reason = "runtime_quota_reset"
+    elif not previous_planning_signature:
+        should_reset = True
+        reset_reason = "planning_metadata_missing"
     else:
         candidate_reasons: list[str] = []
         if previous_signature and previous_signature != snapshot["account_signature"]:
             candidate_reasons.append("account_signature_changed")
-        if previous_reset_at and previous_reset_at != int(snapshot["reset_at"]):
-            candidate_reasons.append("weekly_reset_at_changed")
+        else:
+            weekly_schedule_changed = False
+            if previous_weekly_signature:
+                weekly_schedule_changed = previous_weekly_signature != snapshot["weekly_signature"]
+            elif previous_reset_at:
+                weekly_schedule_changed = previous_reset_at != int(snapshot["weekly_reset_at"])
+            if weekly_schedule_changed:
+                candidate_reasons.append("weekly_reset_schedule_changed")
+            elif previous_planning_signature != snapshot["planning_signature"]:
+                candidate_reasons.append("reset_credit_schedule_changed")
         if quota_refilled:
             candidate_reasons.append("weekly_quota_refilled")
 
@@ -1664,16 +1792,23 @@ def apply_dynamic_daily_budget(
             candidate_key = "|".join([
                 ",".join(candidate_reasons),
                 str(snapshot["account_signature"]),
-                str(int(snapshot["reset_at"])),
+                str(snapshot["weekly_signature"]),
+                str(snapshot["planning_signature"]),
             ])
             candidate = budget_state.get("reset_candidate")
             if not isinstance(candidate, dict) or candidate.get("key") != candidate_key:
                 candidate = {"key": candidate_key, "count": 0, "first_observed_at": now}
-            candidate["count"] = int(candidate.get("count") or 0) + 1
+            confirms_plan_change = not (
+                "reset_credit_schedule_changed" in candidate_reasons
+                and int(snapshot["credit_probe_degraded_account_count"]) > 0
+            )
+            if confirms_plan_change:
+                candidate["count"] = int(candidate.get("count") or 0) + 1
             candidate["last_observed_at"] = now
             candidate["reasons"] = candidate_reasons
             candidate["remaining_percent"] = round(current_remaining, 6)
             candidate["increase_from_low_watermark_percent"] = round(refill_increase, 6)
+            candidate["credit_probe_degraded"] = not confirms_plan_change
             budget_state["reset_candidate"] = candidate
 
             confirmation_count = max(1, int(number(config.get("quota_reset_confirmation_count")) or 2))
@@ -1685,13 +1820,16 @@ def apply_dynamic_daily_budget(
 
     if should_reset:
         baseline = current_remaining
-        daily_limit = max(0.0, baseline - reserve_total) / int(snapshot["days_remaining"])
+        daily_limit = protected_dynamic_daily_limit(snapshot["account_plans"], reserve_per_account)
         budget_state = {
             "day": day_key,
             "account_signature": snapshot["account_signature"],
-            "reset_at": int(snapshot["reset_at"]),
+            "weekly_signature": snapshot["weekly_signature"],
+            "planning_signature": snapshot["planning_signature"],
+            "reset_at": int(snapshot["weekly_reset_at"]),
             "baseline_remaining_percent": round(baseline, 6),
             "daily_limit_percent": round(daily_limit, 6),
+            "baseline_account_plans": snapshot["account_plans"],
             "minimum_remaining_percent_seen": round(current_remaining, 6),
             "daily_exhausted": False,
             "baseline_reset_reason": reset_reason,
@@ -1722,8 +1860,15 @@ def apply_dynamic_daily_budget(
         "last_remaining_percent": round(current_remaining, 6),
         "minimum_remaining_percent_seen": round(min(low_watermark, current_remaining), 6),
         "last_updated_at": now,
+        "observed_weekly_signature": snapshot["weekly_signature"],
+        "observed_planning_signature": snapshot["planning_signature"],
+        "account_plans": snapshot["account_plans"],
+        "weekly_reset_at": int(snapshot["weekly_reset_at"]),
+        "effective_reset_at": int(snapshot["effective_reset_at"]),
+        "effective_reset_source": snapshot["effective_reset_source"],
         "days_remaining": int(snapshot["days_remaining"]),
         "reset_after_seconds": int(snapshot["reset_after_seconds"]),
+        "credit_probe_degraded_account_count": int(snapshot["credit_probe_degraded_account_count"]),
         "reserve_percent": round(reserve_total, 6),
         "minimum_remaining_percent_7d": round(minimum_remaining_7d, 6),
         "minimum_remaining_percent_5h": round(minimum_remaining_5h, 6) if minimum_remaining_5h is not None else None,

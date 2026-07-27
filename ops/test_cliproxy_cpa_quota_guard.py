@@ -134,6 +134,23 @@ def reset_credit_result(
     return result
 
 
+def combined_dynamic_budget_result(*results: dict) -> dict:
+    accounts = [account for result in results for account in result["accounts"]]
+    remaining_total = sum(
+        float(account["windows"]["7d"]["remaining_percent"])
+        for account in accounts
+    )
+    return {
+        "ok": True,
+        "quota_ok": True,
+        "within_share": True,
+        "usable_balance_units": remaining_total,
+        "remaining_share_percent": remaining_total,
+        "reason": "usable_balance_available",
+        "accounts": accounts,
+    }
+
+
 class QuotaWindowCompatibilityTest(unittest.TestCase):
     def test_weekly_only_window_is_accepted(self) -> None:
         windows = guard.quota_windows(weekly_only_usage(25.0, "plus"))
@@ -339,6 +356,223 @@ class DynamicDailyBudgetTest(unittest.TestCase):
         self.assertEqual(0.0, result["dynamic_daily_budget"]["consumed_today_percent"])
         self.assertEqual("runtime_quota_reset", result["dynamic_daily_budget"]["baseline_reset_reason"])
 
+    def test_legacy_budget_state_rebuilds_planning_metadata_once(self) -> None:
+        day = guard.dt.datetime.fromtimestamp(self.now, guard.dt.timezone.utc).date().isoformat()
+        state = {
+            "dynamic_daily_budget": {
+                "day": day,
+                "account_signature": "legacy-signature",
+                "reset_at": self.now + 7 * 86_400,
+                "baseline_remaining_percent": 94.0,
+                "daily_limit_percent": 79.0 / 7.0,
+                "minimum_remaining_percent_seen": 90.0,
+                "last_remaining_percent": 90.0,
+            }
+        }
+
+        result = guard.apply_dynamic_daily_budget(
+            self.config,
+            dynamic_budget_result(90.0),
+            state,
+            self.now,
+        )
+
+        budget = result["dynamic_daily_budget"]
+        self.assertEqual("planning_metadata_missing", budget["baseline_reset_reason"])
+        self.assertEqual(90.0, budget["baseline_remaining_percent"])
+        self.assertAlmostEqual(75.0 / 7.0, budget["daily_limit_percent"], places=6)
+        self.assertEqual(budget["planning_signature"], budget["observed_planning_signature"])
+
+    def test_reset_credit_before_weekly_reset_shortens_effective_horizon(self) -> None:
+        self.config["reset_credit_grace_enabled"] = True
+        state: dict = {}
+
+        result = guard.apply_dynamic_daily_budget(
+            self.config,
+            reset_credit_result(self.now, 3 * 86_400, remaining_percent=100.0),
+            state,
+            self.now,
+        )
+
+        budget = result["dynamic_daily_budget"]
+        self.assertAlmostEqual(85.0 / 3.0, budget["daily_limit_percent"], places=6)
+        self.assertEqual("reset_credit", budget["effective_reset_source"])
+        self.assertEqual(3, budget["account_plans"][0]["days_remaining"])
+        self.assertLess(
+            budget["account_plans"][0]["effective_reset_at"],
+            budget["account_plans"][0]["weekly_reset_at"],
+        )
+
+    def test_reset_credit_after_weekly_reset_keeps_weekly_horizon(self) -> None:
+        self.config["reset_credit_grace_enabled"] = True
+        state: dict = {}
+
+        result = guard.apply_dynamic_daily_budget(
+            self.config,
+            reset_credit_result(self.now, 8 * 86_400, remaining_percent=100.0),
+            state,
+            self.now,
+        )
+
+        budget = result["dynamic_daily_budget"]
+        self.assertAlmostEqual(85.0 / 7.0, budget["daily_limit_percent"], places=6)
+        self.assertEqual("weekly", budget["effective_reset_source"])
+        self.assertEqual(7, budget["account_plans"][0]["days_remaining"])
+
+    def test_missing_reset_credit_keeps_weekly_horizon(self) -> None:
+        self.config["reset_credit_grace_enabled"] = True
+        state: dict = {}
+        result_without_credit = reset_credit_result(
+            self.now,
+            3 * 86_400,
+            remaining_percent=100.0,
+            available_count=0,
+            include_credit=False,
+        )
+
+        result = guard.apply_dynamic_daily_budget(
+            self.config,
+            result_without_credit,
+            state,
+            self.now,
+        )
+
+        budget = result["dynamic_daily_budget"]
+        self.assertAlmostEqual(85.0 / 7.0, budget["daily_limit_percent"], places=6)
+        self.assertEqual("weekly", budget["effective_reset_source"])
+
+    def test_reset_credit_for_unselected_plan_is_ignored(self) -> None:
+        self.config["reset_credit_grace_enabled"] = True
+        state: dict = {}
+        plus_result = reset_credit_result(self.now, 3 * 86_400, remaining_percent=100.0)
+        plus_result["accounts"][0]["plan_type"] = "plus"
+
+        result = guard.apply_dynamic_daily_budget(self.config, plus_result, state, self.now)
+
+        budget = result["dynamic_daily_budget"]
+        self.assertAlmostEqual(85.0 / 7.0, budget["daily_limit_percent"], places=6)
+        self.assertEqual("weekly", budget["effective_reset_source"])
+
+    def test_reset_credit_is_ignored_for_independent_quota_feature(self) -> None:
+        self.config["reset_credit_grace_enabled"] = True
+        self.config["quota_feature"] = "codex_bengalfox"
+        state: dict = {}
+
+        result = guard.apply_dynamic_daily_budget(
+            self.config,
+            reset_credit_result(self.now, 3 * 86_400, remaining_percent=100.0),
+            state,
+            self.now,
+        )
+
+        budget = result["dynamic_daily_budget"]
+        self.assertAlmostEqual(85.0 / 7.0, budget["daily_limit_percent"], places=6)
+        self.assertEqual("weekly", budget["effective_reset_source"])
+
+    def test_multiple_accounts_use_independent_effective_horizons(self) -> None:
+        self.config["reset_credit_grace_enabled"] = True
+        state: dict = {}
+        three_day = reset_credit_result(self.now, 3 * 86_400, remaining_percent=100.0)
+        seven_day = reset_credit_result(
+            self.now,
+            8 * 86_400,
+            remaining_percent=80.0,
+        )
+        seven_day_account = seven_day["accounts"][0]
+        seven_day_account["auth_index"] = "pro-auth-index-b"
+        seven_day_account["account_id_hash"] = "pro-account-hash-b"
+        combined = combined_dynamic_budget_result(three_day, seven_day)
+
+        result = guard.apply_dynamic_daily_budget(self.config, combined, state, self.now)
+
+        budget = result["dynamic_daily_budget"]
+        expected = (100.0 - 15.0) / 3.0 + (80.0 - 15.0) / 7.0
+        self.assertAlmostEqual(expected, budget["daily_limit_percent"], places=6)
+        plans = {plan["account_key"]: plan for plan in budget["account_plans"]}
+        self.assertEqual(3, plans["pro-account-hash"]["days_remaining"])
+        self.assertEqual(7, plans["pro-account-hash-b"]["days_remaining"])
+
+    def test_new_reset_credit_plan_requires_confirmation_before_rebaseline(self) -> None:
+        self.config["reset_credit_grace_enabled"] = True
+        state: dict = {}
+        no_credit = reset_credit_result(
+            self.now,
+            3 * 86_400,
+            remaining_percent=100.0,
+            available_count=0,
+            include_credit=False,
+        )
+        with_credit = reset_credit_result(self.now, 3 * 86_400, remaining_percent=100.0)
+        guard.apply_dynamic_daily_budget(self.config, no_credit, state, self.now)
+
+        pending = guard.apply_dynamic_daily_budget(self.config, with_credit, state, self.now + 60)
+        pending_daily_limit = pending["dynamic_daily_budget"]["daily_limit_percent"]
+        pending_candidate_count = pending["dynamic_daily_budget"]["reset_candidate"]["count"]
+        degraded = reset_credit_result(
+            self.now,
+            3 * 86_400,
+            remaining_percent=100.0,
+            available_count=0,
+            include_credit=False,
+        )
+        degraded["accounts"][0]["reset_credits_error"] = "temporary upstream failure"
+        degraded_result = guard.apply_dynamic_daily_budget(self.config, degraded, state, self.now + 120)
+        degraded_candidate_count = degraded_result["dynamic_daily_budget"]["reset_candidate"]["count"]
+        degraded_daily_limit = degraded_result["dynamic_daily_budget"]["daily_limit_percent"]
+        confirmed = guard.apply_dynamic_daily_budget(self.config, with_credit, state, self.now + 180)
+
+        self.assertAlmostEqual(85.0 / 7.0, pending_daily_limit, places=6)
+        self.assertEqual(1, pending_candidate_count)
+        self.assertEqual(1, degraded_candidate_count)
+        self.assertAlmostEqual(85.0 / 7.0, degraded_daily_limit, places=6)
+        self.assertAlmostEqual(85.0 / 3.0, confirmed["dynamic_daily_budget"]["daily_limit_percent"], places=6)
+        self.assertEqual(
+            "reset_credit_schedule_changed",
+            confirmed["dynamic_daily_budget"]["baseline_reset_reason"],
+        )
+
+    def test_transient_reset_credit_probe_failure_keeps_effective_plan(self) -> None:
+        self.config["reset_credit_grace_enabled"] = True
+        state: dict = {}
+        initial = reset_credit_result(self.now, 3 * 86_400, remaining_percent=100.0)
+        first = guard.apply_dynamic_daily_budget(self.config, initial, state, self.now)
+        baseline_signature = first["dynamic_daily_budget"]["planning_signature"]
+        baseline_daily_limit = first["dynamic_daily_budget"]["daily_limit_percent"]
+        transient = reset_credit_result(
+            self.now,
+            3 * 86_400,
+            remaining_percent=100.0,
+            available_count=0,
+            include_credit=False,
+        )
+        transient_account = transient["accounts"][0]
+        transient_account["reset_credits_available"] = None
+        transient_account["reset_credits_error"] = "temporary upstream failure"
+
+        second = guard.apply_dynamic_daily_budget(self.config, transient, state, self.now + 60)
+        fallback = reset_credit_result(
+            self.now,
+            3 * 86_400,
+            remaining_percent=100.0,
+            available_count=0,
+            include_credit=False,
+        )
+        fallback["quota_health_source"] = "python_guard_fallback"
+        fallback["quota_health_endpoint_error"] = "temporary management endpoint failure"
+        third = guard.apply_dynamic_daily_budget(self.config, fallback, state, self.now + 120)
+
+        self.assertEqual(
+            baseline_signature,
+            second["dynamic_daily_budget"]["observed_planning_signature"],
+        )
+        self.assertEqual(baseline_daily_limit, second["dynamic_daily_budget"]["daily_limit_percent"])
+        self.assertEqual(1, second["dynamic_daily_budget"]["credit_probe_degraded_account_count"])
+        self.assertEqual("cached", second["dynamic_daily_budget"]["account_plans"][0]["reset_credit_observation"])
+        self.assertEqual(baseline_signature, third["dynamic_daily_budget"]["observed_planning_signature"])
+        self.assertEqual(baseline_daily_limit, third["dynamic_daily_budget"]["daily_limit_percent"])
+        self.assertEqual(1, third["dynamic_daily_budget"]["credit_probe_degraded_account_count"])
+        self.assertEqual("cached", third["dynamic_daily_budget"]["account_plans"][0]["reset_credit_observation"])
+
 
 class ResetCreditGraceTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -432,6 +666,11 @@ class ResetCreditGraceTest(unittest.TestCase):
         self.assertFalse(reset_result["reset_credit_grace"]["active"])
         self.assertEqual(1, reset_result["reset_credit_grace"]["manual_reset_count"])
         self.assertEqual("reset_credit_consumed", reset_result["dynamic_daily_budget"]["baseline_reset_reason"])
+        self.assertEqual("weekly", reset_result["dynamic_daily_budget"]["effective_reset_source"])
+        self.assertEqual(
+            reset_result["dynamic_daily_budget"]["observed_planning_signature"],
+            reset_result["dynamic_daily_budget"]["planning_signature"],
+        )
 
     def test_expired_credit_without_reset_does_not_report_confirmation(self) -> None:
         state: dict = {}
