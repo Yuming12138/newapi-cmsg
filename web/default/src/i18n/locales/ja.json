@@ -4671,13 +4671,14 @@
     "dashboard": {
       "overview": {
         "codexRadar": {
-          "title": "GPT-5.6 知能効率",
-          "description": "分散ベンチマーク結果。平均価格はCMSGの請求額ではありません",
+          "title": "知能効率",
+          "description": "完全な公開集計データ。平均価格はCMSGの請求額ではありません",
           "unavailable": "Codex Radarデータは一時的に利用できません",
           "model": "モデル",
           "iq": "知能",
           "cost": "平均価格",
           "duration": "平均時間",
+          "pending": "公開データなし",
           "minutes": "{{count}}分",
           "updatedAt": "{{time}} 更新",
           "cached": "· キャッシュデータ",

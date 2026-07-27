@@ -4671,13 +4671,14 @@
     "dashboard": {
       "overview": {
         "codexRadar": {
-          "title": "Hiệu quả trí tuệ GPT-5.6",
-          "description": "Kết quả benchmark phân tán; giá trung bình không phải phí CMSG",
+          "title": "Hiệu quả trí tuệ",
+          "description": "Dữ liệu tổng hợp công khai đầy đủ; giá trung bình không phải phí CMSG",
           "unavailable": "Dữ liệu Codex Radar tạm thời không khả dụng",
           "model": "Mô hình",
           "iq": "IQ",
           "cost": "Giá trung bình",
           "duration": "Thời gian TB",
+          "pending": "Chưa có dữ liệu công khai",
           "minutes": "{{count}} phút",
           "updatedAt": "Cập nhật {{time}}",
           "cached": "· dữ liệu đệm",

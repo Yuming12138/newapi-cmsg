@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -10,64 +11,47 @@ import (
 )
 
 const codexRadarTestPayload = `{
-  "schema_version": "2.0",
-  "api_access": {
-    "requirements": {
-      "attribution_text": "数据来自 Codex 雷达 codexradar.com"
-    }
-  },
-  "model_iq": {
-    "updated_at": "2026-07-27T23:06:05+08:00",
-    "latest": {
-      "score": 104.9,
-      "status": "green",
-      "passed": 78,
-      "tasks": 112,
-      "average_cost_usd": 8.8514,
-      "average_task_seconds": 1955.125,
-      "average_task_time_human": "33分钟",
+  "schema": 2,
+  "source_updated_at": "2026-07-28T01:49:07+08:00",
+  "points": [
+    {
       "model": "gpt-5.6-sol",
-      "reasoning_effort": "max"
+      "effort": "max",
+      "iq": 103.125,
+      "passed": 77,
+      "valid_tasks": 112,
+      "average_price_usd": 8.911578,
+      "average_minutes": 31.8137
     },
-    "comparisons": {
-      "gpt_56_terra_high": {
-        "label": "GPT-5.6 Terra high",
-        "model": "gpt-5.6-terra",
-        "reasoning_effort": "high",
-        "latest": {
-          "score": 69.6,
-          "status": "red",
-          "passed": 52,
-          "tasks": 112,
-          "average_cost_usd": 1.3,
-          "average_task_seconds": 720,
-          "average_task_time_human": "12分钟",
-          "model": "gpt-5.6-terra",
-          "reasoning_effort": "high"
-        }
-      },
-      "gpt_56_luna_missing_score": {
-        "label": "GPT-5.6 Luna low",
-        "model": "gpt-5.6-luna",
-        "reasoning_effort": "low",
-        "latest": {
-          "score": 0,
-          "model": "gpt-5.6-luna",
-          "reasoning_effort": "low"
-        }
-      },
-      "gpt_55_high": {
-        "label": "GPT-5.5 high",
-        "model": "gpt-5.5",
-        "reasoning_effort": "high",
-        "latest": {
-          "score": 83.4,
-          "model": "gpt-5.5",
-          "reasoning_effort": "high"
-        }
-      }
+    {
+      "model": "gpt-5.6-terra",
+      "effort": "high",
+      "iq": 69.6429,
+      "passed": 52,
+      "valid_tasks": 112,
+      "average_price_usd": 1.254286,
+      "average_minutes": 11.5278
+    },
+    {
+      "model": "gpt-5.5",
+      "effort": "high",
+      "iq": 80.3571,
+      "passed": 60,
+      "valid_tasks": 112,
+      "average_price_usd": 3.683317,
+      "average_minutes": 16.4511
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "effort": "low",
+      "iq": 0
+    },
+    {
+      "model": "gpt-5.4",
+      "effort": "high",
+      "iq": 88.0
     }
-  }
+  ]
 }`
 
 func TestCodexRadarProviderFiltersAndCachesMetrics(t *testing.T) {
@@ -88,14 +72,21 @@ func TestCodexRadarProviderFiltersAndCachesMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	if len(overview.Metrics) != 2 {
-		t.Fatalf("metrics count = %d, want 2", len(overview.Metrics))
+	if len(overview.Metrics) != 3 {
+		t.Fatalf("metrics count = %d, want 3", len(overview.Metrics))
 	}
 	if overview.Metrics[0].Key != "gpt_56_sol_max" {
 		t.Fatalf("first metric = %q, want gpt_56_sol_max", overview.Metrics[0].Key)
 	}
 	if overview.Metrics[1].Key != "gpt_56_terra_high" {
 		t.Fatalf("second metric = %q, want gpt_56_terra_high", overview.Metrics[1].Key)
+	}
+	if overview.Metrics[2].Key != "gpt_55_high" || overview.Metrics[2].Family != "gpt-5.5" {
+		t.Fatalf("third metric = %#v, want GPT-5.5 high", overview.Metrics[2])
+	}
+	if math.Abs(overview.Metrics[0].AverageCostUSD-8.911578) > 1e-9 ||
+		math.Abs(overview.Metrics[0].AverageTaskSeconds-31.8137*60) > 1e-9 {
+		t.Fatalf("first metric averages = %#v", overview.Metrics[0])
 	}
 	if overview.Attribution != "数据来自 Codex 雷达 codexradar.com" {
 		t.Fatalf("attribution = %q", overview.Attribution)
@@ -109,6 +100,52 @@ func TestCodexRadarProviderFiltersAndCachesMetrics(t *testing.T) {
 	}
 	if got := requestCount.Load(); got != 1 {
 		t.Fatalf("upstream requests = %d, want 1", got)
+	}
+}
+
+func TestBuildCodexRadarOverviewIncludesCompletePublishedCatalog(t *testing.T) {
+	source := codexRadarSource{
+		Schema:          2,
+		SourceUpdatedAt: "2026-07-28T01:49:07+08:00",
+	}
+	catalog := []struct {
+		model   string
+		efforts []string
+	}{
+		{model: "gpt-5.6-sol", efforts: []string{"low", "medium", "high", "xhigh", "max", "ultra"}},
+		{model: "gpt-5.6-terra", efforts: []string{"low", "medium", "high", "xhigh", "max", "ultra"}},
+		{model: "gpt-5.6-luna", efforts: []string{"low", "medium", "high", "xhigh", "max"}},
+		{model: "gpt-5.5", efforts: []string{"high", "xhigh"}},
+	}
+	for _, family := range catalog {
+		for _, effort := range family.efforts {
+			source.Points = append(source.Points, codexRadarSourcePoint{
+				Model:           family.model,
+				Effort:          effort,
+				IQ:              80,
+				AveragePriceUSD: 1,
+				AverageMinutes:  10,
+			})
+		}
+	}
+
+	overview, err := buildCodexRadarOverview(source)
+	if err != nil {
+		t.Fatalf("buildCodexRadarOverview() error = %v", err)
+	}
+	if len(overview.Metrics) != 19 {
+		t.Fatalf("metrics count = %d, want 19", len(overview.Metrics))
+	}
+	wantKeys := []string{
+		"gpt_56_sol_ultra", "gpt_56_sol_max", "gpt_56_sol_xhigh", "gpt_56_sol_high", "gpt_56_sol_medium", "gpt_56_sol_low",
+		"gpt_56_terra_ultra", "gpt_56_terra_max", "gpt_56_terra_xhigh", "gpt_56_terra_high", "gpt_56_terra_medium", "gpt_56_terra_low",
+		"gpt_56_luna_max", "gpt_56_luna_xhigh", "gpt_56_luna_high", "gpt_56_luna_medium", "gpt_56_luna_low",
+		"gpt_55_xhigh", "gpt_55_high",
+	}
+	for index, want := range wantKeys {
+		if got := overview.Metrics[index].Key; got != want {
+			t.Fatalf("metric %d key = %q, want %q", index, got, want)
+		}
 	}
 }
 

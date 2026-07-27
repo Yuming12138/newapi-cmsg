@@ -4671,13 +4671,14 @@
     "dashboard": {
       "overview": {
         "codexRadar": {
-          "title": "Efficacité intellectuelle GPT-5.6",
-          "description": "Résultats du benchmark distribué ; le prix moyen n'est pas la facturation CMSG",
+          "title": "Efficacité intellectuelle",
+          "description": "Données agrégées publiques complètes ; le prix moyen n'est pas la facturation CMSG",
           "unavailable": "Les données Codex Radar sont temporairement indisponibles",
           "model": "Modèle",
           "iq": "QI",
           "cost": "Prix moyen",
           "duration": "Durée moy.",
+          "pending": "Aucune donnée publique",
           "minutes": "{{count}} min",
           "updatedAt": "Mis à jour {{time}}",
           "cached": "· données en cache",

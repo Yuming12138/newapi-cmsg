@@ -4686,13 +4686,14 @@
     "dashboard": {
       "overview": {
         "codexRadar": {
-          "title": "GPT-5.6 Intelligence Efficiency",
-          "description": "Distributed benchmark results; average price is not CMSG billing",
+          "title": "Intelligence Efficiency",
+          "description": "Complete public aggregate data; average price is not CMSG billing",
           "unavailable": "Codex Radar data is temporarily unavailable",
           "model": "Model",
           "iq": "IQ",
           "cost": "Avg. price",
           "duration": "Avg. time",
+          "pending": "No public data",
           "minutes": "{{count}} min",
           "updatedAt": "Updated {{time}}",
           "cached": "· cached data",

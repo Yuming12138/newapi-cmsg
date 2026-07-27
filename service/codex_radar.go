@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,9 +16,9 @@ import (
 )
 
 const (
-	codexRadarPublicEndpoint = "https://codexradar.com/current.json"
+	codexRadarPublicEndpoint = "https://codexradar.com/data/intelligence-efficiency.json"
 	codexRadarSourceURL      = "https://codexradar.com/"
-	codexRadarCacheTTL       = 15 * time.Minute
+	codexRadarCacheTTL       = 10 * time.Minute
 	codexRadarStaleTTL       = 24 * time.Hour
 	codexRadarHTTPTimeout    = 5 * time.Second
 	codexRadarMaxBodyBytes   = 2 << 20
@@ -48,37 +49,20 @@ type CodexRadarOverview struct {
 	Metrics       []CodexRadarMetric `json:"metrics"`
 }
 
-type codexRadarSourceMetric struct {
-	Score                float64 `json:"score"`
-	Status               string  `json:"status"`
-	Passed               int     `json:"passed"`
-	Tasks                int     `json:"tasks"`
-	AverageCostUSD       float64 `json:"average_cost_usd"`
-	AverageTaskSeconds   float64 `json:"average_task_seconds"`
-	AverageTaskTimeHuman string  `json:"average_task_time_human"`
-	Model                string  `json:"model"`
-	ReasoningEffort      string  `json:"reasoning_effort"`
-}
-
-type codexRadarSourceComparison struct {
-	Label           string                 `json:"label"`
-	Model           string                 `json:"model"`
-	ReasoningEffort string                 `json:"reasoning_effort"`
-	Latest          codexRadarSourceMetric `json:"latest"`
+type codexRadarSourcePoint struct {
+	Model           string  `json:"model"`
+	Effort          string  `json:"effort"`
+	IQ              float64 `json:"iq"`
+	Passed          int     `json:"passed"`
+	ValidTasks      int     `json:"valid_tasks"`
+	AveragePriceUSD float64 `json:"average_price_usd"`
+	AverageMinutes  float64 `json:"average_minutes"`
 }
 
 type codexRadarSource struct {
-	SchemaVersion string `json:"schema_version"`
-	APIAccess     struct {
-		Requirements struct {
-			AttributionText string `json:"attribution_text"`
-		} `json:"requirements"`
-	} `json:"api_access"`
-	ModelIQ struct {
-		UpdatedAt   string                                `json:"updated_at"`
-		Latest      codexRadarSourceMetric                `json:"latest"`
-		Comparisons map[string]codexRadarSourceComparison `json:"comparisons"`
-	} `json:"model_iq"`
+	Schema          int                     `json:"schema"`
+	SourceUpdatedAt string                  `json:"source_updated_at"`
+	Points          []codexRadarSourcePoint `json:"points"`
 }
 
 type codexRadarCacheEntry struct {
@@ -263,77 +247,80 @@ func (provider *codexRadarProvider) fetch(ctx context.Context) (CodexRadarOvervi
 }
 
 func buildCodexRadarOverview(source codexRadarSource) (CodexRadarOverview, error) {
-	metrics := make([]CodexRadarMetric, 0, len(source.ModelIQ.Comparisons)+1)
-	seenKeys := make(map[string]struct{}, len(source.ModelIQ.Comparisons)+1)
-	if isGPT56Metric(source.ModelIQ.Latest) {
-		seenKeys["gpt_56_sol_max"] = struct{}{}
-		metrics = append(metrics, makeCodexRadarMetric(
-			"gpt_56_sol_max",
-			"GPT-5.6 Sol max",
-			source.ModelIQ.Latest,
-		))
-	}
-
-	for key, comparison := range source.ModelIQ.Comparisons {
-		if _, exists := seenKeys[key]; exists {
+	metrics := make([]CodexRadarMetric, 0, len(source.Points))
+	seenSlots := make(map[string]struct{}, len(source.Points))
+	for _, point := range source.Points {
+		if !isCodexRadarPoint(point) {
 			continue
 		}
-		metric := comparison.Latest
-		if metric.Model == "" {
-			metric.Model = comparison.Model
-		}
-		if metric.ReasoningEffort == "" {
-			metric.ReasoningEffort = comparison.ReasoningEffort
-		}
-		if !isGPT56Metric(metric) {
+		family := codexRadarFamily(point.Model)
+		effort := strings.ToLower(strings.TrimSpace(point.Effort))
+		slot := family + "\x00" + effort
+		if _, exists := seenSlots[slot]; exists {
 			continue
 		}
-		seenKeys[key] = struct{}{}
-		metrics = append(metrics, makeCodexRadarMetric(key, comparison.Label, metric))
+		seenSlots[slot] = struct{}{}
+		metrics = append(metrics, makeCodexRadarMetric(point, family, effort))
 	}
 
 	if len(metrics) == 0 {
-		return CodexRadarOverview{}, fmt.Errorf("codex radar response contains no GPT-5.6 metrics")
+		return CodexRadarOverview{}, fmt.Errorf("codex radar response contains no supported metrics")
 	}
 	sortCodexRadarMetrics(metrics)
 
-	attribution := strings.TrimSpace(source.APIAccess.Requirements.AttributionText)
-	if attribution == "" {
-		attribution = "数据来自 Codex 雷达 codexradar.com"
-	}
-
 	return CodexRadarOverview{
-		SchemaVersion: source.SchemaVersion,
-		UpdatedAt:     source.ModelIQ.UpdatedAt,
+		SchemaVersion: strconv.Itoa(source.Schema),
+		UpdatedAt:     source.SourceUpdatedAt,
 		SourceURL:     codexRadarSourceURL,
-		Attribution:   attribution,
+		Attribution:   "数据来自 Codex 雷达 codexradar.com",
 		Metrics:       metrics,
 	}, nil
 }
 
-func isGPT56Metric(metric codexRadarSourceMetric) bool {
-	return strings.HasPrefix(strings.ToLower(metric.Model), "gpt-5.6-") && metric.Score > 0
+func isCodexRadarPoint(point codexRadarSourcePoint) bool {
+	model := strings.ToLower(strings.TrimSpace(point.Model))
+	return (strings.HasPrefix(model, "gpt-5.6-") || model == "gpt-5.5") && point.IQ > 0
 }
 
-func makeCodexRadarMetric(key string, label string, source codexRadarSourceMetric) CodexRadarMetric {
-	family := strings.TrimPrefix(strings.ToLower(source.Model), "gpt-5.6-")
-	if label == "" {
-		label = fmt.Sprintf("GPT-5.6 %s %s", familyLabel(family), source.ReasoningEffort)
+func makeCodexRadarMetric(point codexRadarSourcePoint, family string, effort string) CodexRadarMetric {
+	label := fmt.Sprintf("GPT-5.6 %s %s", familyLabel(family), effort)
+	key := fmt.Sprintf("gpt_56_%s_%s", family, effort)
+	if family == "gpt-5.5" {
+		label = fmt.Sprintf("GPT-5.5 %s", effort)
+		key = "gpt_55_" + effort
 	}
 	return CodexRadarMetric{
 		Key:                  key,
 		Label:                label,
-		Model:                source.Model,
+		Model:                point.Model,
 		Family:               family,
-		ReasoningEffort:      source.ReasoningEffort,
-		Score:                source.Score,
-		Status:               source.Status,
-		Passed:               source.Passed,
-		Tasks:                source.Tasks,
-		AverageCostUSD:       source.AverageCostUSD,
-		AverageTaskSeconds:   source.AverageTaskSeconds,
-		AverageTaskTimeHuman: source.AverageTaskTimeHuman,
+		ReasoningEffort:      effort,
+		Score:                point.IQ,
+		Status:               codexRadarStatus(point.IQ),
+		Passed:               point.Passed,
+		Tasks:                point.ValidTasks,
+		AverageCostUSD:       point.AveragePriceUSD,
+		AverageTaskSeconds:   point.AverageMinutes * 60,
+		AverageTaskTimeHuman: fmt.Sprintf("%.0f分钟", point.AverageMinutes),
 	}
+}
+
+func codexRadarStatus(score float64) string {
+	if score >= 90 {
+		return "green"
+	}
+	if score >= 75 {
+		return "yellow"
+	}
+	return "red"
+}
+
+func codexRadarFamily(model string) string {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	if normalized == "gpt-5.5" {
+		return normalized
+	}
+	return strings.TrimPrefix(normalized, "gpt-5.6-")
 }
 
 func familyLabel(family string) string {
@@ -350,7 +337,7 @@ func familyLabel(family string) string {
 }
 
 func sortCodexRadarMetrics(metrics []CodexRadarMetric) {
-	familyOrder := map[string]int{"sol": 0, "terra": 1, "luna": 2}
+	familyOrder := map[string]int{"sol": 0, "terra": 1, "luna": 2, "gpt-5.5": 3}
 	effortOrder := map[string]int{"ultra": 0, "max": 1, "xhigh": 2, "high": 3, "medium": 4, "low": 5}
 	sort.SliceStable(metrics, func(i int, j int) bool {
 		leftFamily, leftOK := familyOrder[metrics[i].Family]

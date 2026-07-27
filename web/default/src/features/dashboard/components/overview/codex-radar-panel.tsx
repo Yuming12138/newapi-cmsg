@@ -21,56 +21,157 @@ import { useQuery } from '@tanstack/react-query'
 import { BrainCircuit, ExternalLink } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
+import { Skeleton } from '@/components/ui/skeleton'
 import { getCodexRadarOverview } from '../../api'
 import type { CodexRadarMetric } from '../../types'
-import { PanelWrapper } from '../ui/panel-wrapper'
 
-const REFRESH_INTERVAL_MS = 15 * 60 * 1000
+const REFRESH_INTERVAL_MS = 10 * 60 * 1000
 
-function scoreClassName(status: string): string {
-  switch (status) {
-    case 'green':
-      return 'text-success'
-    case 'yellow':
-      return 'text-warning'
-    case 'red':
-      return 'text-destructive'
-    default:
-      return 'text-foreground'
-  }
+interface MetricGroup {
+  family: string
+  label: string
+  efforts: string[]
+  firstCardClassName?: string
 }
 
-function familyAccentClassName(family: string): string {
-  switch (family) {
-    case 'sol':
-      return 'bg-warning'
-    case 'terra':
-      return 'bg-blue-500'
-    case 'luna':
-      return 'bg-zinc-400'
-    default:
-      return 'bg-primary'
-  }
+const METRIC_GROUPS: MetricGroup[] = [
+  {
+    family: 'sol',
+    label: 'Sol',
+    efforts: ['ultra', 'max', 'xhigh', 'high', 'medium', 'low'],
+  },
+  {
+    family: 'terra',
+    label: 'Terra',
+    efforts: ['ultra', 'max', 'xhigh', 'high', 'medium', 'low'],
+  },
+  {
+    family: 'luna',
+    label: 'Luna',
+    efforts: ['max', 'xhigh', 'high', 'medium', 'low'],
+    firstCardClassName: 'xl:col-start-2',
+  },
+  {
+    family: 'gpt-5.5',
+    label: 'GPT-5.5',
+    efforts: ['xhigh', 'high'],
+    firstCardClassName: 'xl:col-start-3',
+  },
+]
+
+const FAMILY_STYLES: Record<
+  string,
+  { accent: string; border: string; surface: string; value: string }
+> = {
+  sol: {
+    accent: 'bg-warning',
+    border: 'border-warning/40',
+    surface: 'bg-warning/5',
+    value: 'text-warning',
+  },
+  terra: {
+    accent: 'bg-blue-500',
+    border: 'border-blue-500/40',
+    surface: 'bg-blue-500/5',
+    value: 'text-blue-600 dark:text-blue-400',
+  },
+  luna: {
+    accent: 'bg-zinc-400',
+    border: 'border-zinc-400/40',
+    surface: 'bg-muted/20',
+    value: 'text-foreground',
+  },
+  'gpt-5.5': {
+    accent: 'bg-cyan-500',
+    border: 'border-cyan-500/40',
+    surface: 'bg-cyan-500/5',
+    value: 'text-cyan-600 dark:text-cyan-400',
+  },
 }
 
-function familySurfaceClassName(family: string): string {
-  switch (family) {
-    case 'sol':
-      return 'bg-warning/5'
-    case 'terra':
-      return 'bg-blue-500/5'
-    case 'luna':
-      return 'bg-muted/25'
-    default:
-      return 'bg-card'
-  }
+function metricSlot(family: string, effort: string): string {
+  return `${family}:${effort}`
 }
 
-function metricName(metric: CodexRadarMetric): string {
-  const family = metric.family
-    ? metric.family.charAt(0).toUpperCase() + metric.family.slice(1)
-    : metric.model
-  return `${family} ${metric.reasoning_effort}`
+function MetricCard(props: {
+  family: string
+  familyLabel: string
+  effort: string
+  metric?: CodexRadarMetric
+  className?: string
+}) {
+  const { t } = useTranslation()
+  const styles = FAMILY_STYLES[props.family] ?? FAMILY_STYLES.luna
+  const displayName = `${props.familyLabel} ${props.effort}`
+  const minutes = props.metric
+    ? Math.max(1, Math.round(props.metric.average_task_seconds / 60))
+    : null
+  const ariaLabel = props.metric
+    ? `${displayName}, ${t('dashboard.overview.codexRadar.iq')} ${props.metric.score.toFixed(1)}, ${t('dashboard.overview.codexRadar.cost')} $${props.metric.average_cost_usd.toFixed(1)}, ${t('dashboard.overview.codexRadar.duration')} ${minutes}`
+    : `${displayName}, ${t('dashboard.overview.codexRadar.pending')}`
+
+  return (
+    <div
+      className={cn(
+        'bg-card relative grid min-h-28 min-w-0 grid-cols-[minmax(0,1fr)_4.25rem] overflow-hidden rounded-md border shadow-xs',
+        styles.border,
+        styles.surface,
+        props.className
+      )}
+      aria-label={ariaLabel}
+    >
+      <span
+        className={cn('absolute inset-x-0 top-0 h-1', styles.accent)}
+        aria-hidden='true'
+      />
+      <div className='flex min-w-0 flex-col justify-between px-3 py-3'>
+        <span
+          className='truncate text-xs font-semibold sm:text-sm'
+          title={displayName}
+        >
+          {displayName}
+        </span>
+        {props.metric ? (
+          <span
+            className={cn(
+              'mt-3 text-3xl leading-none font-semibold tabular-nums',
+              styles.value
+            )}
+            title={t('dashboard.overview.codexRadar.iq')}
+          >
+            {props.metric.score.toFixed(1)}
+          </span>
+        ) : (
+          <span className='text-muted-foreground mt-3 text-[11px] leading-4'>
+            {t('dashboard.overview.codexRadar.pending')}
+          </span>
+        )}
+      </div>
+
+      <div className='border-border/70 grid grid-rows-2 border-l'>
+        <span
+          className={cn(
+            'flex items-center justify-center border-b text-sm font-semibold tabular-nums',
+            props.metric ? styles.value : 'text-muted-foreground'
+          )}
+          title={t('dashboard.overview.codexRadar.cost')}
+        >
+          {props.metric ? `$${props.metric.average_cost_usd.toFixed(1)}` : '—'}
+        </span>
+        <span
+          className={cn(
+            'flex items-center justify-center text-sm font-semibold tabular-nums',
+            props.metric ? styles.value : 'text-muted-foreground'
+          )}
+          title={t('dashboard.overview.codexRadar.duration')}
+        >
+          {minutes == null
+            ? '—'
+            : t('dashboard.overview.codexRadar.minutes', { count: minutes })}
+        </span>
+      </div>
+    </div>
+  )
 }
 
 export function CodexRadarPanel() {
@@ -83,111 +184,93 @@ export function CodexRadarPanel() {
     retry: 1,
   })
   const metrics = query.data?.metrics ?? []
+  const metricsBySlot = new Map(
+    metrics.map((metric) => [
+      metricSlot(metric.family, metric.reasoning_effort),
+      metric,
+    ])
+  )
   const updatedAt = query.data?.updated_at
     ? dayjs(query.data.updated_at).format('M/D HH:mm')
     : ''
 
   return (
-    <PanelWrapper
-      title={
-        <span className='flex items-center gap-2'>
-          <BrainCircuit
-            className='text-muted-foreground/60 size-4'
-            aria-hidden='true'
-          />
-          {t('dashboard.overview.codexRadar.title')}
-        </span>
-      }
-      description={t('dashboard.overview.codexRadar.description')}
-      loading={query.isLoading}
-      empty={query.isError || metrics.length === 0}
-      emptyMessage={t('dashboard.overview.codexRadar.unavailable')}
-      height='min-h-80'
-      contentClassName='p-0'
-    >
-      <div className='flex min-h-80 flex-col'>
-        <div className='bg-border grid min-h-0 flex-1 grid-cols-2 gap-px sm:grid-cols-3 lg:grid-cols-5'>
-          {metrics.map((metric) => (
-            <div
-              key={metric.key}
-              className={cn(
-                'relative flex min-h-24 min-w-0 flex-col justify-between overflow-hidden px-3 py-3 sm:px-4',
-                familySurfaceClassName(metric.family)
-              )}
-              aria-label={`${metricName(metric)}, ${t('dashboard.overview.codexRadar.iq')} ${metric.score.toFixed(1)}, ${t('dashboard.overview.codexRadar.cost')} $${metric.average_cost_usd.toFixed(1)}, ${t('dashboard.overview.codexRadar.duration')} ${Math.max(1, Math.round(metric.average_task_seconds / 60))}`}
+    <section className='min-w-0' aria-labelledby='codex-radar-heading'>
+      <div className='mb-3 flex flex-col justify-between gap-2 sm:flex-row sm:items-start'>
+        <div className='min-w-0'>
+          <div className='flex flex-wrap items-center gap-x-3 gap-y-1'>
+            <h3
+              id='codex-radar-heading'
+              className='flex items-center gap-2 text-lg font-semibold'
             >
-              <span
-                className={cn(
-                  'absolute inset-x-0 top-0 h-0.5',
-                  familyAccentClassName(metric.family)
-                )}
+              <BrainCircuit
+                className='text-muted-foreground size-5'
                 aria-hidden='true'
               />
-              <div className='flex min-w-0 items-start justify-between gap-2'>
-                <span
-                  className='truncate text-xs font-semibold sm:text-sm'
-                  title={metric.label}
-                >
-                  {metricName(metric)}
-                </span>
-                <span
-                  className='text-muted-foreground shrink-0 text-xs font-medium tabular-nums sm:text-sm'
-                  title={t('dashboard.overview.codexRadar.cost')}
-                >
-                  ${metric.average_cost_usd.toFixed(1)}
-                </span>
-              </div>
+              {t('dashboard.overview.codexRadar.title')}
+            </h3>
+            {updatedAt && (
+              <span className='text-muted-foreground text-xs tabular-nums'>
+                {t('dashboard.overview.codexRadar.updatedAt', {
+                  time: updatedAt,
+                })}
+                {query.data?.stale && (
+                  <span className='text-warning ml-1'>
+                    {t('dashboard.overview.codexRadar.cached')}
+                  </span>
+                )}
+              </span>
+            )}
+          </div>
+          <p className='text-muted-foreground mt-1 text-xs'>
+            {t('dashboard.overview.codexRadar.description')}
+          </p>
+        </div>
 
-              <div className='mt-3 flex items-end justify-between gap-2'>
-                <span
-                  className={cn(
-                    'text-2xl leading-none font-semibold tabular-nums sm:text-3xl',
-                    scoreClassName(metric.status)
-                  )}
-                  title={t('dashboard.overview.codexRadar.iq')}
-                >
-                  {metric.score.toFixed(1)}
-                </span>
-                <span
-                  className='text-muted-foreground shrink-0 text-xs tabular-nums sm:text-sm'
-                  title={t('dashboard.overview.codexRadar.duration')}
-                >
-                  {t('dashboard.overview.codexRadar.minutes', {
-                    count: Math.max(
-                      1,
-                      Math.round(metric.average_task_seconds / 60)
-                    ),
-                  })}
-                </span>
-              </div>
+        <a
+          href={query.data?.source_url ?? 'https://codexradar.com/'}
+          target='_blank'
+          rel='noreferrer'
+          className='text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex shrink-0 items-center gap-1 rounded-sm text-xs outline-none focus-visible:ring-2'
+        >
+          {query.data?.attribution ??
+            t('dashboard.overview.codexRadar.attribution')}
+          <ExternalLink className='size-3' aria-hidden='true' />
+        </a>
+      </div>
+
+      {query.isLoading ? (
+        <div className='grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6'>
+          {Array.from({ length: 12 }, (_, index) => (
+            <Skeleton key={index} className='h-28 rounded-md' />
+          ))}
+        </div>
+      ) : query.isError || metrics.length === 0 ? (
+        <div className='text-muted-foreground flex min-h-28 items-center justify-center rounded-md border text-sm'>
+          {t('dashboard.overview.codexRadar.unavailable')}
+        </div>
+      ) : (
+        <div className='space-y-2.5'>
+          {METRIC_GROUPS.map((group) => (
+            <div
+              key={group.family}
+              className='grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6'
+              aria-label={group.label}
+            >
+              {group.efforts.map((effort, index) => (
+                <MetricCard
+                  key={effort}
+                  family={group.family}
+                  familyLabel={group.label}
+                  effort={effort}
+                  metric={metricsBySlot.get(metricSlot(group.family, effort))}
+                  className={index === 0 ? group.firstCardClassName : undefined}
+                />
+              ))}
             </div>
           ))}
         </div>
-
-        <div className='bg-muted/20 text-muted-foreground flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-[11px] sm:px-5'>
-          <span>
-            {updatedAt &&
-              t('dashboard.overview.codexRadar.updatedAt', {
-                time: updatedAt,
-              })}
-            {query.data?.stale && (
-              <span className='text-warning ml-1'>
-                {t('dashboard.overview.codexRadar.cached')}
-              </span>
-            )}
-          </span>
-          <a
-            href={query.data?.source_url ?? 'https://codexradar.com/'}
-            target='_blank'
-            rel='noreferrer'
-            className='hover:text-foreground focus-visible:ring-ring inline-flex items-center gap-1 rounded-sm outline-none focus-visible:ring-2'
-          >
-            {query.data?.attribution ??
-              t('dashboard.overview.codexRadar.attribution')}
-            <ExternalLink className='size-3' aria-hidden='true' />
-          </a>
-        </div>
-      </div>
-    </PanelWrapper>
+      )}
+    </section>
   )
 }
