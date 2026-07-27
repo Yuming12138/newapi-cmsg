@@ -4694,7 +4694,7 @@
           "cost": "平均价格",
           "duration": "平均耗时",
           "pending": "暂无公开数据",
-          "minutes": "{{count}} 分",
+          "minutes": "{{count}} 分钟",
           "updatedAt": "{{time}} 更新",
           "cached": "· 缓存数据",
           "attribution": "数据来自 Codex 雷达 codexradar.com"

@@ -106,8 +106,12 @@ function MetricCard(props: {
   const minutes = props.metric
     ? Math.max(1, Math.round(props.metric.average_task_seconds / 60))
     : null
+  const durationText =
+    minutes == null
+      ? null
+      : t('dashboard.overview.codexRadar.minutes', { count: minutes })
   const ariaLabel = props.metric
-    ? `${displayName}, ${t('dashboard.overview.codexRadar.iq')} ${props.metric.score.toFixed(1)}, ${t('dashboard.overview.codexRadar.cost')} $${props.metric.average_cost_usd.toFixed(1)}, ${t('dashboard.overview.codexRadar.duration')} ${minutes}`
+    ? `${displayName}, ${t('dashboard.overview.codexRadar.iq')} ${props.metric.score.toFixed(1)}, ${t('dashboard.overview.codexRadar.cost')} $${props.metric.average_cost_usd.toFixed(1)}, ${t('dashboard.overview.codexRadar.duration')} ${durationText}`
     : `${displayName}, ${t('dashboard.overview.codexRadar.pending')}`
 
   return (
@@ -165,9 +169,7 @@ function MetricCard(props: {
           )}
           title={t('dashboard.overview.codexRadar.duration')}
         >
-          {minutes == null
-            ? '—'
-            : t('dashboard.overview.codexRadar.minutes', { count: minutes })}
+          {durationText ?? '—'}
         </span>
       </div>
     </div>
