@@ -1,17 +1,19 @@
 # new-api-cmsg
 
-CMSG 生产环境使用的 `new-api` 定制仓库。
+CMSG 面向生产环境维护的 `new-api` 定制仓库。
 
-本仓库基于 [QuantumNous/new-api](https://github.com/QuantumNous/new-api) 维护，保留 upstream `new-api` 的项目来源、许可证和必要 attribution；本 README 只描述 CMSG 自用分支的开发、部署和定制功能。
+本仓库基于 [QuantumNous/new-api](https://github.com/QuantumNous/new-api) 维护，保留 upstream `new-api` 的项目来源、许可证和必要 attribution；本 README 只介绍项目定位和 CMSG 面向用户、管理员的定制能力，开发与部署约定统一记录在 `DEVELOPMENT.md`。
 
 ## CMSG 定制功能
 
-- **分组与余额策略**：支持 `asxs`、`cliproxy-codex`、`cliproxy-codex-pool` 等分组的差异化额度管理，包括“计量但不扣费”、夜间共享余额、订阅制每日额度和余额制上游的混合展示。
-- **上游渠道守卫**：为 asxs、LingDang、zz1、OneToken、CPA/CLIProxyAPI 等上游维护余额刷新、可用性检测、自动禁用与恢复策略，避免低价渠道可用时误打高价渠道。
-- **CLIProxyAPI 集成**：仓库内包含 `cliproxyapi/`，用于 Codex/Claude 等官方网页账号池中转；已加入 HTTP/2 per-host 连接池、坏连接驱逐、流式首包前重试等稳定性优化。
-- **Codex 使用文档**：内置面向桌面端 Codex 和终端版 Codex 的配置说明、示例 `config.toml`、示例 `auth.json`、自定义文档入口和 Chat/Open WebUI 入口。
-- **渠道后台增强**：补充 CPA 5h/7d 配额、刷新时间、余额百分比、渠道 tooltip 等管理视图，方便管理员判断账号池剩余额度和下次刷新窗口。
-- **额度申请流程**：用户余额不足时可以申请临时额度，支持第一次自动审批、后续进入管理员审核。
+- **分组、计量与计费策略**：支持 `asxs`、`cliproxy-codex`、`cliproxy-codex-pool` 等分组的差异化额度管理，包括“计量但不扣费”、夜间共享余额、订阅制每日额度和余额制上游的混合展示。
+- **额度感知的渠道调度**：为 asxs、LingDang、zz1、OneToken、CPA/CLIProxyAPI 等上游维护余额刷新、低价优先、高价兜底、自动禁用与恢复策略；模型别名按实际映射的上游模型计费。
+- **CPA 账号池与模型级额度**：展示账号的 5h/7d 配额、刷新时间和重置机会，区分 Plus/Pro 等账号策略，并对 GPT-5.3-Codex-Spark 等模型实施独立额度守卫。
+- **Codex/Claude 路由与稳定性**：仓库内包含 `cliproxyapi/`，支持账号池、模型映射、工具调用和 reasoning 兼容；已加入 HTTP/2 per-host 连接池、旧代理路径退出、首包前重试和 Mihomo 节点故障转移。
+- **图片生成与编辑工作台**：网页同时支持文生图和图生图/编辑，可上传 1-4 张参考图和可选蒙版；API 提供 `/v1/images/generations` 与 `/v1/images/edits`。
+- **看板与请求可观测性**：支持按渠道统计用量和自定义时间窗口，并提供请求链路、CPA 调度审计、reasoning effort 与流式状态等诊断信息。
+- **账户与注册安全**：支持注册口令、Turnstile、可选安全会话 Cookie、用户硬删除时清理关联凭据，以及用户可控网络请求的 SSRF 防护。
+- **新手文档与用户自助**：内置桌面端和终端版 Codex 配置说明、示例 `config.toml` 与 `auth.json`、Chat/Open WebUI 入口；低余额用户可提交临时额度申请。
 
 ## 开发说明
 
