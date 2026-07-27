@@ -576,7 +576,10 @@ def call_wham_usages(config: dict[str, Any], env: dict[str, str]) -> list[dict[s
                 "error": str(exc)[:180],
             })
 
-    if successful == 0 and accounts and all(item.get("skipped") for item in accounts):
+    if successful == 0 and accounts and all(
+        item.get("skipped") and not item.get("error")
+        for item in accounts
+    ):
         return accounts
     if successful == 0:
         errors = [str(item.get("error") or item.get("reason") or "unknown") for item in accounts]
@@ -608,6 +611,9 @@ def call_cpa_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[s
         raise RuntimeError("cpa_quota_health_invalid_payload")
     if "ok" not in payload or "accounts" not in payload:
         raise RuntimeError("cpa_quota_health_incomplete_payload")
+    if not bool(payload.get("ok")):
+        detail = str(payload.get("error") or payload.get("reason") or "unknown")[:180]
+        raise RuntimeError("cpa_quota_health_probe_failed: " + detail)
     payload["quota_health_source"] = "cpa_management"
     return payload
 

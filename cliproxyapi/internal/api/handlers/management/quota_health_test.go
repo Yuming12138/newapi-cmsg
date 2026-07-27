@@ -256,6 +256,29 @@ func TestEvaluateQuotaHealthAggregatesBuckets(t *testing.T) {
 	}
 }
 
+func TestQuotaHealthAllIntentionallySkippedRejectsTransientProbeFailure(t *testing.T) {
+	accounts := []map[string]any{{
+		"skipped": true,
+		"reason":  "auth_unavailable",
+		"error":   "wham_usage_http_503",
+	}}
+
+	if quotaHealthAllIntentionallySkipped(accounts) {
+		t.Fatal("transient probe failure must not be treated as intentional zero quota")
+	}
+}
+
+func TestQuotaHealthAllIntentionallySkippedAcceptsManualDisable(t *testing.T) {
+	accounts := []map[string]any{{
+		"skipped": true,
+		"reason":  "auth_disabled",
+	}}
+
+	if !quotaHealthAllIntentionallySkipped(accounts) {
+		t.Fatal("manually disabled accounts should remain an intentional zero-quota result")
+	}
+}
+
 func TestEvaluateQuotaHealthAccountResetCreditsUsesReadOnlyEndpointPayload(t *testing.T) {
 	resetCredits := map[string]any{
 		"available_count":    float64(2),
