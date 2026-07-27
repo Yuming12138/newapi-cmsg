@@ -30,10 +30,11 @@ type h2ClientConn interface {
 }
 
 type connPool struct {
-	conns    []h2ClientConn
-	idx      atomic.Uint32
-	draining atomic.Int64
-	drainWG  sync.WaitGroup
+	conns      []h2ClientConn
+	idx        atomic.Uint32
+	generation uint64
+	draining   atomic.Int64
+	drainWG    sync.WaitGroup
 }
 
 type cachedUtlsRoundTrippers struct {
@@ -152,14 +153,23 @@ func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (h2ClientCon
 
 		cond := sync.NewCond(&t.mu)
 		t.pending[host] = cond
+		generation := pool.generation
 		t.mu.Unlock()
 
 		h2Conn, err := t.dialConnection(host, addr)
 
 		t.mu.Lock()
 		pool = t.poolForHostLocked(host)
+		staleGeneration := pool.generation != generation
 		delete(t.pending, host)
 		cond.Broadcast()
+		if staleGeneration {
+			t.mu.Unlock()
+			if h2Conn != nil {
+				go func() { _ = h2Conn.Close() }()
+			}
+			continue
+		}
 
 		if err != nil {
 			t.mu.Unlock()
@@ -286,6 +296,7 @@ func (t *utlsRoundTripper) fillPool(host, addr string) {
 			t.mu.Unlock()
 			return
 		}
+		generation := pool.generation
 		t.mu.Unlock()
 
 		conn, errDial := t.dialConnection(host, addr)
@@ -296,6 +307,11 @@ func (t *utlsRoundTripper) fillPool(host, addr string) {
 
 		t.mu.Lock()
 		pool = t.poolForHostLocked(host)
+		if pool.generation != generation {
+			t.mu.Unlock()
+			go func() { _ = conn.Close() }()
+			continue
+		}
 		if len(pool.conns) >= t.poolSize {
 			t.mu.Unlock()
 			go func() { _ = conn.Close() }()
@@ -353,6 +369,11 @@ func (t *utlsRoundTripper) attempt(req *http.Request, hostname, addr string) (*h
 // streams drain. Connection-level errors close it immediately. Request-local
 // errors leave the shared connection untouched.
 func (t *utlsRoundTripper) handleConnError(hostname string, conn h2ClientConn, err error) {
+	if isClientConnEstablishmentError(err) {
+		t.retireHostConnections(hostname, conn)
+		return
+	}
+
 	disposition := connectionErrorDisposition(err)
 	if disposition == connErrorKeep {
 		return
@@ -380,6 +401,42 @@ func (t *utlsRoundTripper) handleConnError(hostname string, conn h2ClientConn, e
 		return
 	}
 	go func() { _ = conn.Close() }()
+}
+
+// retireHostConnections invalidates the proxy path used by every selectable
+// connection for a host. The failed connection closes immediately; siblings
+// stop receiving new work but drain healthy in-flight streams without a local
+// timeout. Incrementing generation also discards dials that started before the
+// route failure was observed, so the caller's retry must use a fresh proxy path.
+func (t *utlsRoundTripper) retireHostConnections(hostname string, failed h2ClientConn) {
+	var pool *connPool
+	var siblings []h2ClientConn
+	removed := false
+
+	t.mu.Lock()
+	pool = t.pools[hostname]
+	if pool != nil {
+		for _, cached := range pool.conns {
+			if cached == failed {
+				removed = true
+				continue
+			}
+			siblings = append(siblings, cached)
+		}
+		if removed {
+			pool.conns = nil
+			pool.generation++
+		}
+	}
+	t.mu.Unlock()
+
+	if !removed {
+		return
+	}
+	go func() { _ = failed.Close() }()
+	for _, sibling := range siblings {
+		t.startDrain(pool, sibling)
+	}
 }
 
 // wrapBodyForEvict replaces resp.Body so that any non-EOF read error triggers
@@ -459,6 +516,9 @@ func connectionErrorDisposition(err error) connErrorDisposition {
 	// Preserve narrow fallbacks for errors wrapped by older transport code
 	// without their concrete HTTP/2 type.
 	message := strings.ToUpper(err.Error())
+	if isClientConnEstablishmentError(err) {
+		return connErrorClose
+	}
 	if strings.Contains(message, "STREAM ERROR") {
 		if strings.Contains(message, "PROTOCOL_ERROR") || strings.Contains(message, "INTERNAL_ERROR") {
 			return connErrorDrain
@@ -481,7 +541,15 @@ func isRetryableFreshConnError(err error) bool {
 	if err == nil {
 		return false
 	}
-	return isStreamLevelError(err) || errors.Is(err, io.ErrUnexpectedEOF) || strings.Contains(err.Error(), "unexpected EOF")
+	message := strings.ToUpper(err.Error())
+	return isStreamLevelError(err) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		strings.Contains(message, "UNEXPECTED EOF") ||
+		isClientConnEstablishmentError(err)
+}
+
+func isClientConnEstablishmentError(err error) bool {
+	return err != nil && strings.Contains(strings.ToUpper(err.Error()), "CLIENT CONN COULD NOT BE ESTABLISHED")
 }
 
 // isStreamLevelError matches errors that are safe to retry before any response
