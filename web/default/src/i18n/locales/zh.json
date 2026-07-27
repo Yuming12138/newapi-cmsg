@@ -4682,6 +4682,23 @@
     "Free": "可用",
     "We could not load instances.": "无法加载实例信息。",
     "Nodes reporting from this deployment and their latest heartbeat.": "当前部署中上报的节点及其最新心跳。",
-    "No instances have reported yet.": "暂无实例上报。"
+    "No instances have reported yet.": "暂无实例上报。",
+    "dashboard": {
+      "overview": {
+        "codexRadar": {
+          "title": "GPT-5.6 智力效率",
+          "description": "分布式基准结果；测试成本不代表本站扣费",
+          "unavailable": "Codex 雷达数据暂时不可用",
+          "model": "模型",
+          "iq": "智力",
+          "cost": "测试成本",
+          "duration": "平均耗时",
+          "minutes": "{{count}} 分",
+          "updatedAt": "{{time}} 更新",
+          "cached": "· 缓存数据",
+          "attribution": "数据来自 Codex 雷达 codexradar.com"
+        }
+      }
+    }
   }
 }

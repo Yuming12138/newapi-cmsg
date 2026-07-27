@@ -4667,6 +4667,23 @@
     "Free": "Libre",
     "We could not load instances.": "Impossible de charger les instances.",
     "Nodes reporting from this deployment and their latest heartbeat.": "Nœuds signalés par ce déploiement et leur dernier battement de cœur.",
-    "No instances have reported yet.": "Aucune instance ne s’est encore signalée."
+    "No instances have reported yet.": "Aucune instance ne s’est encore signalée.",
+    "dashboard": {
+      "overview": {
+        "codexRadar": {
+          "title": "Efficacité intellectuelle GPT-5.6",
+          "description": "Résultats du benchmark distribué ; le coût du test n'est pas la facturation CMSG",
+          "unavailable": "Les données Codex Radar sont temporairement indisponibles",
+          "model": "Modèle",
+          "iq": "QI",
+          "cost": "Coût du test",
+          "duration": "Durée moy.",
+          "minutes": "{{count}} min",
+          "updatedAt": "Mis à jour {{time}}",
+          "cached": "· données en cache",
+          "attribution": "Données de Codex Radar codexradar.com"
+        }
+      }
+    }
   }
 }

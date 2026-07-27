@@ -60,6 +60,35 @@ export interface UptimeGroupResult {
 }
 
 // ============================================================================
+// Codex Radar Types
+// ============================================================================
+
+export interface CodexRadarMetric {
+  key: string
+  label: string
+  model: string
+  family: string
+  reasoning_effort: string
+  score: number
+  status: string
+  passed: number
+  tasks: number
+  average_cost_usd: number
+  average_task_seconds: number
+  average_task_time_human: string
+}
+
+export interface CodexRadarOverview {
+  schema_version: string
+  updated_at: string
+  fetched_at: string
+  source_url: string
+  attribution: string
+  stale: boolean
+  metrics: CodexRadarMetric[]
+}
+
+// ============================================================================
 // Dashboard Filter Types
 // ============================================================================
 
