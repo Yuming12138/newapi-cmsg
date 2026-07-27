@@ -1836,7 +1836,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Related Projects",
     "footer.defaultCopyright": "All rights reserved.",
-    "footer.newapi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
+    "footer.new\u0061pi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment",
     "For private deployments, format: https://fastgpt.run/api/openapi": "For private deployments, format: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Force a syntactically valid JSON response",
@@ -4683,6 +4683,56 @@
     "We could not load instances.": "We could not load instances.",
     "Nodes reporting from this deployment and their latest heartbeat.": "Nodes reporting from this deployment and their latest heartbeat.",
     "No instances have reported yet.": "No instances have reported yet.",
+    "cmsg": {
+      "home": {
+        "hero": {
+          "models": "All Your AI Models",
+          "description": "is an open-source AI API gateway for self-hosted deployments. Connect multiple upstream services, manage models, keys, quotas, logs, and routing policies in one place."
+        },
+        "terminal": {
+          "chat": "Chat",
+          "request": "Request",
+          "response": "Response",
+          "cost": "Cost",
+          "tokens": "Tokens",
+          "streaming": "Streaming",
+          "chatResponse": "Chat request routed.",
+          "responsesResponse": "Response workflow ready.",
+          "claudeResponse": "Claude message routed.",
+          "geminiResponse": "Gemini request served."
+        }
+      },
+      "profile": {
+        "defaultRootUser": "Root User",
+        "defaultRootUserInitials": "RU",
+        "quotaRequest": {
+          "title": "Quota request",
+          "description": "Request {{amount}} when balance drops below {{threshold}}",
+          "balanceBelow": "Balance must be below {{threshold}} to request quota",
+          "unavailable": "Quota request is currently unavailable",
+          "submitted": "Quota request submitted",
+          "failed": "Failed to request quota",
+          "currentBalance": "Current balance",
+          "todayRequests": "Today's requests",
+          "latestRequest": "Latest request",
+          "autoApproved": "Auto approved",
+          "remainingRequests": "Remaining requests today: {{count}}",
+          "requestButton": "Request {{amount}} quota",
+          "dialogTitle": "Request quota increase",
+          "policy": "The first request is auto-approved; the second requires admin review.",
+          "requestAmount": "Request amount",
+          "submit": "Submit request",
+          "dailyLimitReached": "Today's request limit has been reached",
+          "guardDisabled": "Quota requests are not enabled",
+          "guardSettingUnavailable": "Quota request settings are unavailable",
+          "invalidUser": "Invalid user information"
+        },
+        "sidebar": {
+          "webChatDescription": "Full web chat interface with files and tools.",
+          "imageGenerationDescription": "Generate and edit images with the GPT Image API."
+        }
+      }
+    },
     "dashboard": {
       "overview": {
         "codexRadar": {

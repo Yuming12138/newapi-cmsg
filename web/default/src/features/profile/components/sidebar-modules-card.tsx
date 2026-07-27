@@ -67,12 +67,12 @@ export function SidebarModulesCard() {
         {
           key: 'open_webui',
           title: t('Chat'),
-          description: t('Full web chat interface with files and tools.'),
+          description: t('cmsg.profile.sidebar.webChatDescription'),
         },
         {
           key: 'image_generation',
           title: t('Image Generation'),
-          description: t('Generate images with the GPT Image API.'),
+          description: t('cmsg.profile.sidebar.imageGenerationDescription'),
         },
         {
           key: 'chat',
