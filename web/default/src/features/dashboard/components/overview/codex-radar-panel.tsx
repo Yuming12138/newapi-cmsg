@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMemo } from 'react'
 import dayjs from 'dayjs'
 import { useQuery } from '@tanstack/react-query'
 import { BrainCircuit, ExternalLink } from 'lucide-react'
@@ -27,34 +26,6 @@ import type { CodexRadarMetric } from '../../types'
 import { PanelWrapper } from '../ui/panel-wrapper'
 
 const REFRESH_INTERVAL_MS = 15 * 60 * 1000
-const DISPLAY_METRIC_KEYS = [
-  'gpt_56_sol_max',
-  'gpt_56_sol_medium',
-  'gpt_56_terra_max',
-  'gpt_56_terra_high',
-  'gpt_56_luna_max',
-  'gpt_56_luna_high',
-]
-
-function selectDisplayMetrics(metrics: CodexRadarMetric[]): CodexRadarMetric[] {
-  const byKey = new Map(metrics.map((metric) => [metric.key, metric]))
-  const selected = DISPLAY_METRIC_KEYS.map((key) => byKey.get(key)).filter(
-    (metric): metric is CodexRadarMetric => metric != null
-  )
-
-  if (selected.length >= DISPLAY_METRIC_KEYS.length) {
-    return selected
-  }
-
-  const selectedKeys = new Set(selected.map((metric) => metric.key))
-  for (const metric of metrics) {
-    if (selectedKeys.has(metric.key)) continue
-    selected.push(metric)
-    selectedKeys.add(metric.key)
-    if (selected.length >= DISPLAY_METRIC_KEYS.length) break
-  }
-  return selected
-}
 
 function scoreClassName(status: string): string {
   switch (status) {
@@ -66,6 +37,32 @@ function scoreClassName(status: string): string {
       return 'text-destructive'
     default:
       return 'text-foreground'
+  }
+}
+
+function familyAccentClassName(family: string): string {
+  switch (family) {
+    case 'sol':
+      return 'bg-warning'
+    case 'terra':
+      return 'bg-blue-500'
+    case 'luna':
+      return 'bg-zinc-400'
+    default:
+      return 'bg-primary'
+  }
+}
+
+function familySurfaceClassName(family: string): string {
+  switch (family) {
+    case 'sol':
+      return 'bg-warning/5'
+    case 'terra':
+      return 'bg-blue-500/5'
+    case 'luna':
+      return 'bg-muted/25'
+    default:
+      return 'bg-card'
   }
 }
 
@@ -85,10 +82,7 @@ export function CodexRadarPanel() {
     refetchInterval: REFRESH_INTERVAL_MS,
     retry: 1,
   })
-  const metrics = useMemo(
-    () => selectDisplayMetrics(query.data?.metrics ?? []),
-    [query.data?.metrics]
-  )
+  const metrics = query.data?.metrics ?? []
   const updatedAt = query.data?.updated_at
     ? dayjs(query.data.updated_at).format('M/D HH:mm')
     : ''
@@ -108,62 +102,64 @@ export function CodexRadarPanel() {
       loading={query.isLoading}
       empty={query.isError || metrics.length === 0}
       emptyMessage={t('dashboard.overview.codexRadar.unavailable')}
-      height='h-80'
+      height='min-h-80'
       contentClassName='p-0'
     >
-      <div className='flex h-80 flex-col'>
-        <div className='text-muted-foreground grid grid-cols-[minmax(6rem,1fr)_3.5rem_4rem_4.5rem] items-center border-b px-4 py-2 text-[11px] font-medium sm:px-5'>
-          <span className='truncate'>
-            {t('dashboard.overview.codexRadar.model')}
-          </span>
-          <span
-            className='truncate text-right'
-            title={t('dashboard.overview.codexRadar.iq')}
-          >
-            {t('dashboard.overview.codexRadar.iq')}
-          </span>
-          <span
-            className='truncate text-right'
-            title={t('dashboard.overview.codexRadar.cost')}
-          >
-            {t('dashboard.overview.codexRadar.cost')}
-          </span>
-          <span
-            className='truncate text-right'
-            title={t('dashboard.overview.codexRadar.duration')}
-          >
-            {t('dashboard.overview.codexRadar.duration')}
-          </span>
-        </div>
-
-        <div className='min-h-0 flex-1'>
+      <div className='flex min-h-80 flex-col'>
+        <div className='bg-border grid min-h-0 flex-1 grid-cols-2 gap-px sm:grid-cols-3 lg:grid-cols-5'>
           {metrics.map((metric) => (
             <div
               key={metric.key}
-              className='border-border/60 grid min-h-9 grid-cols-[minmax(6rem,1fr)_3.5rem_4rem_4.5rem] items-center border-b px-4 py-2 text-xs last:border-b-0 sm:px-5'
+              className={cn(
+                'relative flex min-h-24 min-w-0 flex-col justify-between overflow-hidden px-3 py-3 sm:px-4',
+                familySurfaceClassName(metric.family)
+              )}
+              aria-label={`${metricName(metric)}, ${t('dashboard.overview.codexRadar.iq')} ${metric.score.toFixed(1)}, ${t('dashboard.overview.codexRadar.cost')} $${metric.average_cost_usd.toFixed(1)}, ${t('dashboard.overview.codexRadar.duration')} ${Math.max(1, Math.round(metric.average_task_seconds / 60))}`}
             >
-              <span className='truncate font-medium' title={metric.label}>
-                {metricName(metric)}
-              </span>
               <span
                 className={cn(
-                  'text-right text-sm font-semibold tabular-nums',
-                  scoreClassName(metric.status)
+                  'absolute inset-x-0 top-0 h-0.5',
+                  familyAccentClassName(metric.family)
                 )}
-              >
-                {metric.score.toFixed(1)}
-              </span>
-              <span className='text-muted-foreground text-right tabular-nums'>
-                ${metric.average_cost_usd.toFixed(1)}
-              </span>
-              <span className='text-muted-foreground text-right tabular-nums'>
-                {t('dashboard.overview.codexRadar.minutes', {
-                  count: Math.max(
-                    1,
-                    Math.round(metric.average_task_seconds / 60)
-                  ),
-                })}
-              </span>
+                aria-hidden='true'
+              />
+              <div className='flex min-w-0 items-start justify-between gap-2'>
+                <span
+                  className='truncate text-xs font-semibold sm:text-sm'
+                  title={metric.label}
+                >
+                  {metricName(metric)}
+                </span>
+                <span
+                  className='text-muted-foreground shrink-0 text-xs font-medium tabular-nums sm:text-sm'
+                  title={t('dashboard.overview.codexRadar.cost')}
+                >
+                  ${metric.average_cost_usd.toFixed(1)}
+                </span>
+              </div>
+
+              <div className='mt-3 flex items-end justify-between gap-2'>
+                <span
+                  className={cn(
+                    'text-2xl leading-none font-semibold tabular-nums sm:text-3xl',
+                    scoreClassName(metric.status)
+                  )}
+                  title={t('dashboard.overview.codexRadar.iq')}
+                >
+                  {metric.score.toFixed(1)}
+                </span>
+                <span
+                  className='text-muted-foreground shrink-0 text-xs tabular-nums sm:text-sm'
+                  title={t('dashboard.overview.codexRadar.duration')}
+                >
+                  {t('dashboard.overview.codexRadar.minutes', {
+                    count: Math.max(
+                      1,
+                      Math.round(metric.average_task_seconds / 60)
+                    ),
+                  })}
+                </span>
+              </div>
             </div>
           ))}
         </div>

@@ -714,7 +714,7 @@ export function OverviewDashboard() {
 
       <CardStaggerContainer className='grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]'>
         <div className='grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2'>
-          <CardStaggerItem>
+          <CardStaggerItem className='lg:col-span-2'>
             <CodexRadarPanel />
           </CardStaggerItem>
           <CardStaggerItem>

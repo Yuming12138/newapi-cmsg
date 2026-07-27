@@ -4672,11 +4672,11 @@
       "overview": {
         "codexRadar": {
           "title": "Efficacité intellectuelle GPT-5.6",
-          "description": "Résultats du benchmark distribué ; le coût du test n'est pas la facturation CMSG",
+          "description": "Résultats du benchmark distribué ; le prix moyen n'est pas la facturation CMSG",
           "unavailable": "Les données Codex Radar sont temporairement indisponibles",
           "model": "Modèle",
           "iq": "QI",
-          "cost": "Coût du test",
+          "cost": "Prix moyen",
           "duration": "Durée moy.",
           "minutes": "{{count}} min",
           "updatedAt": "Mis à jour {{time}}",

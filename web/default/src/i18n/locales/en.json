@@ -4687,11 +4687,11 @@
       "overview": {
         "codexRadar": {
           "title": "GPT-5.6 Intelligence Efficiency",
-          "description": "Distributed benchmark results; test cost is not CMSG billing",
+          "description": "Distributed benchmark results; average price is not CMSG billing",
           "unavailable": "Codex Radar data is temporarily unavailable",
           "model": "Model",
           "iq": "IQ",
-          "cost": "Test cost",
+          "cost": "Avg. price",
           "duration": "Avg. time",
           "minutes": "{{count}} min",
           "updatedAt": "Updated {{time}}",

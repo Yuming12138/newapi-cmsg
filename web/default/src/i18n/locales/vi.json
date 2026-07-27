@@ -4672,11 +4672,11 @@
       "overview": {
         "codexRadar": {
           "title": "Hiệu quả trí tuệ GPT-5.6",
-          "description": "Kết quả benchmark phân tán; chi phí thử nghiệm không phải phí CMSG",
+          "description": "Kết quả benchmark phân tán; giá trung bình không phải phí CMSG",
           "unavailable": "Dữ liệu Codex Radar tạm thời không khả dụng",
           "model": "Mô hình",
           "iq": "IQ",
-          "cost": "Chi phí thử",
+          "cost": "Giá trung bình",
           "duration": "Thời gian TB",
           "minutes": "{{count}} phút",
           "updatedAt": "Cập nhật {{time}}",
