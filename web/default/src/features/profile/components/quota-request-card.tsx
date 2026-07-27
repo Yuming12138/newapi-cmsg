@@ -89,16 +89,36 @@ export function QuotaRequestCard({
 
   if (!profile || !requestStatus) return null
 
+  const localizeReason = (reason?: string) => {
+    if (!reason) return t('cmsg.profile.quotaRequest.unavailable')
+
+    if (reason.startsWith('current quota is not below')) {
+      return t('cmsg.profile.quotaRequest.balanceBelow', {
+        threshold: formatQuota(requestStatus.threshold_quota),
+      })
+    }
+
+    const reasonKeys: Record<string, string> = {
+      'quota request is not available': 'cmsg.profile.quotaRequest.unavailable',
+      'quota guard is not enabled': 'cmsg.profile.quotaRequest.guardDisabled',
+      'daily request limit reached':
+        'cmsg.profile.quotaRequest.dailyLimitReached',
+      'invalid user': 'cmsg.profile.quotaRequest.invalidUser',
+      'quota guard setting is not available':
+        'cmsg.profile.quotaRequest.guardSettingUnavailable',
+    }
+
+    return t(reasonKeys[reason] ?? 'cmsg.profile.quotaRequest.unavailable')
+  }
+
   const latest = requestStatus?.latest_request
   const isBelowThreshold = profile.quota < requestStatus.threshold_quota
   const canRequest = !!requestStatus?.can_request && isBelowThreshold
   const unavailableReason = !isBelowThreshold
-    ? t('Balance must be below {{threshold}} to request quota', {
+    ? t('cmsg.profile.quotaRequest.balanceBelow', {
         threshold: formatQuota(requestStatus.threshold_quota),
       })
-    : requestStatus?.reason
-      ? t(requestStatus.reason)
-      : t('quota request is not available')
+    : localizeReason(requestStatus.reason)
   const requestDisabled = loading || submitting || !canRequest
 
   const handleSubmit = async () => {
@@ -106,18 +126,18 @@ export function QuotaRequestCard({
     try {
       const result = await requestQuotaIncrease()
       if (result.success) {
-        toast.success(result.message || t('Quota request submitted'))
+        toast.success(t('cmsg.profile.quotaRequest.submitted'))
         setOpen(false)
         await onProfileUpdate()
       } else {
         toast.error(
-          result.message ? t(result.message) : t('Failed to request quota')
+          result.message
+            ? localizeReason(result.message)
+            : t('cmsg.profile.quotaRequest.failed')
         )
       }
-    } catch (error: unknown) {
-      toast.error(
-        error instanceof Error ? error.message : t('Failed to request quota')
-      )
+    } catch {
+      toast.error(t('cmsg.profile.quotaRequest.failed'))
     } finally {
       setSubmitting(false)
     }
@@ -131,18 +151,13 @@ export function QuotaRequestCard({
             <div className='min-w-0 space-y-1'>
               <CardTitle className='flex items-center gap-2'>
                 <HandCoins className='size-4 shrink-0' />
-                {t('Quota request')}
+                {t('cmsg.profile.quotaRequest.title')}
               </CardTitle>
               <CardDescription>
-                {t(
-                  'Request {{amount}} when balance drops below {{threshold}}',
-                  {
-                    amount: formatQuota(
-                      requestStatus?.request_amount_quota ?? 0
-                    ),
-                    threshold: formatQuota(requestStatus?.threshold_quota ?? 0),
-                  }
-                )}
+                {t('cmsg.profile.quotaRequest.description', {
+                  amount: formatQuota(requestStatus?.request_amount_quota ?? 0),
+                  threshold: formatQuota(requestStatus?.threshold_quota ?? 0),
+                })}
               </CardDescription>
             </div>
             {latest && (
@@ -156,7 +171,7 @@ export function QuotaRequestCard({
           <div className='grid gap-2 text-sm sm:grid-cols-2'>
             <div className='rounded-lg border px-3 py-2'>
               <div className='text-muted-foreground text-xs'>
-                {t('Current balance')}
+                {t('cmsg.profile.quotaRequest.currentBalance')}
               </div>
               <div className='font-mono text-base font-semibold'>
                 {formatQuota(profile?.quota ?? 0)}
@@ -164,7 +179,7 @@ export function QuotaRequestCard({
             </div>
             <div className='rounded-lg border px-3 py-2'>
               <div className='text-muted-foreground text-xs'>
-                {t('Today requests')}
+                {t('cmsg.profile.quotaRequest.todayRequests')}
               </div>
               <div className='font-mono text-base font-semibold'>
                 {requestStatus?.request_count ?? 0}/
@@ -184,7 +199,7 @@ export function QuotaRequestCard({
             <div className='bg-muted/30 rounded-lg border px-3 py-2 text-sm'>
               <div className='text-muted-foreground mb-1 flex items-center gap-2 text-xs'>
                 <Hourglass className='size-3.5 shrink-0' />
-                {t('Latest request')}
+                {t('cmsg.profile.quotaRequest.latestRequest')}
               </div>
               <div className='flex flex-wrap items-center gap-2'>
                 <span>
@@ -205,7 +220,7 @@ export function QuotaRequestCard({
               {latest.auto_approved && (
                 <div className='text-muted-foreground mt-1 flex items-center gap-2 text-xs'>
                   <CheckCircle2 className='size-3.5 shrink-0' />
-                  {t('Auto approved')}
+                  {t('cmsg.profile.quotaRequest.autoApproved')}
                 </div>
               )}
             </div>
@@ -213,8 +228,9 @@ export function QuotaRequestCard({
         </CardContent>
         <CardFooter className='flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between'>
           <div className='text-muted-foreground text-xs'>
-            {t('Remaining requests today')}:{' '}
-            {requestStatus?.remaining_requests ?? 0}
+            {t('cmsg.profile.quotaRequest.remainingRequests', {
+              count: requestStatus?.remaining_requests ?? 0,
+            })}
           </div>
           <div className='flex flex-col items-stretch gap-1 sm:items-end'>
             <TooltipProvider>
@@ -235,7 +251,11 @@ export function QuotaRequestCard({
                         disabled={requestDisabled}
                       >
                         <HandCoins className='size-4' />
-                        {t('Request +20 quota')}
+                        {t('cmsg.profile.quotaRequest.requestButton', {
+                          amount: formatQuota(
+                            requestStatus?.request_amount_quota ?? 0
+                          ),
+                        })}
                       </Button>
                     </span>
                   }
@@ -259,15 +279,15 @@ export function QuotaRequestCard({
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t('Request quota increase')}</DialogTitle>
+            <DialogTitle>
+              {t('cmsg.profile.quotaRequest.dialogTitle')}
+            </DialogTitle>
             <DialogDescription>
-              {t(
-                'The first request is auto-approved; the second requires admin review.'
-              )}
+              {t('cmsg.profile.quotaRequest.policy')}
             </DialogDescription>
           </DialogHeader>
           <div className='bg-muted/40 rounded-lg border px-3 py-2 text-sm'>
-            {t('Request amount')}:{' '}
+            {t('cmsg.profile.quotaRequest.requestAmount')}:{' '}
             {formatQuota(requestStatus?.request_amount_quota ?? 0)}
           </div>
           <DialogFooter>
@@ -276,7 +296,9 @@ export function QuotaRequestCard({
             </Button>
             <Button onClick={handleSubmit} disabled={submitting}>
               <HandCoins className='size-4' />
-              {submitting ? t('Submitting') : t('Submit request')}
+              {submitting
+                ? t('Submitting')
+                : t('cmsg.profile.quotaRequest.submit')}
             </Button>
           </DialogFooter>
         </DialogContent>

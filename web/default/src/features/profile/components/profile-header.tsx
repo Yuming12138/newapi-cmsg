@@ -74,8 +74,14 @@ export function ProfileHeader({ profile, loading }: ProfileHeaderProps) {
 
   if (!profile) return null
 
-  const displayName = getDisplayName(profile)
-  const initials = getUserInitials(profile)
+  const rawDisplayName = getDisplayName(profile)
+  const isDefaultRootUser = rawDisplayName === 'Root User'
+  const displayName = isDefaultRootUser
+    ? t('cmsg.profile.defaultRootUser')
+    : rawDisplayName
+  const initials = isDefaultRootUser
+    ? t('cmsg.profile.defaultRootUserInitials')
+    : getUserInitials(profile)
   const roleLabel = getRoleLabel(profile.role)
   const stats = [
     {

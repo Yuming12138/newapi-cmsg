@@ -1,3 +1,7 @@
 {
-  "Each tier supports up to 2 conditions. The last tier without conditions is the fallback.": "Each tier supports up to 2 conditions. The last tier without conditions is the fallback."
+  "Failed to delete users": "Failed to delete users",
+  "One code per line. Users need one of these codes to create an account.": "One code per line. Users need one of these codes to create an account.",
+  "Use the final mapped upstream model for pricing while keeping the requested model in logs": "Use the final mapped upstream model for pricing while keeping the requested model in logs",
+  "You are about to permanently delete {{count}} user(s).": "You are about to permanently delete {{count}} user(s).",
+  "Please enter the registration code": "Please enter the registration code"
 }
