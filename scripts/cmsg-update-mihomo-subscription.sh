@@ -29,12 +29,11 @@ import sys
 
 path = Path(sys.argv[1])
 
-# Keep ChatGPT traffic on a dedicated fallback group. The node order is
-# deliberate: SG1 is the current primary, US2 remains the first fallback,
-# and SG2 is retained as a last resort until its connectivity is repaired.
+# Keep ChatGPT traffic on a dedicated fallback group. The node order is based
+# on repeated Codex endpoint probes and production dial-failure history.
 nodes = [
-    "🇸🇬 新加坡1 (移动联通>电信)",
-    "🇺🇸 美国2",
+    "🇸🇬 新加坡3 (三网)",
+    "🇯🇵 日本3 (移动联通>电信)",
     "🇸🇬 新加坡2 (移动联通>电信)",
 ]
 
