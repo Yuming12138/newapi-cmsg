@@ -70,6 +70,39 @@ func TestCodexExecutorCacheHelper_OpenAIChatCompletions_StablePromptCacheKeyFrom
 	}
 }
 
+func TestCodexExecutorCacheHelperSanitizesCrossProviderMessageID(t *testing.T) {
+	executor := &CodexExecutor{}
+	rawJSON := []byte(`{"model":"gpt-5.5","input":[{"type":"message","id":"item_e22c64c4a475595bd304a335","role":"assistant","content":[{"type":"output_text","text":"from grok"}]},{"type":"function_call_output","call_id":"call-1","output":"ok"},{"type":"item_reference","id":"item_reference"}]}`)
+	req := cliproxyexecutor.Request{
+		Model:   "gpt-5.5",
+		Payload: rawJSON,
+	}
+
+	httpReq, body, _, err := executor.cacheHelper(context.Background(), sdktranslator.FromString("openai-response"), "https://example.com/responses", nil, req, req.Payload, rawJSON)
+	if err != nil {
+		t.Fatalf("cacheHelper error: %v", err)
+	}
+	if got := gjson.GetBytes(body, "input.0.id"); got.Exists() {
+		t.Fatalf("cross-provider message id was not removed: %s", body)
+	}
+	if got := gjson.GetBytes(body, "input.0.content.0.text").String(); got != "from grok" {
+		t.Fatalf("message content changed: %q", got)
+	}
+	if got := gjson.GetBytes(body, "input.1.call_id").String(); got != "call-1" {
+		t.Fatalf("function call output call_id changed: %q", got)
+	}
+	if got := gjson.GetBytes(body, "input.2.id").String(); got != "item_reference" {
+		t.Fatalf("item reference id changed: %q", got)
+	}
+	wireBody, errRead := io.ReadAll(httpReq.Body)
+	if errRead != nil {
+		t.Fatalf("read request body: %v", errRead)
+	}
+	if string(wireBody) != string(body) {
+		t.Fatalf("wire body differs from sanitized body: wire=%s body=%s", wireBody, body)
+	}
+}
+
 func TestCodexExecutorCacheHelper_ClaudeUsesClaudeCodeSessionID(t *testing.T) {
 	executor := &CodexExecutor{}
 	ctx := context.Background()

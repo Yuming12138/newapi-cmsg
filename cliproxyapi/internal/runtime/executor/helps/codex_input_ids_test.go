@@ -26,6 +26,65 @@ func TestSanitizeCodexInputItemIDsBoundaries(t *testing.T) {
 	}
 }
 
+func TestSanitizeCodexInputItemIDsRemovesIncompatibleMessageIDs(t *testing.T) {
+	body := []byte(`{"input":[` +
+		`{"type":"message","id":"item_e22c64c4a475595bd304a335","role":"assistant","status":"completed","content":[{"type":"output_text","text":"from grok"}]},` +
+		`{"type":"message","id":"550e8400-e29b-41d4-a716-446655440000","role":"user","content":"next"},` +
+		`{"type":"message","id":"out-1","role":"assistant","content":"reply"},` +
+		`{"type":"message","id":42,"role":"user","content":"numeric"},` +
+		`{"type":"message","id":"","role":"user","content":"empty"},` +
+		`{"type":"message","id":"msg_valid","role":"assistant","content":"keep underscore"},` +
+		`{"type":"message","id":"msg-valid","role":"assistant","content":"keep dash"},` +
+		`{"type":"function_call","id":"item_call","call_id":"call-1","name":"lookup","arguments":"{}"},` +
+		`{"type":"function_call_output","id":"item_output","call_id":"call-1","output":"ok"},` +
+		`{"type":"item_reference","id":"item_reference"}` +
+		`]}`)
+
+	got := SanitizeCodexInputItemIDs(body)
+	input := gjson.GetBytes(got, "input").Array()
+	if len(input) != 10 {
+		t.Fatalf("input length = %d, want 10: %s", len(input), got)
+	}
+	for index := 0; index < 5; index++ {
+		if input[index].Get("id").Exists() {
+			t.Fatalf("input.%d incompatible message id was not removed: %s", index, input[index].Raw)
+		}
+	}
+	if gotText := input[0].Get("content.0.text").String(); gotText != "from grok" {
+		t.Fatalf("message content changed: %q", gotText)
+	}
+	if gotRole := input[0].Get("role").String(); gotRole != "assistant" {
+		t.Fatalf("message role changed: %q", gotRole)
+	}
+	if gotStatus := input[0].Get("status").String(); gotStatus != "completed" {
+		t.Fatalf("message status changed: %q", gotStatus)
+	}
+	if gotID := input[5].Get("id").String(); gotID != "msg_valid" {
+		t.Fatalf("valid underscore message id changed: %q", gotID)
+	}
+	if gotID := input[6].Get("id").String(); gotID != "msg-valid" {
+		t.Fatalf("valid dash message id changed: %q", gotID)
+	}
+	if gotID := input[7].Get("id").String(); gotID != "item_call" {
+		t.Fatalf("function call item id changed: %q", gotID)
+	}
+	if gotCallID := input[7].Get("call_id").String(); gotCallID != "call-1" {
+		t.Fatalf("function call call_id changed: %q", gotCallID)
+	}
+	if gotID := input[8].Get("id").String(); gotID != "item_output" {
+		t.Fatalf("function call output item id changed: %q", gotID)
+	}
+	if gotCallID := input[8].Get("call_id").String(); gotCallID != "call-1" {
+		t.Fatalf("function call output call_id changed: %q", gotCallID)
+	}
+	if gotID := input[9].Get("id").String(); gotID != "item_reference" {
+		t.Fatalf("item reference id changed: %q", gotID)
+	}
+	if second := SanitizeCodexInputItemIDs(got); string(second) != string(got) {
+		t.Fatalf("sanitizer is not idempotent: first=%s second=%s", got, second)
+	}
+}
+
 func TestSanitizeCodexInputItemIDsDropsOverlongEncryptedReasoningItem(t *testing.T) {
 	longReasoningID := "rs_" + strings.Repeat("a", 64)
 	shortReasoningID := "rs_" + strings.Repeat("b", 48)
