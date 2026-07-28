@@ -12,8 +12,9 @@ import (
 
 const codexInputItemIDLimit = 64
 
-// SanitizeCodexInputItemIDs removes encrypted reasoning items whose IDs exceed
-// the Codex limit and deterministically shortens other overlong input item IDs.
+// SanitizeCodexInputItemIDs removes cross-provider message IDs that Codex
+// cannot resolve, drops encrypted reasoning items whose IDs exceed the Codex
+// limit, and deterministically shortens other overlong input item IDs.
 func SanitizeCodexInputItemIDs(body []byte) []byte {
 	input := gjson.GetBytes(body, "input")
 	if !input.IsArray() {
@@ -23,7 +24,7 @@ func SanitizeCodexInputItemIDs(body []byte) []byte {
 	items := input.Array()
 	occupied := make(map[string]struct{}, len(items))
 	for _, item := range items {
-		if shouldDropCodexEncryptedReasoningItem(item) {
+		if shouldDropCodexEncryptedReasoningItem(item) || shouldRemoveCodexMessageItemID(item) {
 			continue
 		}
 		itemID := item.Get("id")
@@ -47,7 +48,13 @@ func SanitizeCodexInputItemIDs(body []byte) []byte {
 
 		raw := item.Raw
 		itemID := item.Get("id")
-		if itemID.Type == gjson.String {
+		if shouldRemoveCodexMessageItemID(item) {
+			next, errDelete := sjson.DeleteBytes([]byte(raw), "id")
+			if errDelete == nil {
+				raw = string(next)
+				changed = true
+			}
+		} else if itemID.Type == gjson.String {
 			id := itemID.String()
 			if len([]rune(id)) > codexInputItemIDLimit {
 				shortened, ok := mapped[id]
@@ -81,6 +88,17 @@ func SanitizeCodexInputItemIDs(body []byte) []byte {
 		return body
 	}
 	return updated
+}
+
+func shouldRemoveCodexMessageItemID(item gjson.Result) bool {
+	if item.Get("type").String() != "message" {
+		return false
+	}
+	itemID := item.Get("id")
+	if !itemID.Exists() {
+		return false
+	}
+	return itemID.Type != gjson.String || !strings.HasPrefix(itemID.String(), "msg")
 }
 
 func shouldDropCodexEncryptedReasoningItem(item gjson.Result) bool {

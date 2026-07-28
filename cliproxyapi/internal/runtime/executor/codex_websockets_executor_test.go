@@ -40,6 +40,25 @@ func TestBuildCodexWebsocketRequestBodyPreservesPreviousResponseID(t *testing.T)
 	}
 }
 
+func TestBuildCodexWebsocketRequestBodySanitizesCrossProviderMessageID(t *testing.T) {
+	body := []byte(`{"model":"gpt-5-codex","input":[{"type":"message","id":"item_e22c64c4a475595bd304a335","role":"assistant","content":[{"type":"output_text","text":"from grok"}]},{"type":"item_reference","id":"item_reference"}]}`)
+
+	wsReqBody := buildCodexWebsocketRequestBody(body)
+
+	if got := gjson.GetBytes(wsReqBody, "type").String(); got != "response.create" {
+		t.Fatalf("type = %q, want response.create", got)
+	}
+	if got := gjson.GetBytes(wsReqBody, "input.0.id"); got.Exists() {
+		t.Fatalf("cross-provider message id was not removed: %s", wsReqBody)
+	}
+	if got := gjson.GetBytes(wsReqBody, "input.0.content.0.text").String(); got != "from grok" {
+		t.Fatalf("message content changed: %q", got)
+	}
+	if got := gjson.GetBytes(wsReqBody, "input.1.id").String(); got != "item_reference" {
+		t.Fatalf("item reference id changed: %q", got)
+	}
+}
+
 func TestBuildCodexWebsocketRequestBodySanitizesOverlongInputItemIDs(t *testing.T) {
 	longReasoningItemID := "rs_" + strings.Repeat("a", 64)
 	longCallItemID := strings.Repeat("grok-call-item-", 6)
