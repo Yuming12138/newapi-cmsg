@@ -56,16 +56,22 @@ var utlsRoundTripperCache = struct {
 	items: make(map[utlsRoundTripperCacheKey]cachedUtlsRoundTrippers),
 }
 
+var transportConnectionSequence atomic.Uint64
+
 // utlsRoundTripper implements http.RoundTripper using utls with Chrome fingerprint
 // to bypass Cloudflare's TLS fingerprinting on Anthropic domains.
 type utlsRoundTripper struct {
-	mu         sync.Mutex
-	pools      map[string]*connPool
-	pending    map[string]*sync.Cond
-	filling    map[string]bool
-	dialer     proxy.Dialer
-	poolSize   int
-	createConn func(host, addr string) (h2ClientConn, error)
+	mu           sync.Mutex
+	pools        map[string]*connPool
+	pending      map[string]*sync.Cond
+	filling      map[string]bool
+	connIDs      map[h2ClientConn]uint64
+	dialer       proxy.Dialer
+	poolSize     int
+	proxyRoute   string
+	selectedNode string
+	observer     *transportShadowObserver
+	createConn   func(host, addr string) (h2ClientConn, error)
 }
 
 func newUtlsRoundTripper(proxyURL string, poolSize int) *utlsRoundTripper {
@@ -79,11 +85,14 @@ func newUtlsRoundTripper(proxyURL string, poolSize int) *utlsRoundTripper {
 		}
 	}
 	rt := &utlsRoundTripper{
-		pools:    make(map[string]*connPool),
-		pending:  make(map[string]*sync.Cond),
-		filling:  make(map[string]bool),
-		dialer:   dialer,
-		poolSize: normalizeUtlsPoolSize(poolSize),
+		pools:      make(map[string]*connPool),
+		pending:    make(map[string]*sync.Cond),
+		filling:    make(map[string]bool),
+		connIDs:    make(map[h2ClientConn]uint64),
+		dialer:     dialer,
+		poolSize:   normalizeUtlsPoolSize(poolSize),
+		proxyRoute: proxyutil.Redact(proxyURL),
+		observer:   newTransportShadowObserver(),
 	}
 	rt.createConn = rt.createConnection
 	return rt
@@ -110,6 +119,62 @@ func (t *utlsRoundTripper) poolForHostLocked(host string) *connPool {
 		t.pools[host] = pool
 	}
 	return pool
+}
+
+type transportConnectionSnapshot struct {
+	ID         uint64
+	Generation uint64
+}
+
+func (t *utlsRoundTripper) registerConnectionLocked(conn h2ClientConn) uint64 {
+	if conn == nil {
+		return 0
+	}
+	if t.connIDs == nil {
+		t.connIDs = make(map[h2ClientConn]uint64)
+	}
+	if id := t.connIDs[conn]; id != 0 {
+		return id
+	}
+	id := transportConnectionSequence.Add(1)
+	t.connIDs[conn] = id
+	return id
+}
+
+func (t *utlsRoundTripper) connectionSnapshot(host string, conn h2ClientConn) transportConnectionSnapshot {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	pool := t.poolForHostLocked(host)
+	return transportConnectionSnapshot{
+		ID:         t.registerConnectionLocked(conn),
+		Generation: pool.generation,
+	}
+}
+
+func (t *utlsRoundTripper) hostGeneration(host string) uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if pool := t.pools[host]; pool != nil {
+		return pool.generation
+	}
+	return 0
+}
+
+func (t *utlsRoundTripper) forgetConnection(conn h2ClientConn) {
+	if conn == nil {
+		return
+	}
+	t.mu.Lock()
+	delete(t.connIDs, conn)
+	t.mu.Unlock()
+}
+
+func (t *utlsRoundTripper) closeConnection(conn h2ClientConn) {
+	if conn == nil {
+		return
+	}
+	_ = conn.Close()
+	t.forgetConnection(conn)
 }
 
 func (p *connPool) reserveRoundRobin() h2ClientConn {
@@ -166,7 +231,7 @@ func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (h2ClientCon
 		if staleGeneration {
 			t.mu.Unlock()
 			if h2Conn != nil {
-				go func() { _ = h2Conn.Close() }()
+				go t.closeConnection(h2Conn)
 			}
 			continue
 		}
@@ -178,17 +243,18 @@ func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (h2ClientCon
 
 		if existing := pool.reserveRoundRobin(); existing != nil {
 			t.mu.Unlock()
-			go func() { _ = h2Conn.Close() }()
+			go t.closeConnection(h2Conn)
 			return existing, nil
 		}
 
 		if !h2Conn.ReserveNewRequest() {
 			t.mu.Unlock()
-			go func() { _ = h2Conn.Close() }()
-			return nil, errors.New("utls: new HTTP/2 connection cannot accept a request")
+			go t.closeConnection(h2Conn)
+			return nil, withTransportFailurePhase(transportPhaseH2Establish, errors.New("utls: new HTTP/2 connection cannot accept a request"))
 		}
 
 		if len(pool.conns) < t.poolSize {
+			t.registerConnectionLocked(h2Conn)
 			pool.conns = append(pool.conns, h2Conn)
 			t.mu.Unlock()
 			return h2Conn, nil
@@ -196,12 +262,14 @@ func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (h2ClientCon
 
 		slot := pool.nextRoundRobinSlot()
 		if slot < 0 {
+			t.registerConnectionLocked(h2Conn)
 			pool.conns = append(pool.conns, h2Conn)
 			t.mu.Unlock()
 			return h2Conn, nil
 		}
 
 		displaced := pool.conns[slot]
+		t.registerConnectionLocked(h2Conn)
 		pool.conns[slot] = h2Conn
 		t.startDrain(pool, displaced)
 		t.mu.Unlock()
@@ -219,22 +287,26 @@ func (t *utlsRoundTripper) dialConnection(host, addr string) (h2ClientConn, erro
 func (t *utlsRoundTripper) createConnection(host, addr string) (h2ClientConn, error) {
 	conn, err := t.dialer.Dial("tcp", addr)
 	if err != nil {
-		return nil, err
+		phase := transportPhaseConnectionAcquire
+		if route := normalizedProxyRoute(t.proxyRoute); route != "direct" && route != "none" {
+			phase = transportPhaseProxyConnect
+		}
+		return nil, withTransportFailurePhase(phase, err)
 	}
 
 	tlsConfig := &tls.Config{ServerName: host}
 	tlsConn := tls.UClient(conn, tlsConfig, tls.HelloChrome_Auto)
 
 	if err := tlsConn.Handshake(); err != nil {
-		conn.Close()
-		return nil, err
+		_ = conn.Close()
+		return nil, withTransportFailurePhase(transportPhaseTLSHandshake, err)
 	}
 
 	tr := &http2.Transport{}
 	h2Conn, err := tr.NewClientConn(tlsConn)
 	if err != nil {
-		tlsConn.Close()
-		return nil, err
+		_ = tlsConn.Close()
+		return nil, withTransportFailurePhase(transportPhaseH2Establish, err)
 	}
 
 	return h2Conn, nil
@@ -249,6 +321,7 @@ func (t *utlsRoundTripper) startDrain(pool *connPool, conn h2ClientConn) {
 func (t *utlsRoundTripper) drainConn(pool *connPool, conn h2ClientConn) {
 	defer pool.draining.Add(-1)
 	defer pool.drainWG.Done()
+	defer t.forgetConnection(conn)
 	// A healthy Codex stream can run for a long time. Per AGENTS.md, cpa
 	// must not invent an upstream timeout after the connection is established.
 	_ = conn.Shutdown(context.Background())
@@ -309,20 +382,23 @@ func (t *utlsRoundTripper) fillPool(host, addr string) {
 		pool = t.poolForHostLocked(host)
 		if pool.generation != generation {
 			t.mu.Unlock()
-			go func() { _ = conn.Close() }()
+			go t.closeConnection(conn)
 			continue
 		}
 		if len(pool.conns) >= t.poolSize {
 			t.mu.Unlock()
-			go func() { _ = conn.Close() }()
+			go t.closeConnection(conn)
 			return
 		}
+		t.registerConnectionLocked(conn)
 		pool.conns = append(pool.conns, conn)
 		t.mu.Unlock()
 	}
 }
 
 func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	const retryBudget = 1
+
 	hostname := req.URL.Hostname()
 	port := req.URL.Port()
 	if port == "" {
@@ -330,15 +406,26 @@ func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 	addr := net.JoinHostPort(hostname, port)
 
-	resp, h2Conn, err := t.attempt(req, hostname, addr)
+	retryAttempt := 0
+	resp, h2Conn, snapshot, err := t.attempt(req, hostname, addr, retryAttempt, retryBudget)
 	// HTTP/2 single-conn-per-host means a poisoned conn (e.g. ChatGPT-side
 	// abuse RST) will fail every subsequent stream on the same TCP+TLS
 	// session until evicted. attempt() already evicts on RoundTrip errors;
 	// here we retry once if the error looks stream-level and the body is
 	// resettable.
-	if err != nil && isRetryableFreshConnError(err) && canResetBody(req) {
-		if resetErr := resetReqBody(req); resetErr == nil {
-			resp, h2Conn, err = t.attempt(req, hostname, addr)
+	if err != nil && isRetryableFreshConnError(err) {
+		if !canResetBody(req) {
+			t.observeRetry(req.Context(), hostname, snapshot, retryAttempt, retryBudget, transportRetrySkippedUnreplayable)
+		} else if resetErr := resetReqBody(req); resetErr != nil {
+			t.observeRetry(req.Context(), hostname, snapshot, retryAttempt, retryBudget, transportRetryBodyResetFailed)
+		} else {
+			retryAttempt++
+			resp, h2Conn, snapshot, err = t.attempt(req, hostname, addr, retryAttempt, retryBudget)
+			outcome := transportRetrySucceeded
+			if err != nil {
+				outcome = transportRetryFailed
+			}
+			t.observeRetry(req.Context(), hostname, snapshot, retryAttempt, retryBudget, outcome)
 		}
 	}
 	if err != nil {
@@ -346,22 +433,69 @@ func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 	// Wrap Body so that stream-mid errors (the common ChatGPT RST pattern)
 	// also evict the conn — RoundTrip itself returns success in those cases.
-	return wrapBodyForEvict(resp, t, hostname, h2Conn), nil
+	return wrapBodyForEvict(resp, t, hostname, h2Conn, snapshot, retryAttempt, retryBudget), nil
 }
 
 // attempt issues one RoundTrip and evicts the cached conn on transport error.
-func (t *utlsRoundTripper) attempt(req *http.Request, hostname, addr string) (*http.Response, h2ClientConn, error) {
+func (t *utlsRoundTripper) attempt(req *http.Request, hostname, addr string, retryAttempt, retryBudget int) (*http.Response, h2ClientConn, transportConnectionSnapshot, error) {
 	h2Conn, err := t.getOrCreateConnection(hostname, addr)
 	if err != nil {
-		return nil, nil, err
+		snapshot := transportConnectionSnapshot{Generation: t.hostGeneration(hostname)}
+		t.observeFailure(req.Context(), transportFailureInput{
+			Host:           hostname,
+			ProxyRoute:     t.proxyRoute,
+			SelectedNode:   t.selectedNode,
+			PoolGeneration: snapshot.Generation,
+			Phase:          transportPhaseConnectionAcquire,
+			Err:            err,
+			RetryAttempt:   retryAttempt,
+			RetryBudget:    retryBudget,
+		})
+		return nil, nil, snapshot, err
 	}
+	snapshot := t.connectionSnapshot(hostname, h2Conn)
 	resp, err := h2Conn.RoundTrip(req)
 	if err != nil {
+		t.observeFailure(req.Context(), transportFailureInput{
+			Host:           hostname,
+			ProxyRoute:     t.proxyRoute,
+			SelectedNode:   t.selectedNode,
+			ConnectionID:   snapshot.ID,
+			PoolGeneration: snapshot.Generation,
+			Phase:          transportPhaseRequestHeaders,
+			Err:            err,
+			HasConnection:  true,
+			RetryAttempt:   retryAttempt,
+			RetryBudget:    retryBudget,
+		})
 		t.handleConnError(hostname, h2Conn, err)
-		return nil, nil, err
+		return nil, nil, snapshot, err
 	}
 	t.maybeFillPool(hostname, addr)
-	return resp, h2Conn, nil
+	return resp, h2Conn, snapshot, nil
+}
+
+func (t *utlsRoundTripper) observeFailure(ctx context.Context, input transportFailureInput) {
+	if t == nil || t.observer == nil {
+		return
+	}
+	t.observer.observeFailure(ctx, input)
+}
+
+func (t *utlsRoundTripper) observeRetry(ctx context.Context, hostname string, snapshot transportConnectionSnapshot, retryAttempt, retryBudget int, outcome transportRetryOutcome) {
+	if t == nil || t.observer == nil {
+		return
+	}
+	t.observer.observeRetry(ctx, transportRetryObservation{
+		Host:           hostname,
+		ProxyRoute:     t.proxyRoute,
+		SelectedNode:   t.selectedNode,
+		ConnectionID:   snapshot.ID,
+		PoolGeneration: snapshot.Generation,
+		RetryAttempt:   retryAttempt,
+		RetryBudget:    retryBudget,
+		Outcome:        outcome,
+	})
 }
 
 // handleConnError applies the least disruptive action appropriate for err.
@@ -400,7 +534,7 @@ func (t *utlsRoundTripper) handleConnError(hostname string, conn h2ClientConn, e
 		t.startDrain(removedFrom, conn)
 		return
 	}
-	go func() { _ = conn.Close() }()
+	go t.closeConnection(conn)
 }
 
 // retireHostConnections invalidates the proxy path used by every selectable
@@ -433,7 +567,7 @@ func (t *utlsRoundTripper) retireHostConnections(hostname string, failed h2Clien
 	if !removed {
 		return
 	}
-	go func() { _ = failed.Close() }()
+	go t.closeConnection(failed)
 	for _, sibling := range siblings {
 		t.startDrain(pool, sibling)
 	}
@@ -442,13 +576,29 @@ func (t *utlsRoundTripper) retireHostConnections(hostname string, failed h2Clien
 // wrapBodyForEvict replaces resp.Body so that any non-EOF read error triggers
 // eviction of the underlying conn. Idempotent: the eviction fires at most once
 // per response body, even with many concurrent readers.
-func wrapBodyForEvict(resp *http.Response, t *utlsRoundTripper, hostname string, conn h2ClientConn) *http.Response {
+func wrapBodyForEvict(resp *http.Response, t *utlsRoundTripper, hostname string, conn h2ClientConn, snapshot transportConnectionSnapshot, retryAttempt, retryBudget int) *http.Response {
 	if resp == nil || resp.Body == nil {
 		return resp
+	}
+	ctx := context.Background()
+	if resp.Request != nil {
+		ctx = resp.Request.Context()
 	}
 	resp.Body = &evictOnReadErrBody{
 		ReadCloser: resp.Body,
 		onErr: func(err error) {
+			t.observeFailure(ctx, transportFailureInput{
+				Host:           hostname,
+				ProxyRoute:     t.proxyRoute,
+				SelectedNode:   t.selectedNode,
+				ConnectionID:   snapshot.ID,
+				PoolGeneration: snapshot.Generation,
+				Phase:          transportPhaseResponseBody,
+				Err:            err,
+				HasConnection:  true,
+				RetryAttempt:   retryAttempt,
+				RetryBudget:    retryBudget,
+			})
 			t.handleConnError(hostname, conn, err)
 		},
 	}

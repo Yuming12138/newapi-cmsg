@@ -243,6 +243,14 @@ func TestUtlsRoundTripperRetriesProtocolErrorOnReplacementConn(t *testing.T) {
 	rt := newFakeUtlsRoundTripper(1, replacement)
 	pool := &connPool{conns: []h2ClientConn{failed}}
 	rt.pools["chatgpt.com"] = pool
+	var observedFailure transportFailureObservation
+	var observedRetry transportRetryObservation
+	rt.observer.onFailure = func(observation transportFailureObservation) {
+		observedFailure = observation
+	}
+	rt.observer.onRetry = func(observation transportRetryObservation) {
+		observedRetry = observation
+	}
 
 	req, errRequest := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", strings.NewReader("{}"))
 	if errRequest != nil {
@@ -265,6 +273,15 @@ func TestUtlsRoundTripperRetriesProtocolErrorOnReplacementConn(t *testing.T) {
 	}
 	if got := replacement.roundTripCalls(); got != 1 {
 		t.Fatalf("replacement conn round trips = %d, want 1", got)
+	}
+	if observedFailure.Class != transportFailureH2Protocol || observedFailure.ConnectionID == 0 {
+		t.Fatalf("failure observation = %#v, want protocol class with connection ID", observedFailure)
+	}
+	if observedFailure.RetryAttempt != 0 || observedFailure.RetryBudget != 1 {
+		t.Fatalf("failure retry state = %d/%d, want 0/1", observedFailure.RetryAttempt, observedFailure.RetryBudget)
+	}
+	if observedRetry.Outcome != transportRetrySucceeded || observedRetry.RetryAttempt != 1 {
+		t.Fatalf("retry observation = %#v, want successful attempt 1", observedRetry)
 	}
 }
 
@@ -644,10 +661,13 @@ func newFakeUtlsRoundTripper(poolSize int, dialed ...*fakeH2Conn) *utlsRoundTrip
 	var mu sync.Mutex
 	queue := append([]*fakeH2Conn(nil), dialed...)
 	return &utlsRoundTripper{
-		pools:    make(map[string]*connPool),
-		pending:  make(map[string]*sync.Cond),
-		filling:  make(map[string]bool),
-		poolSize: normalizeUtlsPoolSize(poolSize),
+		pools:      make(map[string]*connPool),
+		pending:    make(map[string]*sync.Cond),
+		filling:    make(map[string]bool),
+		connIDs:    make(map[h2ClientConn]uint64),
+		poolSize:   normalizeUtlsPoolSize(poolSize),
+		proxyRoute: "http://mihomo:7890",
+		observer:   newTransportShadowObserver(),
 		createConn: func(_, _ string) (h2ClientConn, error) {
 			mu.Lock()
 			defer mu.Unlock()
