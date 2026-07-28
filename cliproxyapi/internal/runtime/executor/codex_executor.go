@@ -1108,6 +1108,8 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if err != nil {
 		return nil, err
 	}
+	transportTrace := helps.NewTransportShadowTrace()
+	httpReq = httpReq.WithContext(helps.WithTransportShadowTrace(httpReq.Context(), transportTrace))
 	applyCodexHeaders(httpReq, auth, apiKey, true, e.cfg)
 	applyModelHeaderOverrides(httpReq.Header, baseModel)
 	applyCodexIdentityConfuseHeaders(httpReq.Header, &identityState)
@@ -1255,6 +1257,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 					return
 				}
 				bootstrapCommitted = true
+				transportTrace.MarkPayloadCommitted()
 			}
 		}
 		if errScan := scanner.Err(); errScan != nil {

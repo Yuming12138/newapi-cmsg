@@ -3,6 +3,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,12 +11,82 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	_ "github.com/router-for-me/CLIProxyAPI/v7/internal/translator"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
 	"github.com/tidwall/gjson"
 )
+
+type codexTraceRoundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f codexTraceRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestCodexExecutorTransportShadowTraceTracksMeaningfulPayload(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		body          string
+		wantCommitted bool
+	}{
+		{
+			name: "control event only",
+			body: "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"status\":\"in_progress\",\"model\":\"gpt-5.5\"}}\n\n",
+		},
+		{
+			name: "output delta",
+			body: "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"status\":\"in_progress\",\"model\":\"gpt-5.5\"}}\n\n" +
+				"data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello\",\"sequence_number\":1}\n\n",
+			wantCommitted: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var upstreamCtx context.Context
+			ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", codexTraceRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				upstreamCtx = req.Context()
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body:       io.NopCloser(strings.NewReader(test.body)),
+					Request:    req,
+				}, nil
+			}))
+			executor := NewCodexExecutor(&config.Config{})
+			auth := &cliproxyauth.Auth{Attributes: map[string]string{
+				"base_url": "https://chatgpt.com/backend-api/codex",
+				"api_key":  "test",
+			}}
+
+			result, err := executor.ExecuteStream(ctx, auth, cliproxyexecutor.Request{
+				Model:   "gpt-5.5",
+				Payload: []byte(`{"model":"gpt-5.5","input":"hello"}`),
+			}, cliproxyexecutor.Options{
+				SourceFormat: sdktranslator.FromString("openai-response"),
+				Stream:       true,
+			})
+			if err != nil {
+				t.Fatalf("ExecuteStream() error = %v", err)
+			}
+			for chunk := range result.Chunks {
+				if chunk.Err != nil {
+					t.Fatalf("stream chunk error = %v", chunk.Err)
+				}
+			}
+
+			committed, known := helps.TransportShadowPayloadState(upstreamCtx)
+			if !known || committed != test.wantCommitted {
+				t.Fatalf("transport shadow payload state = %v/%v, want %v/true", committed, known, test.wantCommitted)
+			}
+		})
+	}
+}
 
 func TestCodexExecutorExecute_EmptyStreamCompletionOutputUsesOutputItemDone(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
