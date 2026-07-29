@@ -172,16 +172,17 @@ type transportRetryObservation struct {
 }
 
 type transportFailureInput struct {
-	Host           string
-	ProxyRoute     string
-	SelectedNode   string
-	ConnectionID   uint64
-	PoolGeneration uint64
-	Phase          transportFailurePhase
-	Err            error
-	HasConnection  bool
-	RetryAttempt   int
-	RetryBudget    int
+	Host                 string
+	ProxyRoute           string
+	SelectedNode         string
+	RouteRecoveryEnabled bool
+	ConnectionID         uint64
+	PoolGeneration       uint64
+	Phase                transportFailurePhase
+	Err                  error
+	HasConnection        bool
+	RetryAttempt         int
+	RetryBudget          int
 }
 
 type transportShadowObserver struct {
@@ -253,7 +254,7 @@ func (o *transportShadowObserver) observeFailure(ctx context.Context, input tran
 		Host:                 input.Host,
 		ProxyRoute:           normalizedProxyRoute(input.ProxyRoute),
 		SelectedNode:         normalizedSelectedNode(input.SelectedNode),
-		SelectedNodeSource:   selectedNodeSource(input.SelectedNode),
+		SelectedNodeSource:   selectedNodeSource(input.SelectedNode, input.RouteRecoveryEnabled),
 		ConnectionID:         input.ConnectionID,
 		PoolGeneration:       input.PoolGeneration,
 		Phase:                phase,
@@ -501,8 +502,11 @@ func normalizedSelectedNode(node string) string {
 	return node
 }
 
-func selectedNodeSource(node string) string {
+func selectedNodeSource(node string, routeRecoveryEnabled bool) string {
 	if strings.TrimSpace(node) == "" {
+		if routeRecoveryEnabled {
+			return "controller_snapshot_pending"
+		}
 		return "controller_not_configured"
 	}
 	return "snapshot"
