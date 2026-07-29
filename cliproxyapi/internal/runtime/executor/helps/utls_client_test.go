@@ -430,7 +430,7 @@ func TestUtlsRoundTripperImmediatelyClosesConnectionFailedConn(t *testing.T) {
 	}
 }
 
-func TestUtlsRoundTripperKeepsConnForRefusedStream(t *testing.T) {
+func TestUtlsRoundTripperReplacesConnForRefusedStreamWithoutNodePenalty(t *testing.T) {
 	t.Parallel()
 
 	conn := newFakeH2Conn("refused-stream", -1)
@@ -439,17 +439,18 @@ func TestUtlsRoundTripperKeepsConnForRefusedStream(t *testing.T) {
 
 	rt.handleConnError("chatgpt.com", conn, http2.StreamError{StreamID: 9, Code: http2.ErrCodeRefusedStream})
 
+	rt.pools["chatgpt.com"].drainWG.Wait()
 	rt.mu.Lock()
-	conns := append([]h2ClientConn(nil), rt.pools["chatgpt.com"].conns...)
+	remaining := len(rt.pools["chatgpt.com"].conns)
 	rt.mu.Unlock()
-	if len(conns) != 1 || conns[0] != conn {
-		t.Fatalf("remaining conns = %#v, want refused-stream conn retained", conns)
+	if remaining != 0 {
+		t.Fatalf("remaining conns = %d, want refused-stream conn replaced", remaining)
 	}
-	if got := conn.shutdownCalls(); got != 0 {
-		t.Fatalf("shutdown calls = %d, want 0", got)
+	if got := conn.shutdownCalls(); got != 1 {
+		t.Fatalf("shutdown calls = %d, want 1", got)
 	}
-	if got := conn.closeCalls(); got != 0 {
-		t.Fatalf("close calls = %d, want 0", got)
+	if got := conn.closeCalls(); got != 1 {
+		t.Fatalf("close calls = %d, want 1", got)
 	}
 }
 
@@ -662,7 +663,7 @@ func newFakeUtlsRoundTripper(poolSize int, dialed ...*fakeH2Conn) *utlsRoundTrip
 	queue := append([]*fakeH2Conn(nil), dialed...)
 	return &utlsRoundTripper{
 		pools:      make(map[string]*connPool),
-		pending:    make(map[string]*sync.Cond),
+		pending:    make(map[string]*pendingDial),
 		filling:    make(map[string]bool),
 		connIDs:    make(map[h2ClientConn]uint64),
 		poolSize:   normalizeUtlsPoolSize(poolSize),

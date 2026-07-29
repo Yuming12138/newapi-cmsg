@@ -13,6 +13,10 @@ type SDKConfig struct {
 	// Values <= 0 use the default of 1 for request-visible parity.
 	UtlsPoolSize int `yaml:"utls-pool-size,omitempty" json:"utls-pool-size,omitempty"`
 
+	// ProxyRouteRecovery coordinates Mihomo route changes after qualifying
+	// transport failures on protected upstream hosts.
+	ProxyRouteRecovery ProxyRouteRecoveryConfig `yaml:"proxy-route-recovery,omitempty" json:"proxy-route-recovery,omitempty"`
+
 	// DisableImageGeneration controls whether the built-in image_generation tool is injected/allowed.
 	//
 	// Supported values:
@@ -59,6 +63,22 @@ type SDKConfig struct {
 	// NonStreamKeepAliveInterval controls how often blank lines are emitted for non-streaming responses.
 	// <= 0 disables keep-alives. Value is in seconds.
 	NonStreamKeepAliveInterval int `yaml:"nonstream-keepalive-interval,omitempty" json:"nonstream-keepalive-interval,omitempty"`
+}
+
+// ProxyRouteRecoveryConfig controls active Mihomo route recovery. Duration
+// fields accept Go duration strings such as "30s", "15m", and "10m".
+type ProxyRouteRecoveryConfig struct {
+	Enabled                 bool     `yaml:"enabled" json:"enabled"`
+	ControllerURL           string   `yaml:"controller-url,omitempty" json:"controller-url,omitempty"`
+	ControllerSecretFile    string   `yaml:"controller-secret-file,omitempty" json:"controller-secret-file,omitempty"`
+	Group                   string   `yaml:"group,omitempty" json:"group,omitempty"`
+	Hosts                   []string `yaml:"hosts,omitempty" json:"hosts,omitempty"`
+	H2ErrorWindow           string   `yaml:"h2-error-window,omitempty" json:"h2-error-window,omitempty"`
+	H2ErrorThreshold        int      `yaml:"h2-error-threshold,omitempty" json:"h2-error-threshold,omitempty"`
+	NodeCooldown            string   `yaml:"node-cooldown,omitempty" json:"node-cooldown,omitempty"`
+	RepeatedFailureCooldown string   `yaml:"repeated-failure-cooldown,omitempty" json:"repeated-failure-cooldown,omitempty"`
+	RouteHold               string   `yaml:"route-hold,omitempty" json:"route-hold,omitempty"`
+	MaxReplays              int      `yaml:"max-replays,omitempty" json:"max-replays,omitempty"`
 }
 
 // StreamingConfig holds server streaming behavior configuration.

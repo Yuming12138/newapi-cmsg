@@ -37,14 +37,19 @@ type connPool struct {
 	drainWG    sync.WaitGroup
 }
 
+type pendingDial struct {
+	cond *sync.Cond
+}
+
 type cachedUtlsRoundTrippers struct {
 	utls     http.RoundTripper
 	fallback http.RoundTripper
 }
 
 type utlsRoundTripperCacheKey struct {
-	proxyURL string
-	poolSize int
+	proxyURL      string
+	poolSize      int
+	routeRecovery string
 }
 
 const maxCachedUtlsRoundTrippers = 128
@@ -61,20 +66,25 @@ var transportConnectionSequence atomic.Uint64
 // utlsRoundTripper implements http.RoundTripper using utls with Chrome fingerprint
 // to bypass Cloudflare's TLS fingerprinting on Anthropic domains.
 type utlsRoundTripper struct {
-	mu           sync.Mutex
-	pools        map[string]*connPool
-	pending      map[string]*sync.Cond
-	filling      map[string]bool
-	connIDs      map[h2ClientConn]uint64
-	dialer       proxy.Dialer
-	poolSize     int
-	proxyRoute   string
-	selectedNode string
-	observer     *transportShadowObserver
-	createConn   func(host, addr string) (h2ClientConn, error)
+	mu            sync.Mutex
+	pools         map[string]*connPool
+	pending       map[string]*pendingDial
+	filling       map[string]bool
+	connIDs       map[h2ClientConn]uint64
+	dialer        proxy.Dialer
+	poolSize      int
+	proxyRoute    string
+	selectedNode  string
+	observer      *transportShadowObserver
+	routeRecovery *proxyRouteRecoveryCoordinator
+	createConn    func(host, addr string) (h2ClientConn, error)
 }
 
 func newUtlsRoundTripper(proxyURL string, poolSize int) *utlsRoundTripper {
+	return newUtlsRoundTripperWithRecovery(proxyURL, poolSize, config.ProxyRouteRecoveryConfig{})
+}
+
+func newUtlsRoundTripperWithRecovery(proxyURL string, poolSize int, rawRecovery config.ProxyRouteRecoveryConfig) *utlsRoundTripper {
 	var dialer proxy.Dialer = proxy.Direct
 	if proxyURL != "" {
 		proxyDialer, mode, errBuild := proxyutil.BuildDialer(proxyURL)
@@ -84,15 +94,33 @@ func newUtlsRoundTripper(proxyURL string, poolSize int) *utlsRoundTripper {
 			dialer = proxyDialer
 		}
 	}
+	settings := normalizeProxyRouteRecoverySettings(rawRecovery, proxyURL)
 	rt := &utlsRoundTripper{
 		pools:      make(map[string]*connPool),
-		pending:    make(map[string]*sync.Cond),
+		pending:    make(map[string]*pendingDial),
 		filling:    make(map[string]bool),
 		connIDs:    make(map[h2ClientConn]uint64),
 		dialer:     dialer,
 		poolSize:   normalizeUtlsPoolSize(poolSize),
 		proxyRoute: proxyutil.Redact(proxyURL),
-		observer:   newTransportShadowObserver(),
+		observer: newTransportShadowObserverWithPolicy(
+			settings.h2ErrorWindow,
+			settings.h2ErrorThreshold,
+			settings.routeHold,
+		),
+	}
+	if settings.enabled {
+		rt.routeRecovery = newProxyRouteRecoveryCoordinator(settings, newMihomoRouteController(settings))
+		rt.routeRecovery.onNodeObserved = rt.setSelectedNode
+		rt.routeRecovery.onSwitched = rt.activateRouteSwitch
+		rt.observer.onFailure = func(observation transportFailureObservation) {
+			if observation.ShadowAction == transportActionSwitchNode {
+				result := rt.routeRecovery.recover(observation.Host)
+				if result.Attempted && !result.Switched {
+					rt.observer.releaseSwitchHold(observation.Host, observation.ProxyRoute, observation.SelectedNode)
+				}
+			}
+		}
 	}
 	rt.createConn = rt.createConnection
 	return rt
@@ -160,6 +188,66 @@ func (t *utlsRoundTripper) hostGeneration(host string) uint64 {
 	return 0
 }
 
+func (t *utlsRoundTripper) selectedNodeSnapshot() string {
+	if t == nil {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.selectedNode
+}
+
+func (t *utlsRoundTripper) setSelectedNode(_ string, node string) {
+	if t == nil || strings.TrimSpace(node) == "" {
+		return
+	}
+	t.mu.Lock()
+	t.selectedNode = strings.TrimSpace(node)
+	t.mu.Unlock()
+}
+
+func (t *utlsRoundTripper) waitForStableRoute(host string) {
+	if t != nil && t.routeRecovery != nil {
+		t.routeRecovery.waitForStableRoute(host)
+	}
+}
+
+func (t *utlsRoundTripper) retryBudget() int {
+	if t != nil && t.routeRecovery != nil {
+		return t.routeRecovery.settings.maxReplays
+	}
+	return defaultRouteRecoveryMaxReplays
+}
+
+// activateRouteSwitch advances the host generation after Mihomo confirms a
+// route change. Existing streams drain without a local timeout, while waiters
+// on an old in-progress dial are released to establish the new generation.
+func (t *utlsRoundTripper) activateRouteSwitch(host, node string) uint64 {
+	if t == nil {
+		return 0
+	}
+
+	var pool *connPool
+	var oldConnections []h2ClientConn
+	t.mu.Lock()
+	t.selectedNode = strings.TrimSpace(node)
+	pool = t.poolForHostLocked(host)
+	oldConnections = append(oldConnections, pool.conns...)
+	pool.conns = nil
+	pool.generation++
+	generation := pool.generation
+	if pending := t.pending[host]; pending != nil {
+		delete(t.pending, host)
+		pending.cond.Broadcast()
+	}
+	t.mu.Unlock()
+
+	for _, conn := range oldConnections {
+		t.startDrain(pool, conn)
+	}
+	return generation
+}
+
 func (t *utlsRoundTripper) forgetConnection(conn h2ClientConn) {
 	if conn == nil {
 		return
@@ -202,6 +290,7 @@ func (p *connPool) nextRoundRobinSlot() int {
 
 func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (h2ClientConn, error) {
 	for {
+		t.waitForStableRoute(host)
 		t.mu.Lock()
 
 		pool := t.poolForHostLocked(host)
@@ -210,15 +299,17 @@ func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (h2ClientCon
 			return h2Conn, nil
 		}
 
-		if cond, ok := t.pending[host]; ok {
-			cond.Wait()
+		if pending, ok := t.pending[host]; ok {
+			pending.cond.Wait()
 			t.mu.Unlock()
 			continue
 		}
 
-		cond := sync.NewCond(&t.mu)
-		t.pending[host] = cond
 		generation := pool.generation
+		pending := &pendingDial{
+			cond: sync.NewCond(&t.mu),
+		}
+		t.pending[host] = pending
 		t.mu.Unlock()
 
 		h2Conn, err := t.dialConnection(host, addr)
@@ -226,8 +317,10 @@ func (t *utlsRoundTripper) getOrCreateConnection(host, addr string) (h2ClientCon
 		t.mu.Lock()
 		pool = t.poolForHostLocked(host)
 		staleGeneration := pool.generation != generation
-		delete(t.pending, host)
-		cond.Broadcast()
+		if t.pending[host] == pending {
+			delete(t.pending, host)
+			pending.cond.Broadcast()
+		}
 		if staleGeneration {
 			t.mu.Unlock()
 			if h2Conn != nil {
@@ -372,6 +465,7 @@ func (t *utlsRoundTripper) fillPool(host, addr string) {
 		generation := pool.generation
 		t.mu.Unlock()
 
+		t.waitForStableRoute(host)
 		conn, errDial := t.dialConnection(host, addr)
 		if errDial != nil {
 			log.Debugf("utls: failed to prewarm connection for %s: %v", host, errDial)
@@ -397,7 +491,7 @@ func (t *utlsRoundTripper) fillPool(host, addr string) {
 }
 
 func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	const retryBudget = 1
+	retryBudget := t.retryBudget()
 
 	hostname := req.URL.Hostname()
 	port := req.URL.Port()
@@ -444,7 +538,7 @@ func (t *utlsRoundTripper) attempt(req *http.Request, hostname, addr string, ret
 		t.observeFailure(req.Context(), transportFailureInput{
 			Host:           hostname,
 			ProxyRoute:     t.proxyRoute,
-			SelectedNode:   t.selectedNode,
+			SelectedNode:   t.selectedNodeSnapshot(),
 			PoolGeneration: snapshot.Generation,
 			Phase:          transportPhaseConnectionAcquire,
 			Err:            err,
@@ -456,10 +550,11 @@ func (t *utlsRoundTripper) attempt(req *http.Request, hostname, addr string, ret
 	snapshot := t.connectionSnapshot(hostname, h2Conn)
 	resp, err := h2Conn.RoundTrip(req)
 	if err != nil {
+		t.handleConnError(hostname, h2Conn, err)
 		t.observeFailure(req.Context(), transportFailureInput{
 			Host:           hostname,
 			ProxyRoute:     t.proxyRoute,
-			SelectedNode:   t.selectedNode,
+			SelectedNode:   t.selectedNodeSnapshot(),
 			ConnectionID:   snapshot.ID,
 			PoolGeneration: snapshot.Generation,
 			Phase:          transportPhaseRequestHeaders,
@@ -468,7 +563,6 @@ func (t *utlsRoundTripper) attempt(req *http.Request, hostname, addr string, ret
 			RetryAttempt:   retryAttempt,
 			RetryBudget:    retryBudget,
 		})
-		t.handleConnError(hostname, h2Conn, err)
 		return nil, nil, snapshot, err
 	}
 	t.maybeFillPool(hostname, addr)
@@ -489,7 +583,7 @@ func (t *utlsRoundTripper) observeRetry(ctx context.Context, hostname string, sn
 	t.observer.observeRetry(ctx, transportRetryObservation{
 		Host:           hostname,
 		ProxyRoute:     t.proxyRoute,
-		SelectedNode:   t.selectedNode,
+		SelectedNode:   t.selectedNodeSnapshot(),
 		ConnectionID:   snapshot.ID,
 		PoolGeneration: snapshot.Generation,
 		RetryAttempt:   retryAttempt,
@@ -587,10 +681,11 @@ func wrapBodyForEvict(resp *http.Response, t *utlsRoundTripper, hostname string,
 	resp.Body = &evictOnReadErrBody{
 		ReadCloser: resp.Body,
 		onErr: func(err error) {
+			t.handleConnError(hostname, conn, err)
 			t.observeFailure(ctx, transportFailureInput{
 				Host:           hostname,
 				ProxyRoute:     t.proxyRoute,
-				SelectedNode:   t.selectedNode,
+				SelectedNode:   t.selectedNodeSnapshot(),
 				ConnectionID:   snapshot.ID,
 				PoolGeneration: snapshot.Generation,
 				Phase:          transportPhaseResponseBody,
@@ -599,7 +694,6 @@ func wrapBodyForEvict(resp *http.Response, t *utlsRoundTripper, hostname string,
 				RetryAttempt:   retryAttempt,
 				RetryBudget:    retryBudget,
 			})
-			t.handleConnError(hostname, conn, err)
 		},
 	}
 	return resp
@@ -641,11 +735,11 @@ func connectionErrorDisposition(err error) connErrorDisposition {
 	var streamErr http2.StreamError
 	if errors.As(err, &streamErr) {
 		switch streamErr.Code {
-		case http2.ErrCodeProtocol, http2.ErrCodeInternal:
+		case http2.ErrCodeProtocol, http2.ErrCodeInternal, http2.ErrCodeRefusedStream:
 			return connErrorDrain
 		default:
-			// REFUSED_STREAM and other stream-local failures do not make the
-			// underlying HTTP/2 connection unusable.
+			// Other stream-local failures do not make the underlying HTTP/2
+			// connection unusable.
 			return connErrorKeep
 		}
 	}
@@ -670,7 +764,9 @@ func connectionErrorDisposition(err error) connErrorDisposition {
 		return connErrorClose
 	}
 	if strings.Contains(message, "STREAM ERROR") {
-		if strings.Contains(message, "PROTOCOL_ERROR") || strings.Contains(message, "INTERNAL_ERROR") {
+		if strings.Contains(message, "PROTOCOL_ERROR") ||
+			strings.Contains(message, "INTERNAL_ERROR") ||
+			strings.Contains(message, "REFUSED_STREAM") {
 			return connErrorDrain
 		}
 		return connErrorKeep
@@ -691,37 +787,27 @@ func isRetryableFreshConnError(err error) bool {
 	if err == nil {
 		return false
 	}
-	message := strings.ToUpper(err.Error())
-	return isStreamLevelError(err) ||
-		errors.Is(err, io.ErrUnexpectedEOF) ||
-		strings.Contains(message, "UNEXPECTED EOF") ||
-		isClientConnEstablishmentError(err)
+	class := classifyTransportFailure(err, transportFailurePhaseOf(err, transportPhaseRequestHeaders))
+	switch class {
+	case transportFailureProxyTimeout,
+		transportFailureProxyGateway,
+		transportFailureProxyConnect,
+		transportFailureTLS,
+		transportFailureH2Establish,
+		transportFailureH2Protocol,
+		transportFailureH2Internal,
+		transportFailureH2RefusedStream,
+		transportFailureH2Connection,
+		transportFailureUnexpectedEOF,
+		transportFailureNetwork:
+		return true
+	default:
+		return false
+	}
 }
 
 func isClientConnEstablishmentError(err error) bool {
 	return err != nil && strings.Contains(strings.ToUpper(err.Error()), "CLIENT CONN COULD NOT BE ESTABLISHED")
-}
-
-// isStreamLevelError matches errors that are safe to retry before any response
-// bytes have been exposed. It does not decide whether the connection is usable.
-func isStreamLevelError(err error) bool {
-	if err == nil {
-		return false
-	}
-	var streamErr http2.StreamError
-	if errors.As(err, &streamErr) {
-		switch streamErr.Code {
-		case http2.ErrCodeProtocol, http2.ErrCodeInternal, http2.ErrCodeRefusedStream:
-			return true
-		default:
-			return false
-		}
-	}
-	message := strings.ToUpper(err.Error())
-	return strings.Contains(message, "STREAM ERROR") &&
-		(strings.Contains(message, "PROTOCOL_ERROR") ||
-			strings.Contains(message, "INTERNAL_ERROR") ||
-			strings.Contains(message, "REFUSED_STREAM"))
 }
 
 // canResetBody reports whether the request body can be safely re-read for a retry.
@@ -767,11 +853,12 @@ func (f *fallbackRoundTripper) RoundTrip(req *http.Request) (*http.Response, err
 	return f.fallback.RoundTrip(req)
 }
 
-func cachedRoundTrippers(proxyURL string, poolSize int) cachedUtlsRoundTrippers {
+func cachedRoundTrippers(proxyURL string, poolSize int, recovery config.ProxyRouteRecoveryConfig) cachedUtlsRoundTrippers {
 	normalizedPoolSize := normalizeUtlsPoolSize(poolSize)
 	key := utlsRoundTripperCacheKey{
-		proxyURL: proxyURL,
-		poolSize: normalizedPoolSize,
+		proxyURL:      proxyURL,
+		poolSize:      normalizedPoolSize,
+		routeRecovery: proxyRouteRecoveryCacheKey(recovery),
 	}
 
 	utlsRoundTripperCache.mu.RLock()
@@ -782,7 +869,7 @@ func cachedRoundTrippers(proxyURL string, poolSize int) cachedUtlsRoundTrippers 
 	}
 
 	cached = cachedUtlsRoundTrippers{
-		utls:     newUtlsRoundTripper(proxyURL, normalizedPoolSize),
+		utls:     newUtlsRoundTripperWithRecovery(proxyURL, normalizedPoolSize, recovery),
 		fallback: http.DefaultTransport,
 	}
 	if proxyURL != "" {
@@ -827,7 +914,11 @@ func NewUtlsHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyau
 			fallback: ctxRoundTripper,
 		}
 	} else {
-		roundTrippers = cachedRoundTrippers(proxyURL, effectiveUtlsPoolSize(cfg))
+		var recovery config.ProxyRouteRecoveryConfig
+		if cfg != nil {
+			recovery = cfg.ProxyRouteRecovery
+		}
+		roundTrippers = cachedRoundTrippers(proxyURL, effectiveUtlsPoolSize(cfg), recovery)
 	}
 
 	client := &http.Client{
