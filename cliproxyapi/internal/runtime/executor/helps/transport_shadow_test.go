@@ -140,6 +140,27 @@ func TestTransportShadowObserverActionsMatchRecoveryPolicy(t *testing.T) {
 	}
 }
 
+func TestTransportFailureObservationMarksPendingControllerSnapshot(t *testing.T) {
+	t.Parallel()
+
+	observer := newTransportShadowObserver()
+	observation := observer.observeFailure(context.Background(), transportFailureInput{
+		Host:                 "chatgpt.com",
+		ProxyRoute:           "http://mihomo:7890",
+		RouteRecoveryEnabled: true,
+		ConnectionID:         31,
+		PoolGeneration:       2,
+		Phase:                transportPhaseResponseBody,
+		Err:                  http2.StreamError{StreamID: 7, Code: http2.ErrCodeProtocol},
+		HasConnection:        true,
+		RetryAttempt:         0,
+		RetryBudget:          1,
+	})
+	if observation.SelectedNode != "unknown" || observation.SelectedNodeSource != "controller_snapshot_pending" {
+		t.Fatalf("selected node snapshot = %q/%q", observation.SelectedNode, observation.SelectedNodeSource)
+	}
+}
+
 func TestTransportShadowObserverExpiresH2FailureWindow(t *testing.T) {
 	t.Parallel()
 

@@ -536,14 +536,15 @@ func (t *utlsRoundTripper) attempt(req *http.Request, hostname, addr string, ret
 	if err != nil {
 		snapshot := transportConnectionSnapshot{Generation: t.hostGeneration(hostname)}
 		t.observeFailure(req.Context(), transportFailureInput{
-			Host:           hostname,
-			ProxyRoute:     t.proxyRoute,
-			SelectedNode:   t.selectedNodeSnapshot(),
-			PoolGeneration: snapshot.Generation,
-			Phase:          transportPhaseConnectionAcquire,
-			Err:            err,
-			RetryAttempt:   retryAttempt,
-			RetryBudget:    retryBudget,
+			Host:                 hostname,
+			ProxyRoute:           t.proxyRoute,
+			SelectedNode:         t.selectedNodeSnapshot(),
+			RouteRecoveryEnabled: t.routeRecovery != nil,
+			PoolGeneration:       snapshot.Generation,
+			Phase:                transportPhaseConnectionAcquire,
+			Err:                  err,
+			RetryAttempt:         retryAttempt,
+			RetryBudget:          retryBudget,
 		})
 		return nil, nil, snapshot, err
 	}
@@ -552,16 +553,17 @@ func (t *utlsRoundTripper) attempt(req *http.Request, hostname, addr string, ret
 	if err != nil {
 		t.handleConnError(hostname, h2Conn, err)
 		t.observeFailure(req.Context(), transportFailureInput{
-			Host:           hostname,
-			ProxyRoute:     t.proxyRoute,
-			SelectedNode:   t.selectedNodeSnapshot(),
-			ConnectionID:   snapshot.ID,
-			PoolGeneration: snapshot.Generation,
-			Phase:          transportPhaseRequestHeaders,
-			Err:            err,
-			HasConnection:  true,
-			RetryAttempt:   retryAttempt,
-			RetryBudget:    retryBudget,
+			Host:                 hostname,
+			ProxyRoute:           t.proxyRoute,
+			SelectedNode:         t.selectedNodeSnapshot(),
+			RouteRecoveryEnabled: t.routeRecovery != nil,
+			ConnectionID:         snapshot.ID,
+			PoolGeneration:       snapshot.Generation,
+			Phase:                transportPhaseRequestHeaders,
+			Err:                  err,
+			HasConnection:        true,
+			RetryAttempt:         retryAttempt,
+			RetryBudget:          retryBudget,
 		})
 		return nil, nil, snapshot, err
 	}
@@ -683,16 +685,17 @@ func wrapBodyForEvict(resp *http.Response, t *utlsRoundTripper, hostname string,
 		onErr: func(err error) {
 			t.handleConnError(hostname, conn, err)
 			t.observeFailure(ctx, transportFailureInput{
-				Host:           hostname,
-				ProxyRoute:     t.proxyRoute,
-				SelectedNode:   t.selectedNodeSnapshot(),
-				ConnectionID:   snapshot.ID,
-				PoolGeneration: snapshot.Generation,
-				Phase:          transportPhaseResponseBody,
-				Err:            err,
-				HasConnection:  true,
-				RetryAttempt:   retryAttempt,
-				RetryBudget:    retryBudget,
+				Host:                 hostname,
+				ProxyRoute:           t.proxyRoute,
+				SelectedNode:         t.selectedNodeSnapshot(),
+				RouteRecoveryEnabled: t.routeRecovery != nil,
+				ConnectionID:         snapshot.ID,
+				PoolGeneration:       snapshot.Generation,
+				Phase:                transportPhaseResponseBody,
+				Err:                  err,
+				HasConnection:        true,
+				RetryAttempt:         retryAttempt,
+				RetryBudget:          retryBudget,
 			})
 		},
 	}
