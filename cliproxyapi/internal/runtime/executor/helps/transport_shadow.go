@@ -187,13 +187,16 @@ type transportFailureInput struct {
 type transportShadowObserver struct {
 	mu sync.Mutex
 
-	now            func() time.Time
-	h2Failures     map[string]*transportH2FailureWindow
-	routeHoldUntil map[string]time.Time
-	failureCounts  map[transportFailureClass]uint64
-	actionCounts   map[transportAction]uint64
-	retryCounts    map[transportRetryOutcome]uint64
-	shadowSwitches uint64
+	now              func() time.Time
+	h2ErrorWindow    time.Duration
+	h2ErrorThreshold int
+	routeHold        time.Duration
+	h2Failures       map[string]*transportH2FailureWindow
+	routeHoldUntil   map[string]time.Time
+	failureCounts    map[transportFailureClass]uint64
+	actionCounts     map[transportAction]uint64
+	retryCounts      map[transportRetryOutcome]uint64
+	shadowSwitches   uint64
 
 	onFailure func(transportFailureObservation)
 	onRetry   func(transportRetryObservation)
@@ -205,13 +208,29 @@ type transportH2FailureWindow struct {
 }
 
 func newTransportShadowObserver() *transportShadowObserver {
+	return newTransportShadowObserverWithPolicy(transportShadowH2ErrorWindow, 2, transportShadowRouteHold)
+}
+
+func newTransportShadowObserverWithPolicy(h2ErrorWindow time.Duration, h2ErrorThreshold int, routeHold time.Duration) *transportShadowObserver {
+	if h2ErrorWindow <= 0 {
+		h2ErrorWindow = transportShadowH2ErrorWindow
+	}
+	if h2ErrorThreshold <= 0 {
+		h2ErrorThreshold = 2
+	}
+	if routeHold <= 0 {
+		routeHold = transportShadowRouteHold
+	}
 	return &transportShadowObserver{
-		now:            time.Now,
-		h2Failures:     make(map[string]*transportH2FailureWindow),
-		routeHoldUntil: make(map[string]time.Time),
-		failureCounts:  make(map[transportFailureClass]uint64),
-		actionCounts:   make(map[transportAction]uint64),
-		retryCounts:    make(map[transportRetryOutcome]uint64),
+		now:              time.Now,
+		h2ErrorWindow:    h2ErrorWindow,
+		h2ErrorThreshold: h2ErrorThreshold,
+		routeHold:        routeHold,
+		h2Failures:       make(map[string]*transportH2FailureWindow),
+		routeHoldUntil:   make(map[string]time.Time),
+		failureCounts:    make(map[transportFailureClass]uint64),
+		actionCounts:     make(map[transportAction]uint64),
+		retryCounts:      make(map[transportRetryOutcome]uint64),
 	}
 }
 
@@ -296,14 +315,14 @@ func (o *transportShadowObserver) shadowActionLocked(host, proxyRoute, selectedN
 			}
 			o.h2Failures[routeKey] = window
 		}
-		cutoff := now.Add(-transportShadowH2ErrorWindow)
+		cutoff := now.Add(-o.h2ErrorWindow)
 		for id, observedAt := range window.connections {
 			if observedAt.Before(cutoff) {
 				delete(window.connections, id)
 			}
 		}
 		window.connections[connID] = now
-		if len(window.connections) >= 2 {
+		if len(window.connections) >= o.h2ErrorThreshold {
 			delete(o.h2Failures, routeKey)
 			return o.shadowSwitchActionLocked(routeKey, now)
 		}
@@ -319,8 +338,18 @@ func (o *transportShadowObserver) shadowSwitchActionLocked(routeKey string, now 
 	if holdUntil := o.routeHoldUntil[routeKey]; holdUntil.After(now) {
 		return transportActionRouteHold
 	}
-	o.routeHoldUntil[routeKey] = now.Add(transportShadowRouteHold)
+	o.routeHoldUntil[routeKey] = now.Add(o.routeHold)
 	return transportActionSwitchNode
+}
+
+func (o *transportShadowObserver) releaseSwitchHold(host, proxyRoute, selectedNode string) {
+	if o == nil {
+		return
+	}
+	routeKey := host + "\x00" + proxyRoute + "\x00" + normalizedSelectedNode(selectedNode)
+	o.mu.Lock()
+	delete(o.routeHoldUntil, routeKey)
+	o.mu.Unlock()
 }
 
 func classifyTransportFailure(err error, phase transportFailurePhase) transportFailureClass {

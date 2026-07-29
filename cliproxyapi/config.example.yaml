@@ -109,6 +109,21 @@ proxy-url: ""
 # Default 1 preserves current request-visible behavior; try 2 first for production canary.
 utls-pool-size: 1
 
+# Optional Mihomo route recovery for protected upstream hosts. The controller
+# must only be reachable from the private container network.
+# proxy-route-recovery:
+#   enabled: true
+#   controller-url: "http://mihomo:9090"
+#   controller-secret-file: "/app/secrets/mihomo-controller"
+#   group: "OpenAI稳定"
+#   hosts: ["chatgpt.com"]
+#   h2-error-window: "30s"
+#   h2-error-threshold: 2
+#   node-cooldown: "15m"
+#   repeated-failure-cooldown: "30m"
+#   route-hold: "10m"
+#   max-replays: 1
+
 # When true, unprefixed model requests only use credentials without a prefix (except when prefix == model name).
 force-model-prefix: false
 
