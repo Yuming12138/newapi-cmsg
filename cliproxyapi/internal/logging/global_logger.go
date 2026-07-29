@@ -35,6 +35,13 @@ var logFieldOrder = []string{
 	"plugin_id", "plugin_name", "source_id",
 	"version", "active_version", "retired_version", "overwritten",
 	"mode", "budget", "level", "original_mode", "original_value", "min", "max", "clamped_to", "error",
+	// Transport recovery fields are explicitly allowlisted so shadow-mode
+	// decisions remain observable with the production text formatter.
+	"shadow_mode", "host", "proxy_route", "selected_node", "selected_node_source",
+	"connection_id", "pool_generation", "failure_phase", "failure_class",
+	"actual_action", "shadow_action", "payload_committed", "payload_boundary_known",
+	"shadow_replay_eligible", "retry_attempt", "retry_budget", "retry_outcome",
+	"failure_class_total", "shadow_action_total", "shadow_node_switch_total", "retry_outcome_total",
 }
 
 var pluginPathFieldOrder = []string{"path", "active_path", "retired_path"}
