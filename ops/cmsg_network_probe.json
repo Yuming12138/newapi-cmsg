@@ -1,5 +1,8 @@
 {
   "enabled": true,
+  "schema_version": 2,
+  "site_id": "aliyun",
+  "site_role": "public-primary",
   "connect_timeout_sec": 3,
   "max_time_sec": 8,
   "speed_test": {
@@ -7,9 +10,27 @@
     "url": "https://speed.cloudflare.com/__down?bytes=65536",
     "bytes": 65536
   },
-  "docker_logs": {
+  "diagnostic_only_head_hosts": [
+    "chatgpt.com"
+  ],
+  "log_window": {
+    "fallback_sec": 360,
+    "max_lookback_sec": 900
+  },
+  "new_api_logs": {
     "enabled": true,
-    "since": "6m",
-    "tail": 600
+    "container": "new-api",
+    "tail": 3000
+  },
+  "cpa_logs": {
+    "enabled": true,
+    "path": "/opt/cliproxyapi/logs/main.log",
+    "timezone": "UTC",
+    "max_tail_bytes": 4194304
+  },
+  "mihomo_logs": {
+    "enabled": true,
+    "container": "mihomo",
+    "tail": 3000
   }
 }
