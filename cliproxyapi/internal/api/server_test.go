@@ -14,6 +14,7 @@ import (
 	managementHandlers "github.com/router-for-me/CLIProxyAPI/v7/internal/api/handlers/management"
 	proxyconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	internallogging "github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/managementasset"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/redisqueue"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
@@ -331,28 +332,48 @@ func TestVideosRoutesKeepXAINativeAndExposeOpenAIPrefix(t *testing.T) {
 	}
 }
 
-func TestHomeEnabledHidesManagementEndpointsAndControlPanel(t *testing.T) {
+func TestHomeEnabledAllowsAuthenticatedManagementAndControlPanel(t *testing.T) {
 	t.Setenv("MANAGEMENT_PASSWORD", "test-management-key")
 
 	server := newTestServer(t)
 	server.cfg.Home.Enabled = true
 
-	t.Run("management endpoints return 404", func(t *testing.T) {
+	t.Run("management endpoint requires authentication", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v0/management/config", nil)
+		rr := httptest.NewRecorder()
+		server.engine.ServeHTTP(rr, req)
+		if rr.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusUnauthorized, rr.Body.String())
+		}
+	})
+
+	t.Run("management endpoint accepts local secret", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/v0/management/config", nil)
 		req.Header.Set("Authorization", "Bearer test-management-key")
 		rr := httptest.NewRecorder()
 		server.engine.ServeHTTP(rr, req)
-		if rr.Code != http.StatusNotFound {
-			t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusNotFound, rr.Body.String())
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
 		}
 	})
 
-	t.Run("management control panel returns 404", func(t *testing.T) {
+	t.Run("management control panel is served", func(t *testing.T) {
+		panelPath := managementasset.FilePath(server.configFilePath)
+		if err := os.MkdirAll(filepath.Dir(panelPath), 0o755); err != nil {
+			t.Fatalf("failed to create management asset directory: %v", err)
+		}
+		if err := os.WriteFile(panelPath, []byte("<html>home-management-panel</html>"), 0o644); err != nil {
+			t.Fatalf("failed to write management asset: %v", err)
+		}
+
 		req := httptest.NewRequest(http.MethodGet, "/management.html", nil)
 		rr := httptest.NewRecorder()
 		server.engine.ServeHTTP(rr, req)
-		if rr.Code != http.StatusNotFound {
-			t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusNotFound, rr.Body.String())
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d body=%s", rr.Code, http.StatusOK, rr.Body.String())
+		}
+		if !strings.Contains(rr.Body.String(), "home-management-panel") {
+			t.Fatalf("management control panel body missing fixture marker: %s", rr.Body.String())
 		}
 	})
 }

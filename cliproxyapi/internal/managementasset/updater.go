@@ -108,9 +108,6 @@ func autoUpdateSkipReason(cfg *config.Config) (string, bool) {
 	if cfg == nil {
 		return "config not yet available", true
 	}
-	if cfg.Home.Enabled {
-		return "cluster mode enabled", true
-	}
 	if cfg.RemoteManagement.DisableControlPanel {
 		return "control panel disabled", true
 	}
