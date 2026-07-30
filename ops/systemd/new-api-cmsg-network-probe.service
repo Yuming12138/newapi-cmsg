@@ -8,6 +8,9 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=/opt/new-api
 ExecStart=/usr/bin/flock -n /tmp/new-api-cmsg-network-probe.lock /usr/bin/python3 /opt/new-api/ops/cmsg_network_probe.py /opt/new-api/ops/cmsg_network_probe.json
+Environment=PYTHONDONTWRITEBYTECODE=1
 Nice=15
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
+TimeoutStartSec=120
+UMask=0077
