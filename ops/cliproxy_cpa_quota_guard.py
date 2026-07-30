@@ -260,6 +260,7 @@ def management_headers(env: dict[str, str], base_url: str = "") -> dict[str, str
             headers["X-Management-Key"] = key
     elif key:
         headers["Authorization"] = "Bearer " + key
+        headers["X-Management-Key"] = key
     return headers
 
 
@@ -448,7 +449,8 @@ def classify_account_bucket(
 def account_identity(auth_entry: dict[str, Any]) -> tuple[str, str, str]:
     auth_index = str(first_non_empty(auth_entry.get("auth_index"), auth_entry.get("authIndex")) or "").strip()
     account_id = account_id_from_entry(auth_entry)
-    account_id_hash = hashlib.sha256(account_id.encode("utf-8")).hexdigest()[:12] if account_id else ""
+    stable_identity = account_id or ("auth_index:" + auth_index if auth_index else "")
+    account_id_hash = hashlib.sha256(stable_identity.encode("utf-8")).hexdigest()[:12] if stable_identity else ""
     return auth_index, account_id, account_id_hash
 
 
@@ -462,19 +464,19 @@ def call_wham_usage_for_auth(
     auth_index, account_id, account_id_hash = account_identity(auth_entry)
     if not auth_index:
         raise RuntimeError("missing_auth_index")
-    if not account_id:
-        raise RuntimeError("missing_account_id")
 
+    upstream_headers = {
+        "Authorization": "Bearer $TOKEN$",
+        "Content-Type": "application/json",
+        "User-Agent": "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal",
+    }
+    if account_id:
+        upstream_headers["Chatgpt-Account-Id"] = account_id
     payload = {
         "auth_index": auth_index,
         "method": "GET",
         "url": str(config.get("wham_usage_url") or DEFAULT_CONFIG["wham_usage_url"]),
-        "header": {
-            "Authorization": "Bearer $TOKEN$",
-            "Content-Type": "application/json",
-            "User-Agent": "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal",
-            "Chatgpt-Account-Id": account_id,
-        },
+        "header": upstream_headers,
     }
     response = request_json(base_url + "/v0/management/api-call", headers, timeout, payload)
     status = int(first_non_empty(response.get("status_code"), response.get("statusCode"), 0) or 0)
@@ -489,7 +491,7 @@ def call_wham_usage_for_auth(
         raise RuntimeError("wham_usage_payload_not_object")
     usage["_guard_auth"] = {
         "auth_index": auth_index,
-        "account_id_hash": hashlib.sha256(account_id.encode("utf-8")).hexdigest()[:12],
+        "account_id_hash": account_id_hash,
         "plan_type_hint": plan_type_from_entry(auth_entry, usage),
     }
     return usage
@@ -2060,14 +2062,16 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
 
     if desired_enabled:
         balance_update = float(first_non_empty(result.get("usable_balance_units"), result.get("balance_units")) or 0)
-        if not manually_disabled and current_status != STATUS_ENABLED:
-            status = STATUS_ENABLED
+        if not manually_disabled:
             abilities_enabled = True
+            if current_status != STATUS_ENABLED:
+                status = STATUS_ENABLED
     elif ok or fail_closed:
         balance_update = 0.0
-        if not manually_disabled and current_status != STATUS_AUTO_DISABLED:
-            status = STATUS_AUTO_DISABLED
+        if not manually_disabled:
             abilities_enabled = False
+            if current_status != STATUS_AUTO_DISABLED:
+                status = STATUS_AUTO_DISABLED
 
     quota_source_balance = balance_update
     if quota_source_balance is None:
