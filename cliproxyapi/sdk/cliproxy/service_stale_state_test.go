@@ -88,13 +88,25 @@ func TestForceHomeRuntimeConfigEnablesUsageStatistics(t *testing.T) {
 }
 
 func TestApplyHomeOverlayForcesUsageStatisticsEnabled(t *testing.T) {
-	baseCfg := &config.Config{}
+	localManagement := config.RemoteManagement{
+		AllowRemote:            true,
+		SecretKey:              "local-management-secret",
+		DisableControlPanel:    false,
+		DisableAutoUpdatePanel: true,
+		PanelGitHubRepository:  "local/panel-repository",
+	}
+	baseCfg := &config.Config{RemoteManagement: localManagement}
 	baseCfg.Home.Enabled = true
 	service := &Service{cfg: baseCfg}
 
 	service.applyHomeOverlay(&config.Config{
 		UsageStatisticsEnabled: false,
 		SaveCooldownStatus:     true,
+		RemoteManagement: config.RemoteManagement{
+			AllowRemote:         false,
+			SecretKey:           "home-management-secret",
+			DisableControlPanel: true,
+		},
 	})
 
 	if service.cfg == nil || !service.cfg.UsageStatisticsEnabled {
@@ -105,5 +117,8 @@ func TestApplyHomeOverlayForcesUsageStatisticsEnabled(t *testing.T) {
 	}
 	if service.cfg.SaveCooldownStatus {
 		t.Fatal("expected home overlay to force cooldown status persistence disabled")
+	}
+	if service.cfg.RemoteManagement != localManagement {
+		t.Fatal("expected home overlay to preserve local remote-management configuration")
 	}
 }

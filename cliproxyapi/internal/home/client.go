@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	log "github.com/sirupsen/logrus"
@@ -85,8 +86,10 @@ type Client struct {
 	seedHost string
 	seedPort int
 
-	cmd *redis.Client
-	sub *redis.Client
+	cmd        *redis.Client
+	sub        *redis.Client
+	lifecycle  config.CredentialConcurrencyConfig
+	instanceID string
 
 	heartbeatOK       atomic.Bool
 	clusterNodes      []clusterNode
@@ -95,10 +98,25 @@ type Client struct {
 
 func New(homeCfg config.HomeConfig) *Client {
 	return &Client{
-		homeCfg:  homeCfg,
-		seedHost: strings.TrimSpace(homeCfg.Host),
-		seedPort: homeCfg.Port,
+		homeCfg:    homeCfg,
+		seedHost:   strings.TrimSpace(homeCfg.Host),
+		seedPort:   homeCfg.Port,
+		instanceID: uuid.NewString(),
 	}
+}
+
+func (c *Client) SetLifecycleConfig(cfg config.CredentialConcurrencyConfig) error {
+	if c == nil {
+		return ErrDisabled
+	}
+	cfg = cfg.WithDefaults()
+	if errValidate := config.ValidateCredentialConcurrency(cfg); errValidate != nil {
+		return fmt.Errorf("validate credential concurrency lifecycle config: %w", errValidate)
+	}
+	c.mu.Lock()
+	c.lifecycle = cfg
+	c.mu.Unlock()
+	return nil
 }
 
 func (c *Client) Enabled() bool {
@@ -797,19 +815,16 @@ func newAuthDispatchRequest(requestedModel string, sessionID string, headers htt
 		count = 1
 	}
 	return authDispatchRequest{
-		Type:      "auth",
-		Model:     requestedModel,
-		Count:     count,
-		SessionID: strings.TrimSpace(sessionID),
-		Headers:   headersToLowerMap(headers),
+		Type:                "auth",
+		Model:               requestedModel,
+		Count:               count,
+		ConcurrencyProtocol: 1,
+		SessionID:           strings.TrimSpace(sessionID),
+		Headers:             headersToLowerMap(headers),
 	}
 }
 
 func (c *Client) RPopAuth(ctx context.Context, requestedModel string, sessionID string, headers http.Header, count int) ([]byte, error) {
-	cmd, errClient := c.commandClient()
-	if errClient != nil {
-		return nil, errClient
-	}
 	requestedModel = strings.TrimSpace(requestedModel)
 	if requestedModel == "" {
 		return nil, fmt.Errorf("home: requested model is empty")
@@ -820,7 +835,21 @@ func (c *Client) RPopAuth(ctx context.Context, requestedModel string, sessionID 
 		return nil, err
 	}
 
-	raw, err := cmd.RPop(ctx, string(keyBytes)).Bytes()
+	cmd, errClient := c.commandClient()
+	if errClient != nil {
+		return nil, errClient
+	}
+	conn := cmd.Conn()
+	defer func() {
+		if errClose := conn.Close(); errClose != nil {
+			log.WithError(errClose).Debug("Home auth dispatch connection close failed")
+		}
+	}()
+	if errProbe := conn.Ping(ctx).Err(); errProbe != nil {
+		return nil, errProbe
+	}
+
+	raw, err := conn.RPop(ctx, string(keyBytes)).Bytes()
 	if errors.Is(err, redis.Nil) {
 		return nil, ErrAuthNotFound
 	}
@@ -949,6 +978,60 @@ func (c *Client) handleSubscriptionPayload(ctx context.Context, channel string, 
 	}
 }
 
+func (c *Client) subscriptionParameters() ([]string, time.Duration) {
+	cfg := config.CredentialConcurrencyConfig{}.WithDefaults()
+	instanceID := ""
+	if c != nil {
+		c.mu.Lock()
+		if c.lifecycle != (config.CredentialConcurrencyConfig{}) {
+			cfg = c.lifecycle.WithDefaults()
+		}
+		instanceID = strings.TrimSpace(c.instanceID)
+		c.mu.Unlock()
+	}
+	args := []string{redisChannelConfig}
+	if cfg.LifecycleConfigRevision > 0 {
+		if instanceID == "" {
+			instanceID = uuid.NewString()
+		}
+		args = append(args, strconv.FormatInt(cfg.LifecycleConfigRevision, 10), instanceID)
+	}
+	return args, cfg.CPAHeartbeatTimeout
+}
+
+func receiveSubscriptionACKs(ctx context.Context, pubsub *redis.PubSub, receiveTimeout time.Duration, channels []string) error {
+	if pubsub == nil || len(channels) == 0 {
+		return fmt.Errorf("Home subscription ACK is missing")
+	}
+	for index, channel := range channels {
+		event, errReceive := pubsub.ReceiveTimeout(ctx, receiveTimeout)
+		if errReceive != nil {
+			return errReceive
+		}
+		ack, ok := event.(*redis.Subscription)
+		if !ok || ack == nil || ack.Kind != "subscribe" || ack.Channel != channel || ack.Count != index+1 {
+			return fmt.Errorf("invalid Home subscription ACK")
+		}
+	}
+	return nil
+}
+
+func (c *Client) rebuildCommandPoolAndProbe(ctx context.Context) error {
+	if c == nil {
+		return ErrDisabled
+	}
+	c.mu.Lock()
+	cmd := c.cmd
+	c.cmd = nil
+	c.mu.Unlock()
+	if cmd != nil {
+		if errClose := cmd.Close(); errClose != nil {
+			log.WithError(errClose).Warn("Home bootstrap command client close failed")
+		}
+	}
+	return c.Ping(ctx)
+}
+
 // StartConfigSubscriber connects to home, fetches config once via GET config, then subscribes to
 // the "config" channel to receive runtime config updates.
 //
@@ -1013,17 +1096,24 @@ func (c *Client) StartConfigSubscriber(ctx context.Context, onConfig func([]byte
 			continue
 		}
 
-		pubsub := sub.Subscribe(ctx, redisChannelConfig)
+		args, receiveTimeout := c.subscriptionParameters()
+		pubsub := sub.Subscribe(ctx, args...)
 		if pubsub == nil {
 			c.markReconnectFailure("subscribe")
 			sleepWithContext(ctx, homeReconnectInterval)
 			continue
 		}
 
-		// Ensure the subscription is established before marking heartbeat OK.
-		if _, errReceive := pubsub.ReceiveTimeout(ctx, homeSubscriptionReceiveTimeout); errReceive != nil {
+		// Ensure the subscription and Home membership are established before marking heartbeat OK.
+		if errReceive := receiveSubscriptionACKs(ctx, pubsub, receiveTimeout, args[:1]); errReceive != nil {
 			_ = pubsub.Close()
 			c.markReconnectFailure("subscribe")
+			sleepWithContext(ctx, homeReconnectInterval)
+			continue
+		}
+		if errProbe := c.rebuildCommandPoolAndProbe(ctx); errProbe != nil {
+			_ = pubsub.Close()
+			c.markReconnectFailure("command probe")
 			sleepWithContext(ctx, homeReconnectInterval)
 			continue
 		}
@@ -1032,7 +1122,8 @@ func (c *Client) StartConfigSubscriber(ctx context.Context, onConfig func([]byte
 		c.heartbeatOK.Store(true)
 
 		for {
-			event, errMsg := pubsub.ReceiveTimeout(ctx, homeSubscriptionReceiveTimeout)
+			_, receiveTimeout = c.subscriptionParameters()
+			event, errMsg := pubsub.ReceiveTimeout(ctx, receiveTimeout)
 			if errMsg != nil {
 				_ = pubsub.Close()
 				c.heartbeatOK.Store(false)

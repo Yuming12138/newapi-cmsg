@@ -1,0 +1,71 @@
+services:
+  home:
+    image: nginx:1.29-alpine
+    pull_policy: never
+    container_name: cmsg-campus-home
+    user: "1001:1001"
+    working_dir: /CLIProxyAPIHome
+    entrypoint:
+      - /CLIProxyAPIHome/entrypoint.sh
+    environment:
+      HOME: /CLIProxyAPIHome/state
+      TZ: Asia/Shanghai
+    ports:
+      - "127.0.0.1:8327:8327"
+    volumes:
+      - ./bin/CLIProxyAPIHome-v1.0.64:/CLIProxyAPIHome/CLIProxyAPIHome:ro
+      - ./home/entrypoint.sh:/CLIProxyAPIHome/entrypoint.sh:ro
+      - ./home/cluster.yaml:/CLIProxyAPIHome/cluster.yaml:ro
+      - ./home/data:/CLIProxyAPIHome/data
+      - ./home/logs:/CLIProxyAPIHome/logs
+      - ./home/plugins:/CLIProxyAPIHome/plugins
+      - ./home/state:/CLIProxyAPIHome/state
+    networks:
+      - backend
+      - egress
+    restart: unless-stopped
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "/bin/busybox", "nc", "-z", "-w", "3", "127.0.0.1", "8327"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    cpus: 2.0
+    mem_limit: 2g
+    pids_limit: 512
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  cpa:
+    environment:
+      HOME: /CLIProxyAPI/home
+    command:
+      - /bin/sh
+      - -eu
+      - -c
+      - |
+        if ! grep -Eq '^HOME_JWT=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$$' /CLIProxyAPI/.env; then
+          echo "HOME_JWT is missing or malformed" >&2
+          exit 1
+        fi
+        exec ./CLIProxyAPI
+    volumes:
+      - ./secrets/cpa-home.env:/CLIProxyAPI/.env:ro
+      - ./data/cpa-home-state:/CLIProxyAPI/home
+    depends_on:
+      home:
+        condition: service_healthy
+    cpus: 4.0
+    mem_limit: 4g
+    pids_limit: 1024

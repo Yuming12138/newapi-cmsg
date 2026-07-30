@@ -1412,8 +1412,6 @@ func forceHomeRuntimeConfig(cfg *config.Config) {
 	cfg.DisableCooling = true
 	cfg.SaveCooldownStatus = false
 	cfg.WebsocketAuth = false
-	cfg.RemoteManagement.AllowRemote = false
-	cfg.RemoteManagement.DisableControlPanel = true
 }
 
 func (s *Service) applyHomeOverlay(remoteCfg *config.Config) {
@@ -1442,6 +1440,7 @@ func (s *Service) applyHomeOverlayContext(ctx context.Context, remoteCfg *config
 	merged.Port = baseCfg.Port
 	merged.TLS = baseCfg.TLS
 	merged.Home = baseCfg.Home
+	merged.RemoteManagement = baseCfg.RemoteManagement
 	forceHomeRuntimeConfig(&merged)
 
 	logHomeConfigChanges(baseCfg, &merged)
@@ -1586,6 +1585,10 @@ func (s *Service) startHomeSubscriber(ctx context.Context) {
 		if err != nil {
 			log.Warnf("failed to parse home config payload: %v", err)
 			return err
+		}
+		if errLifecycle := client.SetLifecycleConfig(parsed.CredentialConcurrency); errLifecycle != nil {
+			log.Warnf("failed to apply home credential concurrency lifecycle config: %v", errLifecycle)
+			return errLifecycle
 		}
 		return s.applyHomeOverlayContext(homeCtx, parsed)
 	})

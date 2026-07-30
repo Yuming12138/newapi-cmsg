@@ -134,6 +134,116 @@ def reset_credit_result(
     return result
 
 
+class ManagementHeadersTest(unittest.TestCase):
+    def test_key_only_sends_bearer_and_management_header(self) -> None:
+        headers = guard.management_headers(
+            {"CPA_MANAGEMENT_KEY": "test-management-key"},
+            "http://172.17.0.1:8327",
+        )
+
+        self.assertEqual("Bearer test-management-key", headers["Authorization"])
+        self.assertEqual("test-management-key", headers["X-Management-Key"])
+
+    def test_basic_auth_keeps_management_key_in_separate_header(self) -> None:
+        headers = guard.management_headers(
+            {
+                "CPA_MANAGEMENT_KEY": "test-management-key",
+                "CPA_BASIC_USERNAME": "admin",
+                "CPA_BASIC_PASSWORD": "test-password",
+            },
+            "https://cliproxy.example.com",
+        )
+
+        self.assertTrue(headers["Authorization"].startswith("Basic "))
+        self.assertEqual("test-management-key", headers["X-Management-Key"])
+
+    def test_home_auth_identity_falls_back_to_auth_index_hash(self) -> None:
+        first = guard.account_identity({"auth_index": "home-runtime-auth"})
+        second = guard.account_identity({"auth_index": "home-runtime-auth"})
+
+        self.assertEqual("home-runtime-auth", first[0])
+        self.assertEqual("", first[1])
+        self.assertTrue(first[2])
+        self.assertEqual(first[2], second[2])
+
+    def test_wham_probe_omits_redacted_account_header(self) -> None:
+        with mock.patch.object(
+            guard,
+            "request_json",
+            return_value={"status_code": 200, "body": {"plan_type": "pro"}},
+        ) as request:
+            usage = guard.call_wham_usage_for_auth(
+                guard.DEFAULT_CONFIG,
+                "http://home.internal:8327",
+                {"X-Management-Key": "test-management-key"},
+                30,
+                {"auth_index": "home-runtime-auth", "provider": "codex"},
+            )
+
+        payload = request.call_args.args[3]
+        self.assertNotIn("Chatgpt-Account-Id", payload["header"])
+        self.assertTrue(usage["_guard_auth"]["account_id_hash"])
+
+
+class ApplyResultAbilityReconciliationTest(unittest.TestCase):
+    class RecordingDB:
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+
+        def psql(self, sql: str, capture: bool = False) -> str:
+            self.statements.append(sql)
+            return ""
+
+    def test_enabled_channel_reenables_stale_abilities(self) -> None:
+        db = self.RecordingDB()
+        channel = {"id": 12, "name": "test-cpa", "status": guard.STATUS_ENABLED, "other_info": "{}"}
+        result = {
+            "ok": True,
+            "quota_ok": True,
+            "usable_balance_units": 5.0,
+            "total_balance_units": 50.0,
+            "reason": "usable_balance_available",
+        }
+
+        guard.apply_result(db, channel, result, {})
+
+        self.assertEqual(1, len(db.statements))
+        self.assertIn("update abilities set enabled = true where channel_id = 12;", db.statements[0])
+        self.assertNotIn("status = 1", db.statements[0])
+
+    def test_auto_disabled_channel_keeps_abilities_disabled(self) -> None:
+        db = self.RecordingDB()
+        channel = {"id": 12, "name": "test-cpa", "status": guard.STATUS_AUTO_DISABLED, "other_info": "{}"}
+        result = {
+            "ok": True,
+            "quota_ok": False,
+            "usable_balance_units": 0.0,
+            "reason": "quota_low_watermark_reached",
+        }
+
+        guard.apply_result(db, channel, result, {})
+
+        self.assertEqual(1, len(db.statements))
+        self.assertIn("update abilities set enabled = false where channel_id = 12;", db.statements[0])
+        self.assertNotIn("status = 3", db.statements[0])
+
+    def test_manually_disabled_channel_does_not_override_abilities(self) -> None:
+        db = self.RecordingDB()
+        channel = {"id": 12, "name": "test-cpa", "status": guard.STATUS_MANUALLY_DISABLED, "other_info": "{}"}
+        result = {
+            "ok": True,
+            "quota_ok": True,
+            "usable_balance_units": 5.0,
+            "total_balance_units": 50.0,
+            "reason": "usable_balance_available",
+        }
+
+        guard.apply_result(db, channel, result, {})
+
+        self.assertEqual(1, len(db.statements))
+        self.assertNotIn("update abilities", db.statements[0])
+
+
 def combined_dynamic_budget_result(*results: dict) -> dict:
     accounts = [account for result in results for account in result["accounts"]]
     remaining_total = sum(

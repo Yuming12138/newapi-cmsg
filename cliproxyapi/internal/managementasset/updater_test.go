@@ -20,12 +20,12 @@ func TestAutoUpdateSkipReason(t *testing.T) {
 			wantSkip:   true,
 		},
 		{
-			name: "cluster mode",
+			name: "cluster mode permits local panel",
 			cfg: &config.Config{
 				Home: config.HomeConfig{Enabled: true},
 			},
-			wantReason: "cluster mode enabled",
-			wantSkip:   true,
+			wantReason: "",
+			wantSkip:   false,
 		},
 		{
 			name: "control panel disabled",

@@ -1,11 +1,12 @@
 package home
 
 type authDispatchRequest struct {
-	Type      string            `json:"type"`
-	Model     string            `json:"model"`
-	Count     int               `json:"count"`
-	SessionID string            `json:"session_id,omitempty"`
-	Headers   map[string]string `json:"headers,omitempty"`
+	Type                string            `json:"type"`
+	Model               string            `json:"model"`
+	Count               int               `json:"count"`
+	ConcurrencyProtocol int               `json:"concurrency_protocol,omitempty"`
+	SessionID           string            `json:"session_id,omitempty"`
+	Headers             map[string]string `json:"headers,omitempty"`
 }
 
 type modelsRequest struct {

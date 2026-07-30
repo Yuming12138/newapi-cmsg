@@ -64,6 +64,27 @@ func shouldStartExampleAPIKeyWarningServer(cfg *config.Config, commandMode, tuiM
 	return safemode.HasExampleAPIKeys(cfg.APIKeys)
 }
 
+func mergeHomeRuntimeConfig(remoteCfg, localCfg *config.Config, homeCfg config.HomeConfig) *config.Config {
+	merged := &config.Config{}
+	if remoteCfg != nil {
+		*merged = *remoteCfg
+	}
+	if localCfg != nil {
+		merged.Host = localCfg.Host
+		if localCfg.Port > 0 {
+			merged.Port = localCfg.Port
+		}
+		merged.TLS = localCfg.TLS
+		merged.RemoteManagement = localCfg.RemoteManagement
+	}
+	if merged.Port <= 0 {
+		merged.Port = 8317
+	}
+	merged.Home = homeCfg
+	merged.UsageStatisticsEnabled = true
+	return merged
+}
+
 // main is the entry point of the application.
 // It parses command-line flags, loads configuration, and starts the appropriate
 // service based on the provided flags (login, codex-login, or server mode).
@@ -270,6 +291,25 @@ func main() {
 	var configFilePath string
 	if strings.TrimSpace(homeJWT) != "" {
 		configLoadedFromHome = true
+		// Home owns the shared proxy configuration, while bind/TLS and management
+		// settings remain local to each CPA node.
+		if strings.TrimSpace(configPath) != "" {
+			configFilePath = configPath
+		} else {
+			configFilePath = filepath.Join(wd, "config.yaml")
+		}
+		localCfg := &config.Config{}
+		if _, errStat := os.Stat(configFilePath); errStat == nil {
+			localCfg, err = config.LoadConfigOptional(configFilePath, false)
+			if err != nil {
+				log.Errorf("failed to load local node config: %v", err)
+				return
+			}
+		} else if !errors.Is(errStat, os.ErrNotExist) {
+			log.Errorf("failed to stat local node config: %v", errStat)
+			return
+		}
+
 		ctxHome, cancelHome := context.WithTimeout(context.Background(), 30*time.Second)
 		homeCfg, errHomeCfg := home.ConfigFromJWT(ctxHome, homeJWT)
 		cancelHome()
@@ -299,9 +339,7 @@ func main() {
 		if parsed == nil {
 			parsed = &config.Config{}
 		}
-		parsed.Home = homeCfg
-		parsed.Port = 8317 // Default to 8317 for home mode, can be overridden by home config
-		parsed.UsageStatisticsEnabled = true
+		parsed = mergeHomeRuntimeConfig(parsed, localCfg, homeCfg)
 		ctxHomePlugins, cancelHomePlugins := context.WithTimeout(context.Background(), 30*time.Second)
 		var errHomePlugins error
 		homePluginSyncReport, errHomePlugins = homeplugins.SyncWithReport(ctxHomePlugins, parsed, pluginHost)
@@ -317,14 +355,6 @@ func main() {
 			return
 		}
 		cfg = parsed
-
-		// Keep a non-empty config path for downstream components (log paths, management assets, etc),
-		// but do not require the file to exist when loading config from home.
-		if strings.TrimSpace(configPath) != "" {
-			configFilePath = configPath
-		} else {
-			configFilePath = filepath.Join(wd, "config.yaml")
-		}
 
 		// Local stores are intentionally disabled when config is loaded from home.
 		usePostgresStore = false

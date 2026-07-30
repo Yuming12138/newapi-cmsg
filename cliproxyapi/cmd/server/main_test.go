@@ -87,3 +87,48 @@ func TestShouldStartExampleAPIKeyWarningServer(t *testing.T) {
 		})
 	}
 }
+
+func TestMergeHomeRuntimeConfigPreservesNodeLocalSettings(t *testing.T) {
+	localManagement := config.RemoteManagement{
+		AllowRemote:            true,
+		SecretKey:              "local-management-secret",
+		DisableAutoUpdatePanel: true,
+	}
+	remoteCfg := &config.Config{
+		Host:             "home.example.internal",
+		Port:             9443,
+		RemoteManagement: config.RemoteManagement{SecretKey: "home-management-secret"},
+	}
+	remoteCfg.ProxyURL = "http://mihomo:7890"
+	localCfg := &config.Config{
+		Host:             "127.0.0.1",
+		Port:             8317,
+		RemoteManagement: localManagement,
+	}
+	homeCfg := config.HomeConfig{Enabled: true}
+
+	got := mergeHomeRuntimeConfig(remoteCfg, localCfg, homeCfg)
+
+	if got.Host != localCfg.Host || got.Port != localCfg.Port {
+		t.Fatalf("node bind settings = %s:%d, want local settings", got.Host, got.Port)
+	}
+	if got.RemoteManagement != localManagement {
+		t.Fatal("expected local remote-management configuration to be preserved")
+	}
+	if got.ProxyURL != remoteCfg.ProxyURL {
+		t.Fatal("expected shared Home proxy configuration to be preserved")
+	}
+	if !got.Home.Enabled {
+		t.Fatal("expected Home configuration to be enabled")
+	}
+	if !got.UsageStatisticsEnabled {
+		t.Fatal("expected Home runtime usage statistics to be enabled")
+	}
+}
+
+func TestMergeHomeRuntimeConfigUsesSafeDefaultPort(t *testing.T) {
+	got := mergeHomeRuntimeConfig(&config.Config{}, &config.Config{}, config.HomeConfig{Enabled: true})
+	if got.Port != 8317 {
+		t.Fatalf("port = %d, want 8317", got.Port)
+	}
+}
