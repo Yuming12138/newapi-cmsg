@@ -1,0 +1,13 @@
+[Unit]
+Description=New API CMSG low-impact network probe
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/new-api
+ExecStart=/usr/bin/flock -n /tmp/new-api-cmsg-network-probe.lock /usr/bin/python3 /opt/new-api/ops/cmsg_network_probe.py /opt/new-api/ops/cmsg_network_probe.json
+Nice=15
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

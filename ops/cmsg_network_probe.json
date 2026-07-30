@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "connect_timeout_sec": 3,
+  "max_time_sec": 8,
+  "speed_test": {
+    "enabled": true,
+    "url": "https://speed.cloudflare.com/__down?bytes=65536",
+    "bytes": 65536
+  },
+  "docker_logs": {
+    "enabled": true,
+    "since": "6m",
+    "tail": 600
+  }
+}

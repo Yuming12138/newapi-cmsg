@@ -1,0 +1,11 @@
+[Unit]
+Description=Run New API CMSG low-impact network probe every 5 minutes
+
+[Timer]
+OnBootSec=180s
+OnUnitActiveSec=300s
+AccuracySec=30s
+Unit=new-api-cmsg-network-probe.service
+
+[Install]
+WantedBy=timers.target
