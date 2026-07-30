@@ -55,6 +55,27 @@ func TestConvertOpenAIResponsesRequestDropsInvalidReasoningItemIDsForGPT5(t *tes
 	require.Equal(t, "reasoning", gjson.GetBytes(converted.Input, "0.type").String())
 }
 
+func TestConvertOpenAIResponsesRequestDropsInvalidMessageItemIDsForGPT5(t *testing.T) {
+	request := dto.OpenAIResponsesRequest{
+		Model: "gpt-5.6-sol",
+		Input: []byte(`[{"type":"message","id":"item_22d7f956efd39187f25a2e81","role":"assistant","content":[{"type":"output_text","text":"hello"}]},{"type":"message","id":"msg_valid","role":"user","content":[{"type":"input_text","text":"hi"}]}]`),
+	}
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gpt-5.5",
+		},
+	}
+
+	convertedAny, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, request)
+	require.NoError(t, err)
+	converted := convertedAny.(dto.OpenAIResponsesRequest)
+
+	require.False(t, gjson.GetBytes(converted.Input, "0.id").Exists())
+	require.Equal(t, "msg_valid", gjson.GetBytes(converted.Input, "1.id").String())
+	require.Equal(t, "message", gjson.GetBytes(converted.Input, "0.type").String())
+}
+
 func TestConvertOpenAIResponsesRequestKeepsForeignToolItemIDsForNonGPT5(t *testing.T) {
 	request := dto.OpenAIResponsesRequest{
 		Model: "gpt-5.6-sol",
