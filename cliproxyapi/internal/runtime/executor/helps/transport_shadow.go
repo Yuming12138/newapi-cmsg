@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	transportShadowH2ErrorWindow = 30 * time.Second
+	transportShadowH2ErrorWindow = 2 * time.Minute
 	transportShadowRouteHold     = 10 * time.Minute
 )
 

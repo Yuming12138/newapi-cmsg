@@ -285,6 +285,113 @@ func TestUtlsRoundTripperRetriesProtocolErrorOnReplacementConn(t *testing.T) {
 	}
 }
 
+func TestUtlsRoundTripperDoesNotGrantGenericSecondRetry(t *testing.T) {
+	t.Parallel()
+
+	first := newFakeH2Conn("first-protocol-failure", -1)
+	first.roundTripErr = http2.StreamError{StreamID: 1, Code: http2.ErrCodeProtocol}
+	second := newFakeH2Conn("second-protocol-failure", -1)
+	second.roundTripErr = http2.StreamError{StreamID: 3, Code: http2.ErrCodeProtocol}
+	rt := newFakeUtlsRoundTripper(1, second)
+	rt.pools["chatgpt.com"] = &connPool{conns: []h2ClientConn{first}}
+
+	req, errRequest := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", strings.NewReader("{}"))
+	if errRequest != nil {
+		t.Fatalf("NewRequest() error = %v", errRequest)
+	}
+	if _, errRoundTrip := rt.RoundTrip(req); errRoundTrip == nil {
+		t.Fatal("RoundTrip() error = nil, want second protocol failure")
+	}
+
+	if got := first.roundTripCalls(); got != 1 {
+		t.Fatalf("first conn round trips = %d, want 1", got)
+	}
+	if got := second.roundTripCalls(); got != 1 {
+		t.Fatalf("second conn round trips = %d, want 1", got)
+	}
+}
+
+func TestUtlsRoundTripperDoesNotTreatPoolRetirementAsRouteSwitch(t *testing.T) {
+	t.Parallel()
+
+	first := newFakeH2Conn("first-establishment-failure", -1)
+	first.roundTripErr = errors.New("http2: client conn could not be established")
+	second := newFakeH2Conn("second-establishment-failure", -1)
+	second.roundTripErr = errors.New("http2: client conn could not be established")
+	controller := newFakeProxyRouteController("新加坡1", []string{"新加坡1", "美国1"})
+	controller.groupErr = errors.New("controller unavailable")
+	rt := newRecoveryTestRoundTripper(controller, second)
+	rt.pools["chatgpt.com"] = &connPool{conns: []h2ClientConn{first}}
+
+	req, errRequest := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", strings.NewReader("{}"))
+	if errRequest != nil {
+		t.Fatalf("NewRequest() error = %v", errRequest)
+	}
+	if _, errRoundTrip := rt.RoundTrip(req); errRoundTrip == nil {
+		t.Fatal("RoundTrip() error = nil, want second establishment failure")
+	}
+
+	if got := controller.selectCalls.Load(); got != 0 {
+		t.Fatalf("SelectNode calls = %d, want 0", got)
+	}
+	if first.roundTripCalls() != 1 || second.roundTripCalls() != 1 {
+		t.Fatalf("round trips = first:%d second:%d, want 1 each", first.roundTripCalls(), second.roundTripCalls())
+	}
+}
+
+func TestUtlsRoundTripperReplaysOnceAfterRetryConfirmsRouteSwitch(t *testing.T) {
+	t.Parallel()
+
+	first := newFakeH2Conn("first-route-failure", -1)
+	first.roundTripErr = http2.StreamError{StreamID: 1, Code: http2.ErrCodeProtocol}
+	second := newFakeH2Conn("retry-route-failure", -1)
+	second.roundTripErr = http2.StreamError{StreamID: 3, Code: http2.ErrCodeProtocol}
+	third := newFakeH2Conn("new-route-success", -1)
+	controller := newFakeProxyRouteController("新加坡1", []string{"新加坡1", "美国1"})
+	rt := newRecoveryTestRoundTripper(controller, second, third)
+	rt.pools["chatgpt.com"] = &connPool{conns: []h2ClientConn{first}}
+	var retries []transportRetryObservation
+	var retriesMu sync.Mutex
+	rt.observer.onRetry = func(observation transportRetryObservation) {
+		retriesMu.Lock()
+		retries = append(retries, observation)
+		retriesMu.Unlock()
+	}
+
+	req, errRequest := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", strings.NewReader("{}"))
+	if errRequest != nil {
+		t.Fatalf("NewRequest() error = %v", errRequest)
+	}
+	resp, errRoundTrip := rt.RoundTrip(req)
+	if errRoundTrip != nil {
+		t.Fatalf("RoundTrip() error = %v", errRoundTrip)
+	}
+	if errClose := resp.Body.Close(); errClose != nil {
+		t.Fatalf("response body close error = %v", errClose)
+	}
+
+	if got := controller.selectCalls.Load(); got != 1 {
+		t.Fatalf("SelectNode calls = %d, want 1", got)
+	}
+	if got := rt.hostGeneration("chatgpt.com"); got != 1 {
+		t.Fatalf("pool generation = %d, want 1", got)
+	}
+	if first.roundTripCalls() != 1 || second.roundTripCalls() != 1 || third.roundTripCalls() != 1 {
+		t.Fatalf("round trips = first:%d second:%d third:%d, want 1 each", first.roundTripCalls(), second.roundTripCalls(), third.roundTripCalls())
+	}
+	retriesMu.Lock()
+	defer retriesMu.Unlock()
+	if len(retries) != 2 {
+		t.Fatalf("retry observations = %d, want 2", len(retries))
+	}
+	if retries[0].RetryAttempt != 1 || retries[0].RetryBudget != 1 || retries[0].Outcome != transportRetryFailed {
+		t.Fatalf("first retry observation = %#v", retries[0])
+	}
+	if retries[1].RetryAttempt != 2 || retries[1].RetryBudget != 2 || retries[1].Outcome != transportRetrySucceeded {
+		t.Fatalf("route-switch replay observation = %#v", retries[1])
+	}
+}
+
 func TestUtlsRoundTripperRetriesClientConnEstablishmentError(t *testing.T) {
 	t.Parallel()
 
@@ -662,13 +769,14 @@ func newFakeUtlsRoundTripper(poolSize int, dialed ...*fakeH2Conn) *utlsRoundTrip
 	var mu sync.Mutex
 	queue := append([]*fakeH2Conn(nil), dialed...)
 	return &utlsRoundTripper{
-		pools:      make(map[string]*connPool),
-		pending:    make(map[string]*pendingDial),
-		filling:    make(map[string]bool),
-		connIDs:    make(map[h2ClientConn]uint64),
-		poolSize:   normalizeUtlsPoolSize(poolSize),
-		proxyRoute: "http://mihomo:7890",
-		observer:   newTransportShadowObserver(),
+		pools:            make(map[string]*connPool),
+		pending:          make(map[string]*pendingDial),
+		filling:          make(map[string]bool),
+		connIDs:          make(map[h2ClientConn]uint64),
+		routeGenerations: make(map[string]uint64),
+		poolSize:         normalizeUtlsPoolSize(poolSize),
+		proxyRoute:       "http://mihomo:7890",
+		observer:         newTransportShadowObserver(),
 		createConn: func(_, _ string) (h2ClientConn, error) {
 			mu.Lock()
 			defer mu.Unlock()
