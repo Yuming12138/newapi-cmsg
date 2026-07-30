@@ -117,7 +117,7 @@ utls-pool-size: 1
 #   controller-secret-file: "/app/secrets/mihomo-controller"
 #   group: "OpenAI稳定"
 #   hosts: ["chatgpt.com"]
-#   h2-error-window: "30s"
+#   h2-error-window: "2m"
 #   h2-error-threshold: 2
 #   node-cooldown: "15m"
 #   repeated-failure-cooldown: "30m"

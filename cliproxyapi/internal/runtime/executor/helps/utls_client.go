@@ -66,18 +66,19 @@ var transportConnectionSequence atomic.Uint64
 // utlsRoundTripper implements http.RoundTripper using utls with Chrome fingerprint
 // to bypass Cloudflare's TLS fingerprinting on Anthropic domains.
 type utlsRoundTripper struct {
-	mu            sync.Mutex
-	pools         map[string]*connPool
-	pending       map[string]*pendingDial
-	filling       map[string]bool
-	connIDs       map[h2ClientConn]uint64
-	dialer        proxy.Dialer
-	poolSize      int
-	proxyRoute    string
-	selectedNode  string
-	observer      *transportShadowObserver
-	routeRecovery *proxyRouteRecoveryCoordinator
-	createConn    func(host, addr string) (h2ClientConn, error)
+	mu               sync.Mutex
+	pools            map[string]*connPool
+	pending          map[string]*pendingDial
+	filling          map[string]bool
+	connIDs          map[h2ClientConn]uint64
+	routeGenerations map[string]uint64
+	dialer           proxy.Dialer
+	poolSize         int
+	proxyRoute       string
+	selectedNode     string
+	observer         *transportShadowObserver
+	routeRecovery    *proxyRouteRecoveryCoordinator
+	createConn       func(host, addr string) (h2ClientConn, error)
 }
 
 func newUtlsRoundTripper(proxyURL string, poolSize int) *utlsRoundTripper {
@@ -96,13 +97,14 @@ func newUtlsRoundTripperWithRecovery(proxyURL string, poolSize int, rawRecovery 
 	}
 	settings := normalizeProxyRouteRecoverySettings(rawRecovery, proxyURL)
 	rt := &utlsRoundTripper{
-		pools:      make(map[string]*connPool),
-		pending:    make(map[string]*pendingDial),
-		filling:    make(map[string]bool),
-		connIDs:    make(map[h2ClientConn]uint64),
-		dialer:     dialer,
-		poolSize:   normalizeUtlsPoolSize(poolSize),
-		proxyRoute: proxyutil.Redact(proxyURL),
+		pools:            make(map[string]*connPool),
+		pending:          make(map[string]*pendingDial),
+		filling:          make(map[string]bool),
+		connIDs:          make(map[h2ClientConn]uint64),
+		routeGenerations: make(map[string]uint64),
+		dialer:           dialer,
+		poolSize:         normalizeUtlsPoolSize(poolSize),
+		proxyRoute:       proxyutil.Redact(proxyURL),
 		observer: newTransportShadowObserverWithPolicy(
 			settings.h2ErrorWindow,
 			settings.h2ErrorThreshold,
@@ -150,8 +152,9 @@ func (t *utlsRoundTripper) poolForHostLocked(host string) *connPool {
 }
 
 type transportConnectionSnapshot struct {
-	ID         uint64
-	Generation uint64
+	ID              uint64
+	Generation      uint64
+	RouteGeneration uint64
 }
 
 func (t *utlsRoundTripper) registerConnectionLocked(conn h2ClientConn) uint64 {
@@ -174,8 +177,19 @@ func (t *utlsRoundTripper) connectionSnapshot(host string, conn h2ClientConn) tr
 	defer t.mu.Unlock()
 	pool := t.poolForHostLocked(host)
 	return transportConnectionSnapshot{
-		ID:         t.registerConnectionLocked(conn),
-		Generation: pool.generation,
+		ID:              t.registerConnectionLocked(conn),
+		Generation:      pool.generation,
+		RouteGeneration: t.routeGenerations[host],
+	}
+}
+
+func (t *utlsRoundTripper) hostSnapshot(host string) transportConnectionSnapshot {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	pool := t.poolForHostLocked(host)
+	return transportConnectionSnapshot{
+		Generation:      pool.generation,
+		RouteGeneration: t.routeGenerations[host],
 	}
 }
 
@@ -219,6 +233,16 @@ func (t *utlsRoundTripper) retryBudget() int {
 	return defaultRouteRecoveryMaxReplays
 }
 
+func (t *utlsRoundTripper) routeSwitchAdvancedSince(host string, snapshot transportConnectionSnapshot, retryAttempt, retryBudget int) bool {
+	if t == nil || t.routeRecovery == nil || retryAttempt <= 0 || retryAttempt != retryBudget {
+		return false
+	}
+	t.mu.Lock()
+	current := t.routeGenerations[host]
+	t.mu.Unlock()
+	return current > snapshot.RouteGeneration
+}
+
 // activateRouteSwitch advances the host generation after Mihomo confirms a
 // route change. Existing streams drain without a local timeout, while waiters
 // on an old in-progress dial are released to establish the new generation.
@@ -235,6 +259,10 @@ func (t *utlsRoundTripper) activateRouteSwitch(host, node string) uint64 {
 	oldConnections = append(oldConnections, pool.conns...)
 	pool.conns = nil
 	pool.generation++
+	if t.routeGenerations == nil {
+		t.routeGenerations = make(map[string]uint64)
+	}
+	t.routeGenerations[host]++
 	generation := pool.generation
 	if pending := t.pending[host]; pending != nil {
 		delete(t.pending, host)
@@ -506,13 +534,31 @@ func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	// abuse RST) will fail every subsequent stream on the same TCP+TLS
 	// session until evicted. attempt() already evicts on RoundTrip errors;
 	// here we retry once if the error looks stream-level and the body is
-	// resettable.
+	// resettable. If that retry itself confirms a route switch, one final replay
+	// is allowed on the new generation. This is not a generic second retry.
 	if err != nil && isRetryableFreshConnError(err) {
 		if !canResetBody(req) {
 			t.observeRetry(req.Context(), hostname, snapshot, retryAttempt, retryBudget, transportRetrySkippedUnreplayable)
 		} else if resetErr := resetReqBody(req); resetErr != nil {
 			t.observeRetry(req.Context(), hostname, snapshot, retryAttempt, retryBudget, transportRetryBodyResetFailed)
 		} else {
+			retryAttempt++
+			resp, h2Conn, snapshot, err = t.attempt(req, hostname, addr, retryAttempt, retryBudget)
+			outcome := transportRetrySucceeded
+			if err != nil {
+				outcome = transportRetryFailed
+			}
+			t.observeRetry(req.Context(), hostname, snapshot, retryAttempt, retryBudget, outcome)
+		}
+	}
+	if err != nil && isRetryableFreshConnError(err) && t.routeSwitchAdvancedSince(hostname, snapshot, retryAttempt, retryBudget) {
+		extendedRetryBudget := retryBudget + 1
+		if !canResetBody(req) {
+			t.observeRetry(req.Context(), hostname, snapshot, retryAttempt, extendedRetryBudget, transportRetrySkippedUnreplayable)
+		} else if resetErr := resetReqBody(req); resetErr != nil {
+			t.observeRetry(req.Context(), hostname, snapshot, retryAttempt, extendedRetryBudget, transportRetryBodyResetFailed)
+		} else {
+			retryBudget = extendedRetryBudget
 			retryAttempt++
 			resp, h2Conn, snapshot, err = t.attempt(req, hostname, addr, retryAttempt, retryBudget)
 			outcome := transportRetrySucceeded
@@ -534,7 +580,7 @@ func (t *utlsRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 func (t *utlsRoundTripper) attempt(req *http.Request, hostname, addr string, retryAttempt, retryBudget int) (*http.Response, h2ClientConn, transportConnectionSnapshot, error) {
 	h2Conn, err := t.getOrCreateConnection(hostname, addr)
 	if err != nil {
-		snapshot := transportConnectionSnapshot{Generation: t.hostGeneration(hostname)}
+		snapshot := t.hostSnapshot(hostname)
 		t.observeFailure(req.Context(), transportFailureInput{
 			Host:                 hostname,
 			ProxyRoute:           t.proxyRoute,

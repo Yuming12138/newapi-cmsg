@@ -137,6 +137,35 @@ func TestTransportRecoveryRequiresTwoDistinctH2Connections(t *testing.T) {
 	}
 }
 
+func TestTransportRecoverySwitchesForDistinctH2ConnectionsFiftySecondsApart(t *testing.T) {
+	t.Parallel()
+
+	controller := newFakeProxyRouteController("新加坡1", []string{"新加坡1", "美国1"})
+	rt := newRecoveryTestRoundTripper(controller)
+	now := time.Unix(1_800_000_000, 0)
+	rt.observer.now = func() time.Time { return now }
+	input := transportFailureInput{
+		Host:           "chatgpt.com",
+		ProxyRoute:     "http://mihomo:7890",
+		ConnectionID:   21,
+		PoolGeneration: 3,
+		Phase:          transportPhaseRequestHeaders,
+		Err:            http2.StreamError{StreamID: 1, Code: http2.ErrCodeProtocol},
+		HasConnection:  true,
+		RetryAttempt:   0,
+		RetryBudget:    1,
+	}
+
+	rt.observer.observeFailure(context.Background(), input)
+	now = now.Add(50 * time.Second)
+	input.ConnectionID = 22
+	rt.observer.observeFailure(context.Background(), input)
+
+	if got := controller.selectCalls.Load(); got != 1 {
+		t.Fatalf("SelectNode calls = %d, want 1 for failures 50 seconds apart", got)
+	}
+}
+
 func TestRouteSwitchDiscardsStaleDialAndStartsNewGeneration(t *testing.T) {
 	t.Parallel()
 
@@ -335,7 +364,7 @@ func routeRecoveryTestSettings() proxyRouteRecoverySettings {
 		controllerSecretFile:    "/tmp/test-secret",
 		group:                   "OpenAI稳定",
 		hosts:                   map[string]struct{}{"chatgpt.com": {}},
-		h2ErrorWindow:           30 * time.Second,
+		h2ErrorWindow:           2 * time.Minute,
 		h2ErrorThreshold:        2,
 		nodeCooldown:            15 * time.Minute,
 		repeatedFailureCooldown: 30 * time.Minute,
@@ -344,9 +373,9 @@ func routeRecoveryTestSettings() proxyRouteRecoverySettings {
 	}
 }
 
-func newRecoveryTestRoundTripper(controller proxyRouteController) *utlsRoundTripper {
+func newRecoveryTestRoundTripper(controller proxyRouteController, dialed ...*fakeH2Conn) *utlsRoundTripper {
 	settings := routeRecoveryTestSettings()
-	rt := newFakeUtlsRoundTripper(1)
+	rt := newFakeUtlsRoundTripper(1, dialed...)
 	rt.observer = newTransportShadowObserverWithPolicy(settings.h2ErrorWindow, settings.h2ErrorThreshold, settings.routeHold)
 	rt.routeRecovery = newProxyRouteRecoveryCoordinator(settings, controller)
 	rt.routeRecovery.onNodeObserved = rt.setSelectedNode
