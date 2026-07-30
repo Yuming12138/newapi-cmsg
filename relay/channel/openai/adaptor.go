@@ -663,6 +663,8 @@ func shouldDropGPTResponsesInputItemID(itemType string, itemID string) bool {
 		return !strings.HasPrefix(itemID, "ctc")
 	case "function_call", "function_call_output":
 		return strings.HasPrefix(itemID, "fc_")
+	case "reasoning":
+		return !strings.HasPrefix(itemID, "rs_")
 	default:
 		return false
 	}
