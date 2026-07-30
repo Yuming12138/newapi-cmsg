@@ -1,0 +1,11 @@
+sqlite:
+  path: /CLIProxyAPIHome/data/home.db
+
+node:
+  # Docker DNS name reachable only from the campus Compose networks.
+  # Replace this with an overlay-network address before adding a remote CPA.
+  external-ip: cmsg-campus-home
+  port: 8327
+  heartbeat-interval: 5s
+  heartbeat-timeout: 20s
+  event-poll-interval: 3s
