@@ -261,6 +261,45 @@ def combined_dynamic_budget_result(*results: dict) -> dict:
     }
 
 
+class ResetCreditConsumeRoutingTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.config = {
+            **guard.DEFAULT_CONFIG,
+            "cpa_base_url": "http://management.internal:8327",
+        }
+        self.env = {"CPA_MANAGEMENT_KEY": "test-management-key"}
+
+    def test_home_consume_uses_credential_path_and_expected_expiry(self) -> None:
+        with mock.patch.object(guard, "request_json", return_value={"status": "ok"}) as request:
+            guard.consume_reset_credit(
+                self.config,
+                self.env,
+                "",
+                "6885d7c5-c5d8-46d6-a37d-f0c52e49232e",
+                credential_id="credential/with slash",
+                expected_expires_at="2026-08-01T03:03:09Z",
+            )
+
+        url, _headers, _timeout, body = request.call_args.args
+        self.assertTrue(url.endswith("/quota/credentials/credential%2Fwith%20slash/reset-credits/consume"))
+        self.assertEqual("2026-08-01T03:03:09Z", body["expected_expires_at"])
+        self.assertNotIn("auth_index", body)
+
+    def test_legacy_cpa_consume_path_remains_compatible(self) -> None:
+        with mock.patch.object(guard, "request_json", return_value={"status": "ok"}) as request:
+            guard.consume_reset_credit(
+                self.config,
+                self.env,
+                "legacy-auth-index",
+                "6885d7c5-c5d8-46d6-a37d-f0c52e49232e",
+            )
+
+        url, _headers, _timeout, body = request.call_args.args
+        self.assertTrue(url.endswith("/v0/management/consume-codex-reset-credit"))
+        self.assertEqual("legacy-auth-index", body["auth_index"])
+        self.assertNotIn("expected_expires_at", body)
+
+
 class QuotaWindowCompatibilityTest(unittest.TestCase):
     def test_weekly_only_window_is_accepted(self) -> None:
         windows = guard.quota_windows(weekly_only_usage(25.0, "plus"))
@@ -482,6 +521,7 @@ class QuotaHealthEndpointTest(unittest.TestCase):
                 "observed_at": guard.dt.datetime.fromtimestamp(now, guard.dt.timezone.utc).isoformat(),
                 "credits": [
                     {
+                        "key": "credit-home-opaque-key",
                         "status": "available",
                         "granted_at": guard.dt.datetime.fromtimestamp(now - 86_400, guard.dt.timezone.utc).isoformat(),
                         "expires_at": expires_at,
@@ -521,6 +561,8 @@ class QuotaHealthEndpointTest(unittest.TestCase):
         self.assertEqual(45.0, result["accounts"][0]["windows"]["7d"]["remaining_percent"])
         self.assertEqual(2, result["accounts"][0]["reset_credits_available"])
         self.assertEqual(detail["reset_credits"]["credits"][0]["expires_at"], result["accounts"][0]["reset_credits"][0]["expires_at"])
+        self.assertEqual("home-pro-credential", result["accounts"][0]["credential_id"])
+        self.assertEqual("credit-home-opaque-key", result["accounts"][0]["reset_credits"][0]["id_suffix"])
 
         state: dict = {}
         guarded = guard.apply_reset_credit_grace(
@@ -566,6 +608,47 @@ class QuotaHealthEndpointTest(unittest.TestCase):
 
         consume.assert_not_called()
         self.assertTrue(guarded["reset_credit_grace"]["active"])
+
+    def test_home_snapshot_uses_capability_gated_consume_endpoint(self) -> None:
+        now = 1_800_000_000
+        listing, detail = self.home_payload(now, expires_after=5 * 60)
+
+        def request(url: str, *_args, **_kwargs) -> dict:
+            if "/quota/credentials?" in url:
+                return listing
+            if url.endswith("/capabilities"):
+                return {"capabilities": {"quota_reset_credit_consume": True}}
+            return detail
+
+        config = {
+            **guard.DEFAULT_CONFIG,
+            "cpa_base_url": "http://home.internal:8327",
+            "reset_credit_grace_enabled": True,
+            "reset_credit_auto_consume_enabled": True,
+        }
+        with (
+            mock.patch.object(guard, "request_json", side_effect=request),
+            mock.patch.object(guard.time, "time", return_value=now),
+        ):
+            result = guard.call_home_quota_health(config, {"CPA_MANAGEMENT_KEY": "test-management-key"})
+
+        self.assertTrue(result["reset_credit_consume_supported"])
+        with mock.patch.object(guard, "consume_reset_credit", return_value={"status": "ok"}) as consume:
+            guard.apply_reset_credit_grace(
+                config,
+                {"CPA_MANAGEMENT_KEY": "test-management-key"},
+                result,
+                {},
+                now,
+                allow_consume=True,
+            )
+
+        consume.assert_called_once()
+        self.assertEqual("home-pro-credential", consume.call_args.kwargs["credential_id"])
+        self.assertEqual(
+            detail["reset_credits"]["credits"][0]["expires_at"],
+            consume.call_args.kwargs["expected_expires_at"],
+        )
 
     def test_call_quota_health_falls_back_from_cpa_route_to_home(self) -> None:
         expected = {
@@ -900,6 +983,7 @@ class ResetCreditGraceTest(unittest.TestCase):
         self.config.update({
             "dynamic_daily_budget_enabled": True,
             "reset_credit_grace_enabled": True,
+            "reset_credit_auto_consume_enabled": True,
             "reset_credit_release_before_sec": 24 * 60 * 60,
             "reset_credit_auto_consume_before_sec": 10 * 60,
             "reset_credit_auto_consume_remaining_percent": 1.0,
@@ -932,8 +1016,12 @@ class ResetCreditGraceTest(unittest.TestCase):
             "consume_reset_credit",
             side_effect=[TimeoutError("lost response"), {"status": "ok"}],
         ) as consume:
-            first = guard.apply_reset_credit_grace(self.config, self.env, first_result, state, self.now)
-            second = guard.apply_reset_credit_grace(self.config, self.env, second_result, state, self.now + 60)
+            first = guard.apply_reset_credit_grace(
+                self.config, self.env, first_result, state, self.now, allow_consume=True
+            )
+            second = guard.apply_reset_credit_grace(
+                self.config, self.env, second_result, state, self.now + 60, allow_consume=True
+            )
 
         self.assertEqual(1, first["reset_credit_grace"]["consume_error_count"])
         self.assertEqual(1, second["reset_credit_grace"]["consume_success_count"])
@@ -945,10 +1033,65 @@ class ResetCreditGraceTest(unittest.TestCase):
         result = reset_credit_result(self.now, 6 * 60 * 60, remaining_percent=0.5)
 
         with mock.patch.object(guard, "consume_reset_credit", return_value={"status": "ok"}) as consume:
-            guarded = guard.apply_reset_credit_grace(self.config, self.env, result, state, self.now)
+            guarded = guard.apply_reset_credit_grace(
+                self.config, self.env, result, state, self.now, allow_consume=True
+            )
 
         consume.assert_called_once()
         self.assertEqual("quota_near_exhaustion", guarded["reset_credit_grace"]["accounts"][0]["auto_reset_reason"])
+
+    def test_consume_capability_defaults_to_off(self) -> None:
+        state: dict = {}
+        result = reset_credit_result(self.now, 5 * 60)
+
+        with mock.patch.object(guard, "consume_reset_credit") as consume:
+            guarded = guard.apply_reset_credit_grace(self.config, self.env, result, state, self.now)
+
+        consume.assert_not_called()
+        self.assertEqual("unsupported", guarded["reset_credit_grace"]["auto_consume_blocked_reason"])
+        self.assertTrue(guarded["reset_credit_grace"]["limits_released"])
+
+    def test_auto_consume_switch_defaults_to_off(self) -> None:
+        state: dict = {}
+        config = dict(self.config)
+        config["reset_credit_auto_consume_enabled"] = False
+        result = reset_credit_result(self.now, 5 * 60)
+
+        with mock.patch.object(guard, "consume_reset_credit") as consume:
+            guarded = guard.apply_reset_credit_grace(config, self.env, result, state, self.now)
+
+        consume.assert_not_called()
+        self.assertEqual("disabled", guarded["reset_credit_grace"]["auto_consume_blocked_reason"])
+        self.assertTrue(guarded["reset_credit_grace"]["limits_released"])
+
+    def test_official_or_manual_refill_prevents_later_auto_consume(self) -> None:
+        state: dict = {}
+        guard.apply_reset_credit_grace(
+            self.config,
+            self.env,
+            reset_credit_result(self.now, 12 * 60 * 60, remaining_percent=40.0, reset_at=1_800_604_800),
+            state,
+            self.now,
+        )
+        refilled = reset_credit_result(
+            self.now,
+            12 * 60 * 60,
+            remaining_percent=100.0,
+            reset_at=1_801_209_600,
+        )
+
+        with mock.patch.object(guard, "consume_reset_credit") as consume:
+            guarded = guard.apply_reset_credit_grace(
+                self.config,
+                self.env,
+                refilled,
+                state,
+                self.now + 60,
+            )
+
+        consume.assert_not_called()
+        self.assertEqual(1, guarded["reset_credit_grace"]["manual_reset_count"])
+        self.assertFalse(guarded["reset_credit_grace"]["active"])
 
     def test_manual_reset_restores_budget_and_rebuilds_baseline(self) -> None:
         state: dict = {}
