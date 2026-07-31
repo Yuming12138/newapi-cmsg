@@ -66,6 +66,7 @@ DEFAULT_CONFIG = {
     "auto_reconcile_confirmation_count": 2,
     "auto_reconcile_reset_tolerance_sec": 60,
     "reset_credit_grace_enabled": False,
+    "reset_credit_auto_consume_enabled": False,
     "reset_credit_release_before_sec": 24 * 60 * 60,
     "reset_credit_auto_consume_before_sec": 10 * 60,
     "reset_credit_auto_consume_remaining_percent": 1.0,
@@ -85,6 +86,7 @@ OPTION_CONFIG_MAP = {
     "cliproxy_cpa_quota_guard.dynamic_daily_budget_enabled": ("dynamic_daily_budget_enabled", "bool"),
     "cliproxy_cpa_quota_guard.quota_reset_increase_threshold_percent": ("quota_reset_increase_threshold_percent", "float"),
     "cliproxy_cpa_quota_guard.reset_credit_grace_enabled": ("reset_credit_grace_enabled", "bool"),
+    "cliproxy_cpa_quota_guard.reset_credit_auto_consume_enabled": ("reset_credit_auto_consume_enabled", "bool"),
     "cliproxy_cpa_quota_guard.reset_credit_release_before_sec": ("reset_credit_release_before_sec", "float"),
     "cliproxy_cpa_quota_guard.reset_credit_auto_consume_before_sec": ("reset_credit_auto_consume_before_sec", "float"),
     "cliproxy_cpa_quota_guard.reset_credit_auto_consume_remaining_percent": ("reset_credit_auto_consume_remaining_percent", "float"),
@@ -619,6 +621,7 @@ def call_cpa_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[s
         detail = str(payload.get("error") or payload.get("reason") or "unknown")[:180]
         raise RuntimeError("cpa_quota_health_probe_failed: " + detail)
     payload["quota_health_source"] = "cpa_management"
+    payload["reset_credit_consume_supported"] = True
     return payload
 
 
@@ -743,6 +746,7 @@ def home_snapshot_reset_credits(detail: dict[str, Any]) -> tuple[int | None, lis
         if timestamp_value(expires_at) is None:
             continue
         credits.append({
+            "id_suffix": str(item.get("key") or "").strip(),
             "status": str(item.get("status") or "available").strip().lower(),
             "reset_type": "codex_rate_limits",
             "expires_at": expires_at,
@@ -788,6 +792,7 @@ def home_snapshot_account(
         "unavailable": credential_status in {"cooldown", "unavailable"},
     }
     account = evaluate_account_quota(config, auth_entry, usage)
+    account["credential_id"] = credential_id
     account["home_freshness"] = freshness
     account["home_collection_status"] = collection_status
     account["quota_health_source"] = "home_quota_snapshot"
@@ -886,7 +891,15 @@ def call_home_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[
 
     result = evaluate_quota(config, accounts)
     result["quota_health_source"] = "home_quota_snapshots"
-    result["reset_credit_consume_supported"] = False
+    consume_supported = False
+    try:
+        capability_payload = request_json(base_url + "/v0/management/capabilities", headers, timeout)
+        capabilities = capability_payload.get("capabilities")
+        if isinstance(capabilities, dict):
+            consume_supported = bool_value(capabilities.get("quota_reset_credit_consume"), False)
+    except Exception:
+        consume_supported = False
+    result["reset_credit_consume_supported"] = consume_supported
     return result
 
 
@@ -1715,9 +1728,12 @@ def consume_reset_credit(
     env: dict[str, str],
     auth_index: str,
     redeem_request_id: str,
+    credential_id: str = "",
+    expected_expires_at: str = "",
 ) -> dict[str, Any]:
     auth_index = str(auth_index or "").strip()
-    if not auth_index:
+    credential_id = str(credential_id or "").strip()
+    if not auth_index and not credential_id:
         raise RuntimeError("missing_auth_index")
     base_url = str(config.get("cpa_base_url") or "").rstrip("/")
     if not base_url:
@@ -1725,14 +1741,31 @@ def consume_reset_credit(
     headers = management_headers(env, base_url)
     if not headers.get("Authorization") and not headers.get("X-Management-Key"):
         raise RuntimeError("missing_cpa_management_credentials")
-    payload = request_json(
-        base_url + "/v0/management/consume-codex-reset-credit",
-        headers,
-        int(config.get("timeout_sec") or 30),
-        {
+    if credential_id:
+        expected_expires_at = str(expected_expires_at or "").strip()
+        if not expected_expires_at:
+            raise RuntimeError("missing_expected_expires_at")
+        endpoint = (
+            base_url
+            + "/v0/management/quota/credentials/"
+            + urllib.parse.quote(credential_id, safe="")
+            + "/reset-credits/consume"
+        )
+        request_body = {
+            "redeem_request_id": redeem_request_id,
+            "expected_expires_at": expected_expires_at,
+        }
+    else:
+        endpoint = base_url + "/v0/management/consume-codex-reset-credit"
+        request_body = {
             "auth_index": auth_index,
             "redeem_request_id": redeem_request_id,
-        },
+        }
+    payload = request_json(
+        endpoint,
+        headers,
+        int(config.get("timeout_sec") or 30),
+        request_body,
     )
     if str(payload.get("status") or "").lower() != "ok":
         raise RuntimeError("reset_credit_consume_invalid_response")
@@ -1745,14 +1778,17 @@ def apply_reset_credit_grace(
     result: dict[str, Any],
     state: dict[str, Any],
     now: int | None = None,
-    allow_consume: bool = True,
+    allow_consume: bool = False,
 ) -> dict[str, Any]:
     now_ts = int(time.time()) if now is None else int(now)
     enabled = bool_value(config.get("reset_credit_grace_enabled"), False) and not str(
         config.get("quota_feature") or ""
     ).strip()
+    auto_consume_enabled = bool_value(config.get("reset_credit_auto_consume_enabled"), False)
     summary: dict[str, Any] = {
         "enabled": enabled,
+        "auto_consume_enabled": auto_consume_enabled,
+        "consume_supported": bool(allow_consume),
         "active": False,
         "active_account_count": 0,
         "confirmed_reset_count": 0,
@@ -1802,22 +1838,13 @@ def apply_reset_credit_grace(
         previous_credit_key = str(account_state.get("credit_key") or "")
         same_credit = current_credit is not None and current_credit.get("credit_key") == previous_credit_key
         expires_ts = int(number(account_state.get("expires_ts")) or 0)
-        if same_credit and (
-            now_ts < expires_ts
-            or (
-                account_state.get("auto_reset_succeeded_at")
-                and now_ts <= expires_ts + confirmation_timeout
-            )
-        ):
-            continue
-
         current_snapshot = reset_credit_quota_snapshot(account)
         previous_snapshot = account_state.get("quota_snapshot")
         if not isinstance(previous_snapshot, dict):
             previous_snapshot = {}
         quota_refilled = reset_credit_quota_refilled(config, previous_snapshot, current_snapshot)
         before_expiry = expires_ts > 0 and now_ts < expires_ts
-        auto_attempted = int(account_state.get("auto_reset_attempt_count") or 0) > 0
+        auto_succeeded = bool(account_state.get("auto_reset_succeeded_at"))
         previous_available = number(account_state.get("baseline_available_count"))
         current_available = number(account.get("reset_credits_available"))
         credit_count_decreased = (
@@ -1829,6 +1856,11 @@ def apply_reset_credit_grace(
             quota_refilled
             or (before_expiry and not same_credit and credit_count_decreased)
         )
+        if same_credit and not reset_confirmed and (
+            now_ts < expires_ts
+            or (auto_succeeded and now_ts <= expires_ts + confirmation_timeout)
+        ):
+            continue
         if not reset_confirmed and before_expiry:
             credit_overrides[account_key] = {
                 "credit_key": previous_credit_key,
@@ -1845,7 +1877,7 @@ def apply_reset_credit_grace(
             "completed_at": now_ts,
         }
         if reset_confirmed:
-            reset_kind = "auto" if auto_attempted else "manual"
+            reset_kind = "auto" if auto_succeeded else "manual"
             account_state["status"] = "completed"
             account_state["reset_kind"] = reset_kind
             account_state["completed_at"] = now_ts
@@ -1903,7 +1935,8 @@ def apply_reset_credit_grace(
 
         last_attempt_at = int(account_state.get("auto_reset_last_attempt_at") or 0)
         can_attempt = (
-            allow_consume
+            auto_consume_enabled
+            and allow_consume
             and due_reason != ""
             and not account_state.get("auto_reset_succeeded_at")
             and now_ts - last_attempt_at >= retry_interval
@@ -1918,6 +1951,8 @@ def apply_reset_credit_grace(
                     env,
                     str(account.get("auth_index") or "").strip(),
                     str(account_state["redeem_request_id"]),
+                    credential_id=str(account.get("credential_id") or "").strip(),
+                    expected_expires_at=str(credit.get("expires_at") or "").strip(),
                 )
             except (urllib.error.URLError, urllib.error.HTTPError, socket.timeout, TimeoutError, RuntimeError) as exc:
                 account_state["status"] = "consume_error"
@@ -1939,6 +1974,7 @@ def apply_reset_credit_grace(
         account["reset_credit_grace_state"] = account_state.get("status")
         active_accounts.append({
             "account_key": account_key,
+            "credential_id": str(account.get("credential_id") or "").strip() or None,
             "plan_type": account.get("plan_type"),
             "expires_at": credit["expires_at"],
             "auto_consume_at": account["reset_credit_auto_consume_at"],
@@ -1957,6 +1993,10 @@ def apply_reset_credit_grace(
         summary["earliest_expires_at"] = min(item["expires_at"] for item in active_accounts)
         summary["next_auto_reset_at"] = min(item["auto_consume_at"] for item in active_accounts)
         summary["limits_released"] = True
+        if not auto_consume_enabled:
+            summary["auto_consume_blocked_reason"] = "disabled"
+        elif not allow_consume:
+            summary["auto_consume_blocked_reason"] = "unsupported"
     else:
         summary["limits_released"] = False
     result["reset_credit_grace"] = summary
@@ -2396,7 +2436,7 @@ def main() -> int:
             env,
             result,
             state,
-            allow_consume=bool_value(result.get("reset_credit_consume_supported"), True),
+            allow_consume=bool_value(result.get("reset_credit_consume_supported"), False),
         )
         result = apply_dynamic_daily_budget(config, result, state)
         state["failure_count"] = 0
