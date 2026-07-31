@@ -436,6 +436,156 @@ class QuotaHealthEndpointTest(unittest.TestCase):
                     {"CPA_MANAGEMENT_KEY": "test-management-key"},
                 )
 
+    @staticmethod
+    def home_payload(now: int, expires_after: int = 12 * 60 * 60) -> tuple[dict, dict]:
+        reset_at = guard.dt.datetime.fromtimestamp(
+            now + 5 * 86_400,
+            guard.dt.timezone.utc,
+        ).isoformat().replace("+00:00", "Z")
+        expires_at = guard.dt.datetime.fromtimestamp(
+            now + expires_after,
+            guard.dt.timezone.utc,
+        ).isoformat().replace("+00:00", "Z")
+        item = {
+            "credential_id": "home-pro-credential",
+            "credential_status": "enabled",
+            "quota_status": "healthy",
+            "freshness": "fresh",
+            "collection_status": "partial",
+            "label": "test-pro-account",
+            "plan": {"name": "Pro 20x", "premium": True},
+            "primary_windows": [
+                {
+                    "id": "codex-bengalfox-1-week",
+                    "scope": "model",
+                    "scope_id": "codex_bengalfox",
+                    "remaining_ratio": 1.0,
+                    "used_ratio": 0.0,
+                    "window_seconds": guard.WINDOW_7D_SECONDS,
+                    "reset_at": reset_at,
+                },
+                {
+                    "id": "codex-1-week",
+                    "scope": "account",
+                    "remaining_ratio": 0.45,
+                    "used_ratio": 0.55,
+                    "window_seconds": guard.WINDOW_7D_SECONDS,
+                    "reset_at": reset_at,
+                },
+            ],
+        }
+        detail = {
+            "credential": item,
+            "windows": item["primary_windows"],
+            "reset_credits": {
+                "available_count": 2,
+                "observed_at": guard.dt.datetime.fromtimestamp(now, guard.dt.timezone.utc).isoformat(),
+                "credits": [
+                    {
+                        "status": "available",
+                        "granted_at": guard.dt.datetime.fromtimestamp(now - 86_400, guard.dt.timezone.utc).isoformat(),
+                        "expires_at": expires_at,
+                    }
+                ],
+            },
+        }
+        return {"items": [item], "total": 1}, detail
+
+    def test_home_snapshot_converts_account_quota_and_reset_credit(self) -> None:
+        now = 1_800_000_000
+        listing, detail = self.home_payload(now)
+
+        def request(url: str, *_args, **_kwargs) -> dict:
+            if "/quota/credentials?" in url:
+                return listing
+            if "/quota/credentials/home-pro-credential" in url:
+                return detail
+            raise AssertionError(url)
+
+        config = {
+            **guard.DEFAULT_CONFIG,
+            "cpa_base_url": "http://home.internal:8327",
+            "dynamic_daily_budget_enabled": True,
+            "reset_credit_grace_enabled": True,
+        }
+        with (
+            mock.patch.object(guard, "request_json", side_effect=request),
+            mock.patch.object(guard.time, "time", return_value=now),
+        ):
+            result = guard.call_home_quota_health(config, {"CPA_MANAGEMENT_KEY": "test-management-key"})
+
+        self.assertEqual("home_quota_snapshots", result["quota_health_source"])
+        self.assertFalse(result["reset_credit_consume_supported"])
+        self.assertEqual(45.0, result["usable_balance_units"])
+        self.assertEqual("protected", result["accounts"][0]["bucket"])
+        self.assertEqual(45.0, result["accounts"][0]["windows"]["7d"]["remaining_percent"])
+        self.assertEqual(2, result["accounts"][0]["reset_credits_available"])
+        self.assertEqual(detail["reset_credits"]["credits"][0]["expires_at"], result["accounts"][0]["reset_credits"][0]["expires_at"])
+
+        state: dict = {}
+        guarded = guard.apply_reset_credit_grace(
+            config,
+            {},
+            result,
+            state,
+            now,
+            allow_consume=result["reset_credit_consume_supported"],
+        )
+        guarded = guard.apply_dynamic_daily_budget(config, guarded, state, now)
+        self.assertTrue(guarded["reset_credit_grace"]["active"])
+        self.assertTrue(guarded["reset_credit_grace"]["limits_released"])
+        self.assertTrue(guarded["dynamic_daily_budget"]["bypassed"])
+        self.assertEqual(45.0, guarded["usable_balance_units"])
+
+    def test_home_snapshot_does_not_call_unsupported_credit_consume(self) -> None:
+        now = 1_800_000_000
+        listing, detail = self.home_payload(now, expires_after=5 * 60)
+
+        def request(url: str, *_args, **_kwargs) -> dict:
+            return listing if "/quota/credentials?" in url else detail
+
+        config = {
+            **guard.DEFAULT_CONFIG,
+            "cpa_base_url": "http://home.internal:8327",
+            "reset_credit_grace_enabled": True,
+        }
+        with (
+            mock.patch.object(guard, "request_json", side_effect=request),
+            mock.patch.object(guard.time, "time", return_value=now),
+        ):
+            result = guard.call_home_quota_health(config, {"CPA_MANAGEMENT_KEY": "test-management-key"})
+        with mock.patch.object(guard, "consume_reset_credit") as consume:
+            guarded = guard.apply_reset_credit_grace(
+                config,
+                {},
+                result,
+                {},
+                now,
+                allow_consume=result["reset_credit_consume_supported"],
+            )
+
+        consume.assert_not_called()
+        self.assertTrue(guarded["reset_credit_grace"]["active"])
+
+    def test_call_quota_health_falls_back_from_cpa_route_to_home(self) -> None:
+        expected = {
+            "ok": True,
+            "quota_health_source": "home_quota_snapshots",
+            "accounts": [],
+            "reset_credit_consume_supported": False,
+        }
+        with (
+            mock.patch.object(guard, "call_cpa_quota_health", side_effect=RuntimeError("http_404")),
+            mock.patch.object(guard, "call_home_quota_health", return_value=expected) as home,
+            mock.patch.object(guard, "call_wham_usages") as legacy,
+        ):
+            result = guard.call_quota_health(guard.DEFAULT_CONFIG, {})
+
+        home.assert_called_once()
+        legacy.assert_not_called()
+        self.assertEqual("home_quota_snapshots", result["quota_health_source"])
+        self.assertIn("cpa=http_404", result["cpa_quota_health_endpoint_error"])
+
 
 class DynamicDailyBudgetTest(unittest.TestCase):
     def setUp(self) -> None:

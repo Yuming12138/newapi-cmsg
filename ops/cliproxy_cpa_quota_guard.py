@@ -60,6 +60,8 @@ DEFAULT_CONFIG = {
     "default_account_bucket": "protected",
     "account_bucket_overrides": {},
     "prefer_cpa_quota_health_endpoint": True,
+    "prefer_home_quota_snapshot_endpoint": True,
+    "home_quota_snapshot_limit": 200,
     "auto_reconcile_runtime_quota": True,
     "auto_reconcile_confirmation_count": 2,
     "auto_reconcile_reset_tolerance_sec": 60,
@@ -620,6 +622,274 @@ def call_cpa_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[s
     return payload
 
 
+def timestamp_value(value: Any) -> int | None:
+    parsed_number = number(value)
+    if parsed_number is not None and parsed_number > 0:
+        return int(parsed_number)
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return int(parsed.timestamp())
+
+
+def home_ratio_percent(value: Any) -> float | None:
+    parsed = number(value)
+    if parsed is None:
+        return None
+    if -0.000001 <= parsed <= 1.000001:
+        parsed *= 100.0
+    return max(0.0, min(100.0, parsed))
+
+
+def home_snapshot_plan_type(snapshot: dict[str, Any]) -> str:
+    plan = snapshot.get("plan")
+    if isinstance(plan, dict):
+        name = str(plan.get("name") or "").strip()
+        if name:
+            return name
+    return plan_type_from_entry(snapshot)
+
+
+def home_snapshot_windows(snapshot: dict[str, Any], detail: dict[str, Any], now: int) -> dict[str, dict[str, Any]]:
+    raw_windows = snapshot.get("primary_windows")
+    if not isinstance(raw_windows, list) or not raw_windows:
+        raw_windows = detail.get("windows")
+    if not isinstance(raw_windows, list):
+        raise RuntimeError("home_quota_snapshot_missing_windows")
+
+    windows: dict[str, dict[str, Any]] = {}
+    for raw in raw_windows:
+        if not isinstance(raw, dict):
+            continue
+        scope = str(raw.get("scope") or "account").strip().lower()
+        if scope != "account":
+            continue
+        duration = int(number(raw.get("window_seconds")) or 0)
+        period_unit = str(raw.get("period_unit") or "").strip().lower()
+        period_value = number(raw.get("period_value"))
+        name = ""
+        if duration == WINDOW_5H_SECONDS or (duration <= 0 and period_unit == "hour" and period_value == 5):
+            name = "5h"
+            duration = WINDOW_5H_SECONDS
+        elif duration == WINDOW_7D_SECONDS or (duration <= 0 and period_unit == "week" and period_value == 1):
+            name = "7d"
+            duration = WINDOW_7D_SECONDS
+        if not name or name in windows:
+            continue
+
+        used_percent = home_ratio_percent(raw.get("used_ratio"))
+        remaining_percent = home_ratio_percent(raw.get("remaining_ratio"))
+        if used_percent is None and remaining_percent is not None:
+            used_percent = max(0.0, 100.0 - remaining_percent)
+        if remaining_percent is None and used_percent is not None:
+            remaining_percent = max(0.0, 100.0 - used_percent)
+        if used_percent is None or remaining_percent is None:
+            continue
+
+        reset_at = timestamp_value(raw.get("reset_at"))
+        windows[name] = {
+            "duration_seconds": duration,
+            "used_percent": round(used_percent, 6),
+            "remaining_percent": round(remaining_percent, 6),
+            "reset_at": reset_at,
+            "reset_after_seconds": max(0, reset_at - now) if reset_at else None,
+        }
+
+    if "7d" not in windows:
+        raise RuntimeError("home_quota_snapshot_missing_required_7d_window")
+    return windows
+
+
+def home_snapshot_usage(windows: dict[str, dict[str, Any]], plan_type: str, identity_hash: str) -> dict[str, Any]:
+    rate_limit: dict[str, Any] = {}
+    ordered = [windows[name] for name in ("5h", "7d") if name in windows]
+    for field, window in zip(("primary_window", "secondary_window"), ordered):
+        rate_limit[field] = {
+            "limit_window_seconds": window.get("duration_seconds"),
+            "used_percent": window.get("used_percent"),
+            "reset_at": window.get("reset_at"),
+            "reset_after_seconds": window.get("reset_after_seconds"),
+        }
+    return {
+        "plan_type": plan_type,
+        "rate_limit": rate_limit,
+        "_guard_auth": {
+            "auth_index": "",
+            "account_id_hash": identity_hash,
+            "plan_type_hint": plan_type,
+        },
+    }
+
+
+def home_snapshot_reset_credits(detail: dict[str, Any]) -> tuple[int | None, list[dict[str, Any]], str | None]:
+    raw = detail.get("reset_credits")
+    if not isinstance(raw, dict):
+        return None, [], None
+    available_value = number(raw.get("available_count"))
+    available = max(0, int(available_value)) if available_value is not None else None
+    credits: list[dict[str, Any]] = []
+    for item in raw.get("credits") or []:
+        if not isinstance(item, dict):
+            continue
+        expires_at = str(item.get("expires_at") or "").strip()
+        if timestamp_value(expires_at) is None:
+            continue
+        credits.append({
+            "status": str(item.get("status") or "available").strip().lower(),
+            "reset_type": "codex_rate_limits",
+            "expires_at": expires_at,
+        })
+    credits.sort(key=lambda item: timestamp_value(item.get("expires_at")) or 0)
+    error = None
+    if available is not None and available > 0 and not credits:
+        error = "home_reset_credit_details_unavailable"
+    return available, credits, error
+
+
+def home_snapshot_account(
+    config: dict[str, Any],
+    item: dict[str, Any],
+    detail: dict[str, Any],
+    now: int,
+) -> dict[str, Any]:
+    credential = detail.get("credential")
+    snapshot = dict(item)
+    if isinstance(credential, dict):
+        snapshot.update(credential)
+    credential_id = str(snapshot.get("credential_id") or "").strip()
+    if not credential_id:
+        raise RuntimeError("home_quota_snapshot_missing_credential_id")
+    freshness = str(snapshot.get("freshness") or "never").strip().lower()
+    collection_status = str(snapshot.get("collection_status") or "idle").strip().lower()
+    if freshness != "fresh" or collection_status == "failed":
+        raise RuntimeError("home_quota_snapshot_not_fresh")
+
+    plan_type = home_snapshot_plan_type(snapshot)
+    identity_hash = hashlib.sha256(("home:" + credential_id).encode("utf-8")).hexdigest()[:12]
+    windows = home_snapshot_windows(snapshot, detail, now)
+    usage = home_snapshot_usage(windows, plan_type, identity_hash)
+    available, credits, reset_credit_error = home_snapshot_reset_credits(detail)
+    if available is not None:
+        usage["rate_limit_reset_credits"] = {"available_count": available}
+
+    credential_status = str(snapshot.get("credential_status") or "unknown").strip().lower()
+    auth_entry = {
+        "label": first_non_empty(snapshot.get("label"), snapshot.get("account")),
+        "plan_type": plan_type,
+        "disabled": credential_status == "disabled",
+        "unavailable": credential_status in {"cooldown", "unavailable"},
+    }
+    account = evaluate_account_quota(config, auth_entry, usage)
+    account["home_freshness"] = freshness
+    account["home_collection_status"] = collection_status
+    account["quota_health_source"] = "home_quota_snapshot"
+    if credits:
+        account["reset_credits"] = credits
+        account["reset_credits_earliest_expires_at"] = credits[0]["expires_at"]
+    if reset_credit_error:
+        account["reset_credits_error"] = reset_credit_error
+    return account
+
+
+def call_home_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
+    timeout = int(config.get("timeout_sec") or 30)
+    base_url = str(config.get("cpa_base_url") or "").rstrip("/")
+    if not base_url:
+        raise RuntimeError("empty_cpa_base_url")
+    headers = management_headers(env, base_url)
+    if not headers.get("Authorization") and not headers.get("X-Management-Key"):
+        raise RuntimeError("missing_cpa_management_credentials")
+
+    limit = max(1, min(200, int(number(config.get("home_quota_snapshot_limit")) or 200)))
+    params = urllib.parse.urlencode({"provider": "codex", "limit": limit, "sort": "reset_at_asc"})
+    payload = request_json(base_url + "/v0/management/quota/credentials?" + params, headers, timeout)
+    items = payload.get("items")
+    if not isinstance(items, list):
+        raise RuntimeError("home_quota_snapshot_invalid_list")
+    total = int(number(payload.get("total")) or len(items))
+    if total > len(items):
+        raise RuntimeError("home_quota_snapshot_limit_exceeded")
+    if not items:
+        raise RuntimeError("home_quota_snapshot_codex_not_found")
+
+    now = int(time.time())
+    accounts: list[dict[str, Any]] = []
+    successful = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        credential_id = str(item.get("credential_id") or "").strip()
+        plan_type = home_snapshot_plan_type(item)
+        identity_hash = hashlib.sha256(("home:" + credential_id).encode("utf-8")).hexdigest()[:12] if credential_id else ""
+        credential_status = str(item.get("credential_status") or "unknown").strip().lower()
+        base_account = {
+            "auth_index": "",
+            "account_id_hash": identity_hash,
+            "account_label": account_label_from_entry(item),
+            "plan_type": plan_type,
+            "bucket": classify_account_bucket(config, {"plan_type": plan_type}, None, identity_hash, ""),
+            "disabled": credential_status == "disabled",
+            "unavailable": credential_status in {"cooldown", "unavailable"},
+            "reset_credits_available": None,
+        }
+        if credential_status == "disabled":
+            accounts.append({
+                **base_account,
+                "ok": False,
+                "schedulable": False,
+                "skipped": True,
+                "reason": "auth_disabled",
+            })
+            continue
+        if not credential_id:
+            accounts.append({
+                **base_account,
+                "ok": False,
+                "schedulable": False,
+                "skipped": False,
+                "reason": "quota_probe_failed",
+                "error": "home_quota_snapshot_missing_credential_id",
+            })
+            continue
+        try:
+            detail = request_json(
+                base_url + "/v0/management/quota/credentials/" + urllib.parse.quote(credential_id, safe=""),
+                headers,
+                timeout,
+            )
+            account = home_snapshot_account(config, item, detail, now)
+        except Exception as exc:
+            reason = "quota_snapshot_stale" if str(item.get("freshness") or "").lower() != "fresh" else "quota_probe_failed"
+            accounts.append({
+                **base_account,
+                "ok": False,
+                "schedulable": False,
+                "skipped": False,
+                "reason": reason,
+                "error": str(exc)[:180],
+            })
+            continue
+        accounts.append(account)
+        successful += 1
+
+    if successful == 0 and not all(item.get("skipped") and not item.get("error") for item in accounts):
+        errors = [str(item.get("error") or item.get("reason") or "unknown") for item in accounts]
+        raise RuntimeError("home_quota_snapshot_all_accounts_failed: " + "; ".join(errors[:3]))
+
+    result = evaluate_quota(config, accounts)
+    result["quota_health_source"] = "home_quota_snapshots"
+    result["reset_credit_consume_supported"] = False
+    return result
+
+
 def call_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
     quota_feature = str(config.get("quota_feature") or "").strip()
     if quota_feature:
@@ -637,19 +907,27 @@ def call_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[str, 
         })
         return result
 
+    endpoint_errors: list[str] = []
     if bool_value(config.get("prefer_cpa_quota_health_endpoint"), True):
         try:
             return call_cpa_quota_health(config, env)
         except Exception as exc:
-            fallback_note = str(exc)[:180]
-    else:
-        fallback_note = ""
+            endpoint_errors.append("cpa=" + str(exc)[:180])
+
+    if bool_value(config.get("prefer_home_quota_snapshot_endpoint"), True):
+        try:
+            result = call_home_quota_health(config, env)
+            if endpoint_errors:
+                result["cpa_quota_health_endpoint_error"] = endpoint_errors[0]
+            return result
+        except Exception as exc:
+            endpoint_errors.append("home=" + str(exc)[:180])
 
     accounts = call_wham_usages(config, env)
     result = evaluate_quota(config, accounts)
     result["quota_health_source"] = "python_guard_fallback"
-    if fallback_note:
-        result["quota_health_endpoint_error"] = fallback_note
+    if endpoint_errors:
+        result["quota_health_endpoint_error"] = "; ".join(endpoint_errors)[:360]
     return result
 
 
@@ -1340,18 +1618,7 @@ def protected_dynamic_daily_limit(account_plans: list[dict[str, Any]], reserve_p
 
 
 def reset_credit_timestamp(value: Any) -> int | None:
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-    if raw.endswith("Z"):
-        raw = raw[:-1] + "+00:00"
-    try:
-        parsed = dt.datetime.fromisoformat(raw)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
-    return int(parsed.timestamp())
+    return timestamp_value(value)
 
 
 def reset_credit_account_key(account: dict[str, Any]) -> str:
@@ -2124,7 +2391,13 @@ def main() -> int:
             result = call_quota_health(config, env)
         if any(reconcile_summary.values()):
             result["auto_reconcile"] = reconcile_summary
-        result = apply_reset_credit_grace(config, env, result, state)
+        result = apply_reset_credit_grace(
+            config,
+            env,
+            result,
+            state,
+            allow_consume=bool_value(result.get("reset_credit_consume_supported"), True),
+        )
         result = apply_dynamic_daily_budget(config, result, state)
         state["failure_count"] = 0
         state["last_success_at"] = int(time.time())
