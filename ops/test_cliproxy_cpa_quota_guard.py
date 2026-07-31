@@ -329,6 +329,20 @@ class QuotaWindowCompatibilityTest(unittest.TestCase):
         self.assertEqual(78.0, pro["usable_balance_units"])
         self.assertFalse(pro["protected_reserve_warning"])
 
+    def test_personal_accounts_and_shared_pro_are_grouped_separately(self) -> None:
+        config = dict(guard.DEFAULT_CONFIG)
+        accounts = [
+            guard.evaluate_account_quota(config, {}, weekly_only_usage(22.0, plan_type))
+            for plan_type in ("plus", "free", "free", "free", "pro")
+        ]
+
+        result = guard.evaluate_quota(config, accounts)
+
+        self.assertEqual(4, result["buckets"]["personal"]["account_count"])
+        self.assertEqual(1, result["buckets"]["protected"]["account_count"])
+        self.assertTrue(all(account["can_exhaust"] for account in accounts[:4]))
+        self.assertFalse(accounts[4]["can_exhaust"])
+
     def test_protected_reserve_is_warning_only(self) -> None:
         config = dict(guard.DEFAULT_CONFIG)
         pro = guard.evaluate_account_quota(config, {}, weekly_only_usage(85.0, "pro"))
@@ -561,6 +575,10 @@ class QuotaHealthEndpointTest(unittest.TestCase):
         self.assertEqual(45.0, result["accounts"][0]["windows"]["7d"]["remaining_percent"])
         self.assertEqual(2, result["accounts"][0]["reset_credits_available"])
         self.assertEqual(detail["reset_credits"]["credits"][0]["expires_at"], result["accounts"][0]["reset_credits"][0]["expires_at"])
+        self.assertEqual(
+            detail["reset_credits"]["credits"][0]["expires_at"],
+            result["buckets"]["protected"]["accounts"][0]["reset_credits_earliest_expires_at"],
+        )
         self.assertEqual("home-pro-credential", result["accounts"][0]["credential_id"])
         self.assertEqual("credit-home-opaque-key", result["accounts"][0]["reset_credits"][0]["id_suffix"])
 
@@ -578,6 +596,39 @@ class QuotaHealthEndpointTest(unittest.TestCase):
         self.assertTrue(guarded["reset_credit_grace"]["limits_released"])
         self.assertTrue(guarded["dynamic_daily_budget"]["bypassed"])
         self.assertEqual(45.0, guarded["usable_balance_units"])
+
+    def test_fresh_home_snapshot_survives_latest_probe_failure(self) -> None:
+        now = 1_800_000_000
+        listing, detail = self.home_payload(now)
+        listing["items"][0]["collection_status"] = "failed"
+        detail["credential"]["collection_status"] = "failed"
+
+        def request(url: str, *_args, **_kwargs) -> dict:
+            if "/quota/credentials?" in url:
+                return listing
+            if "/quota/credentials/home-pro-credential" in url:
+                return detail
+            if url.endswith("/capabilities"):
+                return {"capabilities": {}}
+            raise AssertionError(url)
+
+        config = {
+            **guard.DEFAULT_CONFIG,
+            "cpa_base_url": "http://home.internal:8327",
+        }
+        with (
+            mock.patch.object(guard, "request_json", side_effect=request),
+            mock.patch.object(guard.time, "time", return_value=now),
+        ):
+            result = guard.call_home_quota_health(config, {"CPA_MANAGEMENT_KEY": "test-management-key"})
+
+        account = result["accounts"][0]
+        self.assertEqual("failed", account["home_collection_status"])
+        self.assertEqual(2, account["reset_credits_available"])
+        self.assertEqual(
+            detail["reset_credits"]["credits"][0]["expires_at"],
+            account["reset_credits_earliest_expires_at"],
+        )
 
     def test_home_snapshot_does_not_call_unsupported_credit_consume(self) -> None:
         now = 1_800_000_000

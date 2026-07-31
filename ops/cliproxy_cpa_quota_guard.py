@@ -55,7 +55,7 @@ DEFAULT_CONFIG = {
     "quota_reset_near_full_percent": 90.0,
     "quota_reset_near_full_min_increase_percent": 5.0,
     "quota_reset_confirmation_count": 2,
-    "personal_plan_keywords": ["plus"],
+    "personal_plan_keywords": ["plus", "free", "team"],
     "protected_plan_keywords": ["pro"],
     "default_account_bucket": "protected",
     "account_bucket_overrides": {},
@@ -773,7 +773,7 @@ def home_snapshot_account(
         raise RuntimeError("home_quota_snapshot_missing_credential_id")
     freshness = str(snapshot.get("freshness") or "never").strip().lower()
     collection_status = str(snapshot.get("collection_status") or "idle").strip().lower()
-    if freshness != "fresh" or collection_status == "failed":
+    if freshness != "fresh":
         raise RuntimeError("home_quota_snapshot_not_fresh")
 
     plan_type = home_snapshot_plan_type(snapshot)
@@ -1373,6 +1373,8 @@ def account_summary(account: dict[str, Any]) -> dict[str, Any]:
         "raw_remaining_percent",
         "protected_reserve_warning",
         "reset_credits_available",
+        "reset_credits_earliest_expires_at",
+        "reset_credits_error",
         "windows",
         "quota_feature",
         "quota_feature_limit_name",
