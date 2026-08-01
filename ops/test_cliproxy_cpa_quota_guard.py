@@ -579,6 +579,11 @@ class QuotaHealthEndpointTest(unittest.TestCase):
             detail["reset_credits"]["credits"][0]["expires_at"],
             result["buckets"]["protected"]["accounts"][0]["reset_credits_earliest_expires_at"],
         )
+        self.assertEqual(2, result["buckets"]["protected"]["reset_credits_available"])
+        self.assertEqual(
+            detail["reset_credits"]["credits"][0]["expires_at"],
+            result["buckets"]["protected"]["reset_credits_earliest_expires_at"],
+        )
         self.assertEqual("home-pro-credential", result["accounts"][0]["credential_id"])
         self.assertEqual("credit-home-opaque-key", result["accounts"][0]["reset_credits"][0]["id_suffix"])
 

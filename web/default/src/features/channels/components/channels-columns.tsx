@@ -132,6 +132,8 @@ type CliproxyCPAQuotaBucket = {
   nextResetAt: number | null
   reserveFiveHourPercent: number | null
   reserveWeeklyPercent: number | null
+  resetCreditsAvailable: number | null
+  resetCreditsEarliestExpiresAt: number | null
 }
 
 type CliproxyCPAQuotaAccount = {
@@ -341,6 +343,10 @@ function parseCliproxyCPAQuotaBucket(
     nextResetAt: getCliproxyCPANextResetAt(fiveHour, weekly, updatedAt),
     reserveFiveHourPercent: numberValue(item.min_remaining_percent_5h),
     reserveWeeklyPercent: numberValue(item.min_remaining_percent_7d),
+    resetCreditsAvailable: numberValue(item.reset_credits_available),
+    resetCreditsEarliestExpiresAt: timestampValue(
+      item.reset_credits_earliest_expires_at
+    ),
   }
 }
 
@@ -593,15 +599,21 @@ function CliproxyCPAResetCreditsText({
   value: number | null | undefined
   earliestExpiresAt?: number | null
 }) {
+  const { t } = useTranslation()
   const expiry =
     earliestExpiresAt != null && Number.isFinite(earliestExpiresAt)
       ? formatCompactTimestamp(earliestExpiresAt)
       : null
   return (
     <span>
-      重置次数{' '}
+      {t('Remaining reset credits')}{' '}
       <span className='tabular-nums'>{formatResetCreditsAvailable(value)}</span>
-      {expiry ? <span> · 最早到期 {expiry}</span> : null}
+      {expiry ? (
+        <span>
+          {' '}
+          · {t('Expires')} <span className='tabular-nums'>{expiry}</span>
+        </span>
+      ) : null}
     </span>
   )
 }
@@ -1188,10 +1200,21 @@ function CliproxyCPABucketDetails({
             {count ? ` · ${count}` : ''}
           </p>
           {bucket.canExhaust === false && (
-            <p className='text-foreground/70 text-[11px]'>
-              保护水位 5h {formatPercent(bucket.reserveFiveHourPercent)} / 7d{' '}
-              {formatPercent(bucket.reserveWeeklyPercent)}
-            </p>
+            <div className='text-foreground/70 space-y-0.5 text-[11px]'>
+              <p>
+                保护水位 5h {formatPercent(bucket.reserveFiveHourPercent)} / 7d{' '}
+                {formatPercent(bucket.reserveWeeklyPercent)}
+              </p>
+              {(bucket.resetCreditsAvailable != null ||
+                bucket.resetCreditsEarliestExpiresAt != null) && (
+                <p>
+                  <CliproxyCPAResetCreditsText
+                    value={bucket.resetCreditsAvailable}
+                    earliestExpiresAt={bucket.resetCreditsEarliestExpiresAt}
+                  />
+                </p>
+              )}
+            </div>
           )}
         </div>
         <div className='shrink-0 text-right tabular-nums'>
