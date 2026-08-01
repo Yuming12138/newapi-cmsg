@@ -19,9 +19,9 @@ var deepSeekBalanceSetting = DeepSeekBalanceSetting{
 	Enabled:             true,
 	TickIntervalMinutes: 5,
 	TimeoutSeconds:      15,
-	ChannelType:         constant.ChannelTypeAnthropic,
-	BaseURL:             "https://api.deepseek.com/anthropic",
-	Group:               "deepseek-claude",
+	ChannelType:         constant.ChannelTypeDeepSeek,
+	BaseURL:             "https://api.deepseek.com",
+	Group:               "deepseek",
 	BalanceURL:          "https://api.deepseek.com/user/balance",
 }
 

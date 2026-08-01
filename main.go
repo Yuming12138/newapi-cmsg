@@ -123,7 +123,7 @@ func main() {
 	// Persistent system maintenance task runner
 	service.StartSystemTaskRunner()
 
-	// DeepSeek Anthropic balance sync task
+	// DeepSeek balance sync task
 	service.StartDeepSeekBalanceSyncTask()
 
 	// Channel budget guard task

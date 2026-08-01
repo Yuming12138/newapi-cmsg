@@ -8,8 +8,8 @@ import (
 )
 
 func TestNormalizeDeepSeekBalanceURL(t *testing.T) {
-	got := normalizeDeepSeekBalanceURL("  HTTPS://API.DEEPSEEK.COM/ANTHROPIC/  ")
-	want := "https://api.deepseek.com/anthropic"
+	got := normalizeDeepSeekBalanceURL("  HTTPS://API.DEEPSEEK.COM/  ")
+	want := "https://api.deepseek.com"
 	if got != want {
 		t.Fatalf("normalizeDeepSeekBalanceURL() = %q, want %q", got, want)
 	}
@@ -25,19 +25,32 @@ func TestChannelHasGroup(t *testing.T) {
 }
 
 func TestIsDeepSeekBalanceChannel(t *testing.T) {
-	baseURL := "https://api.deepseek.com/anthropic/"
+	baseURL := "https://api.deepseek.com/"
 	channel := &model.Channel{
-		Type:    constant.ChannelTypeAnthropic,
+		Type:    constant.ChannelTypeDeepSeek,
 		BaseURL: &baseURL,
-		Group:   "default, deepseek-claude",
+		Group:   "default, deepseek",
 	}
 	cfg := deepSeekBalanceRuntimeSetting{
-		ChannelType: constant.ChannelTypeAnthropic,
+		ChannelType: constant.ChannelTypeDeepSeek,
 		BaseURL:     deepSeekBalanceDefaultBaseURL,
 		Group:       deepSeekBalanceDefaultGroup,
 	}
 	if !isDeepSeekBalanceChannel(channel, cfg) {
-		t.Fatalf("isDeepSeekBalanceChannel() should match deepseek anthropic channel")
+		t.Fatalf("isDeepSeekBalanceChannel() should match unified deepseek channel")
+	}
+}
+
+func TestCurrentDeepSeekBalanceSettingDefaultsToUnifiedChannel(t *testing.T) {
+	cfg := currentDeepSeekBalanceSetting()
+	if cfg.ChannelType != constant.ChannelTypeDeepSeek {
+		t.Fatalf("ChannelType = %d, want %d", cfg.ChannelType, constant.ChannelTypeDeepSeek)
+	}
+	if cfg.BaseURL != "https://api.deepseek.com" {
+		t.Fatalf("BaseURL = %q, want unified DeepSeek base URL", cfg.BaseURL)
+	}
+	if cfg.Group != "deepseek" {
+		t.Fatalf("Group = %q, want deepseek", cfg.Group)
 	}
 }
 

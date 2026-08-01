@@ -23,10 +23,10 @@ import (
 const (
 	deepSeekBalanceDefaultTickInterval = 5 * time.Minute
 	deepSeekBalanceDefaultTimeout      = 15 * time.Second
-	deepSeekBalanceDefaultBaseURL      = "https://api.deepseek.com/anthropic"
-	deepSeekBalanceDefaultGroup        = "deepseek-claude"
+	deepSeekBalanceDefaultBaseURL      = "https://api.deepseek.com"
+	deepSeekBalanceDefaultGroup        = "deepseek"
 	deepSeekBalanceDefaultEndpoint     = "https://api.deepseek.com/user/balance"
-	deepSeekBalanceRemark              = "DeepSeek Anthropic/Claude 兼容；base URL 自动拼接 /v1/messages；余额单位 CNY，余额自动同步自 /user/balance"
+	deepSeekBalanceRemark              = "DeepSeek 统一渠道；支持 Chat Completions、Responses 与 Messages；余额单位 CNY，余额自动同步自 /user/balance"
 )
 
 type deepSeekBalanceRuntimeSetting struct {
@@ -59,7 +59,7 @@ func currentDeepSeekBalanceSetting() deepSeekBalanceRuntimeSetting {
 		Enabled:      true,
 		TickInterval: deepSeekBalanceDefaultTickInterval,
 		Timeout:      deepSeekBalanceDefaultTimeout,
-		ChannelType:  constant.ChannelTypeAnthropic,
+		ChannelType:  constant.ChannelTypeDeepSeek,
 		BaseURL:      deepSeekBalanceDefaultBaseURL,
 		Group:        deepSeekBalanceDefaultGroup,
 		BalanceURL:   deepSeekBalanceDefaultEndpoint,
@@ -155,7 +155,7 @@ func isDeepSeekBalanceChannel(channel *model.Channel, cfg deepSeekBalanceRuntime
 	return channelHasGroup(channel.Group, cfg.Group)
 }
 
-func UpdateDeepSeekAnthropicBalance(channel *model.Channel) (float64, error) {
+func UpdateDeepSeekBalance(channel *model.Channel) (float64, error) {
 	if channel == nil {
 		return 0, fmt.Errorf("channel is nil")
 	}
@@ -296,7 +296,7 @@ func runDeepSeekBalanceSyncOnce() {
 			continue
 		}
 
-		balance, err := UpdateDeepSeekAnthropicBalance(channel)
+		balance, err := UpdateDeepSeekBalance(channel)
 		if err != nil {
 			failedCount++
 			logger.LogWarn(ctx, fmt.Sprintf("deepseek balance sync: channel_id=%d name=%s failed: %v", channel.Id, channel.Name, err))

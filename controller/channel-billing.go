@@ -447,7 +447,7 @@ func updateChannelSiliconFlowBalance(channel *model.Channel) (float64, error) {
 }
 
 func updateChannelDeepSeekBalance(channel *model.Channel) (float64, error) {
-	return service.UpdateDeepSeekAnthropicBalance(channel)
+	return service.UpdateDeepSeekBalance(channel)
 }
 
 func updateChannelAIGC2DBalance(channel *model.Channel) (float64, error) {
