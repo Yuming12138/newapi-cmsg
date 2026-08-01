@@ -1345,6 +1345,7 @@ def empty_bucket(key: str, config: dict[str, Any]) -> dict[str, Any]:
         "min_remaining_percent_5h": None if can_exhaust else clamp_percent(config.get("min_remaining_percent_5h"), 30.0),
         "min_remaining_percent_7d": None if can_exhaust else clamp_percent(config.get("min_remaining_percent_7d"), 20.0),
         "reset_credits_available": None,
+        "reset_credits_earliest_expires_at": None,
         "accounts": [],
         "windows": {},
     }
@@ -1403,6 +1404,17 @@ def bucket_summary(config: dict[str, Any], bucket_key: str, accounts: list[dict[
         if account.get("reset_credits_available") is not None
     ]
     summary["reset_credits_available"] = sum(reset_values) if reset_values else None
+    reset_expiries = [
+        str(account.get("reset_credits_earliest_expires_at") or "").strip()
+        for account in ok_accounts
+        if int(number(account.get("reset_credits_available")) or 0) > 0
+        and timestamp_value(account.get("reset_credits_earliest_expires_at")) is not None
+    ]
+    summary["reset_credits_earliest_expires_at"] = (
+        min(reset_expiries, key=lambda value: timestamp_value(value) or 0)
+        if reset_expiries
+        else None
+    )
     summary["accounts"] = [account_summary(account) for account in accounts]
     summary["windows"] = aggregate_windows(ok_accounts)
     plans: dict[str, int] = {}
