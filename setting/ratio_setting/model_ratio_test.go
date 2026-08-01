@@ -42,6 +42,32 @@ func TestGPT56OfficialPricingRatios(t *testing.T) {
 	}
 }
 
+func TestDeepSeekV4OfficialPricingRatios(t *testing.T) {
+	tests := []struct {
+		model           string
+		modelRatio      float64
+		completionRatio float64
+		cacheRatio      float64
+	}{
+		{model: "deepseek-v4-flash", modelRatio: 0.14 / 2, completionRatio: 0.28 / 0.14, cacheRatio: 0.0028 / 0.14},
+		{model: "deepseek-v4-pro", modelRatio: 0.435 / 2, completionRatio: 0.87 / 0.435, cacheRatio: 0.003625 / 0.435},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			if got := defaultModelRatio[tt.model]; got != tt.modelRatio {
+				t.Fatalf("model ratio = %v, want %v", got, tt.modelRatio)
+			}
+			if got := defaultCompletionRatio[tt.model]; got != tt.completionRatio {
+				t.Fatalf("completion ratio = %v, want %v", got, tt.completionRatio)
+			}
+			if got := defaultCacheRatio[tt.model]; got != tt.cacheRatio {
+				t.Fatalf("cache ratio = %v, want %v", got, tt.cacheRatio)
+			}
+		})
+	}
+}
+
 func TestGPTImage15UsesImage2Ratios(t *testing.T) {
 	if got := defaultModelRatio["gpt-image-1.5"]; got != defaultModelRatio["gpt-image-2"] {
 		t.Fatalf("model ratio = %v, want %v", got, defaultModelRatio["gpt-image-2"])
