@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Synchronize DeepSeek Anthropic-compatible channel balance for New API."""
+"""Synchronize the unified DeepSeek channel balance for New API."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ select coalesce(json_agg(row_to_json(t)), '[]'::json)
 from (
   select id, name, key, type, base_url, "group", status
   from channels
-  where type = 14
+  where type = 43
   order by id
 ) t;
 """,
@@ -69,7 +69,7 @@ from (
     return [
         row
         for row in rows
-        if normalize_url(row.get("base_url")) == "https://api.deepseek.com/anthropic"
+        if normalize_url(row.get("base_url")) == "https://api.deepseek.com"
         and group_contains(row.get("group"), "deepseek")
     ]
 
@@ -103,7 +103,7 @@ def fetch_balance(api_key: str, timeout: int = 15) -> float:
 
 
 def update_channel(db: DB, channel_id: int, balance_cny: float, now_ts: int) -> None:
-    remark = "DeepSeek Anthropic/Claude 兼容；base URL 自动拼接 /v1/messages；余额单位 CNY，余额自动同步自 /user/balance"
+    remark = "DeepSeek 统一渠道；支持 Chat Completions、Responses 与 Messages；余额单位 CNY，余额自动同步自 /user/balance"
     db.psql(
         "update channels set "
         f"balance = {balance_cny:.6f}, "

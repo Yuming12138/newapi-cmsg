@@ -70,7 +70,7 @@ func deepSeekDoWebSearchTool(tool map[string]any) map[string]any {
 		"type": "function",
 		"function": map[string]any{
 			"name":        deepSeekDoWebSearchToolName,
-			"description": "Search the live web when current or external information is needed. The gateway will execute DeepSeek Anthropic web search and return text or null.",
+			"description": "Search the live web when current or external information is needed. The gateway will execute DeepSeek web search and return text or null.",
 			"parameters":  parameters,
 		},
 	}
