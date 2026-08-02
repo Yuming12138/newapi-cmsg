@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "site_id": "aliyun",
+  "probe_path": "/opt/new-api/logs/cmsg_network_probe.jsonl",
+  "state_path": "/var/lib/cmsg-lb-health/state.json",
+  "lookback_sec": 1800,
+  "freshness_sec": 720,
+  "min_samples": 4,
+  "required_log_sources": [
+    "new_api",
+    "cpa",
+    "mihomo"
+  ],
+  "required_head_hosts": [
+    "mirrors.tuna.tsinghua.edu.cn",
+    "www.cloudflare.com"
+  ],
+  "hysteresis": {
+    "fail_after": 2,
+    "recover_after": 3,
+    "recovery_cooldown_sec": 900
+  },
+  "eligibility": {
+    "required": false,
+    "path": "",
+    "max_age_sec": 0
+  },
+  "runtime": {
+    "docker": "/usr/bin/docker",
+    "required_containers": [
+      "new-api",
+      "cliproxy-api",
+      "mihomo",
+      "new-api-postgres",
+      "new-api-redis"
+    ],
+    "inspect_timeout_sec": 5
+  },
+  "server": {
+    "listen": "127.0.0.1",
+    "port": 9120,
+    "health_path": "/__cmsg_lb_health",
+    "status_path": "/__cmsg_lb_status"
+  }
+}
