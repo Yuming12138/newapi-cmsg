@@ -41,6 +41,7 @@ L1 不等于完整灾备，`cmsg_lb_eligibility.json` 必须保持 `ready=false`
   -> 停止校园远端数据模式 New API
   -> 围栏/停止公网 New API
   -> 确认 WAL 和 Redis offset 追平
+  -> 记录最终 LSN/offset 并停止阿里云 PostgreSQL/Redis（强围栏）
   -> 提升校园 PostgreSQL/Redis
   -> 校园 New API 改连本地服务
   -> 写入验证
@@ -84,7 +85,7 @@ python3 /home/gmchen/cmsg-campus/ops/cmsg_dr_guard.py eligibility-block \
 
 ## L2 围栏与追平
 
-预计 `api.cmsg666.xyz` 会在公网 New API 停止后返回 503；既有流会中断。没有 Cloudflare LB/DNS 切换时，用户必须改用 `campus-api.cmsg666.xyz`，且校园入口要等本地数据面完成后才开放为完整 DR。
+预计 `api.cmsg666.xyz` 会在公网 New API 停止后返回 503；既有流会中断。没有 Cloudflare LB/DNS 切换时，用户必须改用 `campus-api.cmsg666.xyz`，且校园入口要等本地数据面完成后才开放为完整 DR。公网 503 会持续到受控回切，或另行明确授权公网入口代理/跨站连接校园数据面，不应把它描述成仅重启几分钟。
 
 先停止校园仍连接远端数据面的 New API，再停止公网 New API：
 
@@ -105,13 +106,21 @@ ssh cmsg-root 'sudo -n bash -lc "cd /opt/new-api && docker compose -f docker-com
 
 任一条件不满足时停止切换并恢复两个 New API；此时尚未提升，可安全回到 L1/正常态。
 
+满足条件后，分别记录公网最终 WAL LSN 与 Redis offset，再停止阿里云数据容器作为强围栏：
+
+```bash
+ssh cmsg-root 'sudo -n docker stop new-api-postgres new-api-redis'
+```
+
+源端停止后，再次确认校园 replay LSN/offset 等于刚才记录的最终值。此后禁止在提升校园前重新启动阿里云数据容器。
+
 ## L2 提升（不可直接回滚点）
 
 一旦执行以下命令，阿里云旧 PostgreSQL/Redis 就不得再以主库身份接受写入。恢复阿里云主用必须走“受控回切”，不能简单重启旧主库。
 
 ```bash
 ssh fuyao 'sudo -n docker exec -u postgres cmsg-campus-postgres-standby \
-  sh -lc '\''pg_ctl -D "$PGDATA" promote -w -t 60'\'''
+  sh -lc '\''/usr/lib/postgresql/15/bin/pg_ctl -D "$PGDATA" promote -w -t 60'\'''
 
 ssh fuyao 'sudo -n docker exec cmsg-campus-redis-standby \
   sh -lc '\''REDISCLI_AUTH="$REDIS_STANDBY_PASSWORD" redis-cli --no-auth-warning REPLICAOF NO ONE'\'''
@@ -209,7 +218,7 @@ curl -fsS -o /dev/null -w '%{http_code}\n' \
 
 ### 提升前
 
-若 LSN/offset 未追平或预检失败：保持 eligibility=false，重新启动公网 New API 和校园 L1 New API。数据库角色未改变，不需要数据恢复。
+若 LSN/offset 未追平或预检失败：保持 eligibility=false；若公网数据容器已停止但校园尚未提升，先启动公网 PostgreSQL/Redis并确认校园恢复复制，再启动公网 New API 和校园 L1 New API。数据库角色未改变，不需要数据恢复。
 
 ### 提升后
 
