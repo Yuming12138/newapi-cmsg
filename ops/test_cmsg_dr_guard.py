@@ -22,6 +22,7 @@ SPEC.loader.exec_module(GUARD)
 NOW = dt.datetime(2026, 8, 2, 12, 0, tzinfo=dt.timezone.utc)
 FAKE_SQL_SECRET = "fake-sql-secret-never-print"
 FAKE_REDIS_SECRET = "fake-redis-secret-never-print"
+FAKE_LOCAL_REDIS_SECRET = "fake-local-redis-secret-never-print"
 
 
 def env_text(sql_host: str = "10.203.66.1", redis_host: str = "10.203.66.1") -> str:
@@ -110,6 +111,44 @@ class DrGuardTest(unittest.TestCase):
                 )
             self.assertEqual(before, path.read_bytes())
             self.assertFalse((root / "backups").exists())
+
+    def test_rewrite_can_take_redis_password_from_protected_env(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = self.write_env(root)
+            password_env = root / "redis-standby-local.env"
+            password_env.write_text(
+                f"REDIS_STANDBY_PASSWORD={FAKE_LOCAL_REDIS_SECRET}\n",
+                encoding="utf-8",
+            )
+            os.chmod(password_env, 0o600)
+            result = GUARD.rewrite_env(
+                path,
+                expected_sql_host="10.203.66.1",
+                expected_redis_host="10.203.66.1",
+                sql_host="postgres-standby",
+                sql_port=5432,
+                redis_host="redis-standby",
+                redis_port=6379,
+                redis_password_env_file=password_env,
+                redis_password_key="REDIS_STANDBY_PASSWORD",
+                backup_dir=root / "backups",
+                dry_run=False,
+            )
+            rewritten = path.read_text(encoding="utf-8")
+            output = json.dumps(result)
+        self.assertTrue(result["redis_password_updated"])
+        self.assertIn(f":{FAKE_LOCAL_REDIS_SECRET}@redis-standby:6379", rewritten)
+        self.assertNotIn(FAKE_LOCAL_REDIS_SECRET, output)
+        self.assertNotIn(FAKE_REDIS_SECRET, output)
+
+    def test_redis_password_source_must_be_mode_600_or_stricter(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "redis.env"
+            path.write_text("REDIS_STANDBY_PASSWORD=fake\n", encoding="utf-8")
+            os.chmod(path, 0o640)
+            with self.assertRaises(GUARD.GuardError):
+                GUARD.read_protected_env_value(path, "REDIS_STANDBY_PASSWORD")
 
     def test_ready_gate_requires_fresh_complete_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
