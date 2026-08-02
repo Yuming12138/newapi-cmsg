@@ -73,7 +73,7 @@ docker compose -p cmsg-campus \
 4. 确认公网 Redis：`role=master`，校园 replica `online`、lag 0；校园 Redis：`role=slave`、link `up`、offset 与公网一致。
 5. 确认校园复制网络子网已加入 `pg_hba.conf`，认证方法为 `scram-sha-256`；不得使用 `trust`。
 6. 确认校园 `postgres-standby`、`redis-standby` 没有公网端口映射。
-7. 用 `cmsg_dr_guard.py rewrite-env --dry-run` 验证只会把 `10.203.66.1` 改为 `postgres-standby` / `redis-standby`，不输出 DSN 或密码。
+7. 用 `cmsg_dr_guard.py rewrite-env --dry-run` 验证只会把 `10.203.66.1` 改为 `postgres-standby` / `redis-standby`；若本地 Redis 使用独立认证，则从 600 环境文件内部替换 Redis URI 的认证字段。输出不得包含 DSN 或密码。
 8. 先将 eligibility 关闭：
 
 ```bash
@@ -121,7 +121,7 @@ ssh fuyao 'sudo -n docker exec cmsg-campus-redis-standby \
 
 ## 校园 New API 改为本地数据面
 
-先执行 dry-run，再执行原子替换。工具只改变 URL 的 host/port，保留用户名、密码、库名和查询参数，备份权限为 600：
+先执行 dry-run，再执行原子替换。工具保留 PostgreSQL 凭据、库名和查询参数；Redis 本地口令从权限 600 的专用环境文件读取并替换，永不输出。备份权限为 600：
 
 ```bash
 python3 /home/gmchen/cmsg-campus/ops/cmsg_dr_guard.py rewrite-env \
@@ -130,6 +130,8 @@ python3 /home/gmchen/cmsg-campus/ops/cmsg_dr_guard.py rewrite-env \
   --expected-redis-host 10.203.66.1 \
   --sql-host postgres-standby --sql-port 5432 \
   --redis-host redis-standby --redis-port 6379 \
+  --redis-password-env-file /home/gmchen/cmsg-campus/secrets/redis-standby-local.env \
+  --redis-password-key REDIS_STANDBY_PASSWORD \
   --backup-dir /home/gmchen/cmsg-campus/backups/dr-env \
   --dry-run
 

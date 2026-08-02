@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import urllib.parse
 from pathlib import Path
@@ -114,6 +115,45 @@ def replace_endpoint(value: str, key: str, host: str, port: int) -> str:
     return wrap_env_value(updated, quote)
 
 
+def replace_url_password(value: str, key: str, password: str) -> str:
+    parsed, quote = split_url(value, key)
+    if key != REDIS_KEY:
+        raise GuardError("password replacement is supported only for Redis")
+    if not password or any(char in password for char in "\r\n\0"):
+        raise GuardError("Redis password source is empty or invalid")
+    if "@" not in parsed.netloc:
+        raise GuardError("Redis URL does not contain user information")
+    raw_userinfo, raw_endpoint = parsed.netloc.rsplit("@", 1)
+    raw_username = raw_userinfo.split(":", 1)[0]
+    encoded_password = urllib.parse.quote(password, safe="")
+    updated = parsed._replace(netloc=f"{raw_username}:{encoded_password}@{raw_endpoint}").geturl()
+    return wrap_env_value(updated, quote)
+
+
+def read_protected_env_value(path: Path, key: str) -> str:
+    try:
+        file_stat = path.stat()
+    except OSError as exc:
+        raise GuardError(f"cannot stat protected env file: {path}") from exc
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise GuardError(f"protected env path is not a regular file: {path}")
+    if file_stat.st_mode & 0o077:
+        raise GuardError(f"protected env file must not be group/world accessible: {path}")
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise GuardError(f"cannot read protected env file: {path}") from exc
+    values: list[str] = []
+    for line in lines:
+        match = ENV_LINE.match(line)
+        if match and match.group("key") == key:
+            raw, _quote = unwrap_env_value(match.group("value").strip())
+            values.append(raw)
+    if len(values) != 1 or not values[0]:
+        raise GuardError(f"protected env file must contain exactly one non-empty {key}")
+    return values[0]
+
+
 def read_env_lines(path: Path) -> tuple[list[str], dict[str, tuple[int, re.Match[str]]]]:
     try:
         lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -177,10 +217,17 @@ def rewrite_env(
     redis_port: int,
     backup_dir: Path,
     dry_run: bool,
+    redis_password_env_file: Path | None = None,
+    redis_password_key: str = "REDIS_STANDBY_PASSWORD",
 ) -> dict[str, Any]:
     lines, found = read_env_lines(path)
     expected = {SQL_KEY: expected_sql_host, REDIS_KEY: expected_redis_host}
     targets = {SQL_KEY: (sql_host, sql_port), REDIS_KEY: (redis_host, redis_port)}
+    redis_password = (
+        read_protected_env_value(redis_password_env_file, redis_password_key)
+        if redis_password_env_file is not None
+        else None
+    )
     before: dict[str, dict[str, Any]] = {}
     after: dict[str, dict[str, Any]] = {}
     for key, (_index, match) in found.items():
@@ -190,7 +237,10 @@ def rewrite_env(
             raise GuardError(
                 f"{key} host fence failed: expected {expected[key]!r}, found {endpoint['host']!r}"
             )
-        replacement = replace_endpoint(match.group("value"), key, *targets[key])
+        replacement = match.group("value")
+        if key == REDIS_KEY and redis_password is not None:
+            replacement = replace_url_password(replacement, key, redis_password)
+        replacement = replace_endpoint(replacement, key, *targets[key])
         after[key] = safe_endpoint(replacement, key)
 
     if dry_run:
@@ -199,11 +249,15 @@ def rewrite_env(
             "dry_run": True,
             "before": before,
             "after": after,
+            "redis_password_updated": redis_password is not None,
             "credentials_printed": False,
         }
 
     for key, (index, match) in found.items():
-        replacement = replace_endpoint(match.group("value"), key, *targets[key])
+        replacement = match.group("value")
+        if key == REDIS_KEY and redis_password is not None:
+            replacement = replace_url_password(replacement, key, redis_password)
+        replacement = replace_endpoint(replacement, key, *targets[key])
         lines[index] = (
             match.group("prefix")
             + key
@@ -225,6 +279,7 @@ def rewrite_env(
         "backup": str(backup),
         "before": before,
         "after": after,
+        "redis_password_updated": redis_password is not None,
         "credentials_printed": False,
     }
 
@@ -332,6 +387,8 @@ def parser() -> argparse.ArgumentParser:
     rewrite_parser.add_argument("--sql-port", type=int, default=5432)
     rewrite_parser.add_argument("--redis-host", required=True)
     rewrite_parser.add_argument("--redis-port", type=int, default=6379)
+    rewrite_parser.add_argument("--redis-password-env-file", type=Path)
+    rewrite_parser.add_argument("--redis-password-key", default="REDIS_STANDBY_PASSWORD")
     rewrite_parser.add_argument("--backup-dir", type=Path, required=True)
     rewrite_parser.add_argument("--dry-run", action="store_true")
 
@@ -362,6 +419,8 @@ def main(argv: list[str] | None = None) -> int:
                 sql_port=args.sql_port,
                 redis_host=args.redis_host,
                 redis_port=args.redis_port,
+                redis_password_env_file=args.redis_password_env_file,
+                redis_password_key=args.redis_password_key,
                 backup_dir=args.backup_dir,
                 dry_run=args.dry_run,
             )
