@@ -10,7 +10,7 @@
 - New API、CPA、Mihomo 三类日志源可用；
 - 清华镜像和 Cloudflare 两个非诊断目标的成功率与 p95 TTFB；
 - Cloudflare speed probe 的成功率与 p95 TTFB；
-- New API 网络 5xx、CPA HTTP/2/EOF/timeout、Mihomo 连接错误；
+- New API 网络 5xx、New API 流式协议错误、CPA HTTP/2/EOF/timeout、Mihomo 连接错误；
 - TCP 总发送段数、总重传段数及聚合重传率；
 - Mihomo 可用节点的最佳延迟；
 - 配置中列出的 New API、CPA、Mihomo、PostgreSQL、Redis 容器状态；

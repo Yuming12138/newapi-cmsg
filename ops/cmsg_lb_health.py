@@ -57,6 +57,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "warn_tcp_retrans_percent": 2.0,
         "max_new_api_network_5xx": 5,
         "max_new_api_5xx_per_1000": 50.0,
+        "max_new_api_stream_failures": 3,
         "max_cpa_transport_failures": 3,
         "max_mihomo_connect_failures": 5,
         "min_score": 70,
@@ -211,7 +212,9 @@ def collect_metrics(records: list[dict[str, Any]], required_hosts: list[str]) ->
     new_api_5xx = 0
     quota_429 = 0
     success_consume = 0
+    new_api_stream_failures = 0
     cpa_failures = 0
+    upstream_transport_failures = 0
     mihomo_failures = 0
     network_error_windows = 0
     tcp_out = 0
@@ -251,7 +254,15 @@ def collect_metrics(records: list[dict[str, Any]], required_hosts: list[str]) ->
         if isinstance(signals, dict):
             new_api_5xx += integer(signals.get("new_api_network_5xx"))
             quota_429 += integer(signals.get("new_api_quota_429"))
-            cpa_failures += integer(signals.get("cpa_transport_failures"))
+            new_api_stream_value = integer(signals.get("new_api_stream_failures"))
+            cpa_value = integer(signals.get("cpa_transport_failures"))
+            upstream_value = integer(
+                signals.get("upstream_transport_failures"),
+                max(new_api_stream_value, cpa_value),
+            )
+            new_api_stream_failures += new_api_stream_value
+            cpa_failures += cpa_value
+            upstream_transport_failures += upstream_value
             mihomo_failures += integer(signals.get("mihomo_connect_failures"))
             network_error_windows += int(bool(signals.get("network_error_observed")))
         counts = record.get("new_api_log_counts", {})
@@ -307,7 +318,9 @@ def collect_metrics(records: list[dict[str, Any]], required_hosts: list[str]) ->
             "new_api_quota_429": quota_429,
             "new_api_success_consume": success_consume,
             "new_api_5xx_per_1000": round(new_api_5xx * 1000.0 / transactions, 3) if transactions else 0.0,
+            "new_api_stream_failures": new_api_stream_failures,
             "cpa_transport_failures": cpa_failures,
+            "upstream_transport_failures": upstream_transport_failures,
             "mihomo_connect_failures": mihomo_failures,
             "network_error_windows": network_error_windows,
         },
@@ -387,6 +400,11 @@ def evaluate_metrics(metrics: dict[str, Any], config: dict[str, Any]) -> tuple[b
         score -= 30
     if integer(errors.get("cpa_transport_failures")) >= int(thresholds["max_cpa_transport_failures"]):
         critical.append("cpa_transport_failures_high")
+        score -= 30
+    elif integer(errors.get("new_api_stream_failures")) >= int(
+        thresholds["max_new_api_stream_failures"]
+    ):
+        critical.append("new_api_stream_failures_high")
         score -= 30
     if integer(errors.get("mihomo_connect_failures")) >= int(thresholds["max_mihomo_connect_failures"]):
         critical.append("mihomo_connect_failures_high")

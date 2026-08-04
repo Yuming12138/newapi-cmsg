@@ -96,6 +96,25 @@ class NetworkProbeTest(unittest.TestCase):
         self.assertEqual(1, snapshot["counts"]["unexpected_eof"])
         self.assertEqual({"🇸🇬 新加坡1": 1}, snapshot["failure_nodes"])
 
+    def test_cpa_log_snapshot_honors_configured_local_timezone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "main.log"
+            path.write_text(
+                "[2026-07-30 17:56:00] [local] [warn ] "
+                "failure observed failure_class=h2_protocol_error "
+                "selected_node=campus selected_node_source=snapshot\n",
+                encoding="utf-8",
+            )
+            cfg = dict(PROBE.DEFAULT_CONFIG["cpa_logs"])
+            cfg["path"] = str(path)
+            cfg["timezone"] = "Asia/Shanghai"
+            snapshot = PROBE.collect_cpa_log_snapshot(
+                cfg,
+                dt.datetime(2026, 7, 30, 9, 55, tzinfo=dt.timezone.utc),
+                dt.datetime(2026, 7, 30, 10, 0, tzinfo=dt.timezone.utc),
+            )
+        self.assertEqual(1, snapshot["counts"]["h2_protocol_error"])
+
     @mock.patch.object(PROBE, "run_cmd")
     def test_docker_log_snapshot_returns_counts_without_raw_logs(self, run_cmd: mock.Mock) -> None:
         run_cmd.return_value = (
@@ -130,7 +149,9 @@ class NetworkProbeTest(unittest.TestCase):
         signals = PROBE.build_signal_summary(logs)
         self.assertEqual(1, signals["new_api_network_5xx"])
         self.assertEqual(4, signals["new_api_quota_429"])
+        self.assertEqual(0, signals["new_api_stream_failures"])
         self.assertEqual(2, signals["cpa_transport_failures"])
+        self.assertEqual(2, signals["upstream_transport_failures"])
         self.assertEqual(3, signals["mihomo_connect_failures"])
         self.assertTrue(signals["network_error_observed"])
 
@@ -142,6 +163,19 @@ class NetworkProbeTest(unittest.TestCase):
         }
         signals = PROBE.build_signal_summary(logs)
         self.assertEqual(2, signals["cpa_transport_failures"])
+        self.assertEqual(2, signals["upstream_transport_failures"])
+        self.assertTrue(signals["network_error_observed"])
+
+    def test_signal_summary_uses_new_api_stream_errors_as_transport_fallback(self) -> None:
+        logs = {
+            "new_api": {"counts": {"protocol_error": 2, "unexpected_eof": 1}},
+            "cpa": {"counts": {}},
+            "mihomo": {"counts": {}},
+        }
+        signals = PROBE.build_signal_summary(logs)
+        self.assertEqual(3, signals["new_api_stream_failures"])
+        self.assertEqual(0, signals["cpa_transport_failures"])
+        self.assertEqual(3, signals["upstream_transport_failures"])
         self.assertTrue(signals["network_error_observed"])
 
 

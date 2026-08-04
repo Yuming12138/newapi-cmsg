@@ -31,6 +31,7 @@ def sample(
     sent: int = 1000,
     new_api_5xx: int = 0,
     quota_429: int = 0,
+    new_api_stream_failures: int = 0,
     cpa_failures: int = 0,
     mihomo_failures: int = 0,
 ) -> dict[str, Any]:
@@ -72,9 +73,13 @@ def sample(
         "signals": {
             "new_api_network_5xx": new_api_5xx,
             "new_api_quota_429": quota_429,
+            "new_api_stream_failures": new_api_stream_failures,
             "cpa_transport_failures": cpa_failures,
+            "upstream_transport_failures": max(new_api_stream_failures, cpa_failures),
             "mihomo_connect_failures": mihomo_failures,
-            "network_error_observed": bool(new_api_5xx or cpa_failures or mihomo_failures),
+            "network_error_observed": bool(
+                new_api_5xx or new_api_stream_failures or cpa_failures or mihomo_failures
+            ),
         },
         "new_api_log_counts": {"success_consume": 100},
         "nstat_delta": {"TcpOutSegs": sent, "TcpRetransSegs": retrans},
@@ -128,6 +133,18 @@ class LBHealthTest(unittest.TestCase):
             status = HEALTH.evaluate(self.config(root), NOW)
         self.assertFalse(status["raw_healthy"])
         self.assertIn("cpa_transport_failures_high", status["reasons"])
+        self.assertEqual(3, status["metrics"]["errors"]["upstream_transport_failures"])
+
+    def test_new_api_stream_failures_are_a_transport_health_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            records = [sample(20, new_api_stream_failures=3), sample(15), sample(10), sample(5)]
+            self.write_records(root, records)
+            status = HEALTH.evaluate(self.config(root), NOW)
+        self.assertFalse(status["raw_healthy"])
+        self.assertIn("new_api_stream_failures_high", status["reasons"])
+        self.assertEqual(3, status["metrics"]["errors"]["new_api_stream_failures"])
+        self.assertEqual(3, status["metrics"]["errors"]["upstream_transport_failures"])
 
     def test_tcp_rate_uses_total_segments_not_window_average(self) -> None:
         records = [sample(20, sent=100, retrans=10), sample(15, sent=9900, retrans=0)]
