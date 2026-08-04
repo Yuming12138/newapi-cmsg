@@ -102,8 +102,8 @@ var defaultModelRatio = map[string]float64{
 	"gpt-5.5":               2.5,   // $5 / 1M input tokens; long-context input is $10 / 1M.
 	"gpt-5.5-pro":           15.0,  // $30 / 1M input tokens; long-context input is $60 / 1M.
 	"gpt-5.6-sol":           2.5,   // $5 / 1M input tokens.
-	"gpt-5.6-terra":         1.25,  // $2.5 / 1M input tokens.
-	"gpt-5.6-luna":          0.5,   // $1 / 1M input tokens.
+	"gpt-5.6-terra":         1.0,   // $2 / 1M input tokens.
+	"gpt-5.6-luna":          0.1,   // $0.20 / 1M input tokens.
 	"gpt-5.4":               1.25,  // $2.5 / 1M input tokens
 	"gpt-5.4-mini":          0.375, // $0.75 / 1M input tokens
 	"gpt-5.4-nano":          0.1,   // $0.20 / 1M input tokens
