@@ -542,6 +542,10 @@ def build_signal_summary(logs: dict[str, Any]) -> dict[str, int | bool]:
     new_api = logs.get("new_api", {}).get("counts", {})
     cpa = logs.get("cpa", {}).get("counts", {})
     mihomo = logs.get("mihomo", {}).get("counts", {})
+    new_api_stream_failures = (
+        int(new_api.get("protocol_error", 0))
+        + int(new_api.get("unexpected_eof", 0))
+    )
     protocol_failures = max(
         int(cpa.get("h2_protocol_error", 0)),
         int(cpa.get("terminal_protocol_error", 0)),
@@ -553,6 +557,7 @@ def build_signal_summary(logs: dict[str, Any]) -> dict[str, int | bool]:
         + int(cpa.get("deadline_exceeded", 0))
         + int(cpa.get("connection_reset", 0))
     )
+    upstream_transport_failures = max(cpa_transport_failures, new_api_stream_failures)
     mihomo_connect_failures = (
         int(mihomo.get("connect_io_timeout", 0))
         + int(mihomo.get("deadline_exceeded", 0))
@@ -563,10 +568,14 @@ def build_signal_summary(logs: dict[str, Any]) -> dict[str, int | bool]:
         "observation_only": True,
         "new_api_network_5xx": int(new_api.get("network_5xx", 0)),
         "new_api_quota_429": int(new_api.get("quota_429", 0)),
+        "new_api_stream_failures": new_api_stream_failures,
         "cpa_transport_failures": cpa_transport_failures,
+        "upstream_transport_failures": upstream_transport_failures,
         "mihomo_connect_failures": mihomo_connect_failures,
         "network_error_observed": bool(
-            int(new_api.get("network_5xx", 0)) or cpa_transport_failures or mihomo_connect_failures
+            int(new_api.get("network_5xx", 0))
+            or upstream_transport_failures
+            or mihomo_connect_failures
         ),
     }
 
