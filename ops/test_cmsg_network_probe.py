@@ -70,6 +70,15 @@ class NetworkProbeTest(unittest.TestCase):
         self.assertEqual(2, counts["channel_error"])
         self.assertEqual(1, counts["usage_limit"])
 
+    def test_new_api_client_eof_is_separate_from_upstream_stream_eof(self) -> None:
+        lines = [
+            "Invalid request: Invalid request: unexpected EOF",
+            "channel error (channel #12, status code: 500): upstream error: unexpected EOF",
+        ]
+        counts = PROBE.count_pattern_lines(lines, PROBE.DEFAULT_CONFIG["new_api_logs"]["patterns"])
+        self.assertEqual(1, counts["client_request_eof"])
+        self.assertEqual(1, counts["unexpected_eof"])
+
     def test_cpa_log_snapshot_filters_utc_window_and_extracts_nodes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "main.log"
