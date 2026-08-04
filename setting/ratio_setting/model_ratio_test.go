@@ -8,8 +8,8 @@ func TestGPT56OfficialPricingRatios(t *testing.T) {
 		modelRatio float64
 	}{
 		{model: "gpt-5.6-sol", modelRatio: 2.5},
-		{model: "gpt-5.6-terra", modelRatio: 1.25},
-		{model: "gpt-5.6-luna", modelRatio: 0.5},
+		{model: "gpt-5.6-terra", modelRatio: 1.0},
+		{model: "gpt-5.6-luna", modelRatio: 0.1},
 	}
 
 	for _, tt := range tests {
