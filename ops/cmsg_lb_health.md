@@ -17,6 +17,7 @@
 - 可选的数据面接流资格文件。
 
 New API 429/额度错误只记录，不会把网络判为故障。直连 `chatgpt.com` 保持 `diagnostic_only`，不参与健康判定。
+客户端上传请求体时产生的 `Invalid request ... unexpected EOF` 单独计为客户端 EOF，也不作为上游流式健康故障。
 
 ## 迟滞
 
