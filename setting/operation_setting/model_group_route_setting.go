@@ -22,8 +22,8 @@ var modelGroupRouteSetting = ModelGroupRouteSetting{
 	SourceGroups:   []string{"asxs", "cmsg"},
 	ModelPrefixes:  []string{"gpt-5.6-sol", "gpt-image"},
 	PreferredGroup: "cliproxy-codex",
-	FallbackGroup:  "asxs",
-	FallbackGroups: []string{"asxs", "asxs-grok"},
+	FallbackGroup:  "asxs-gpt56",
+	FallbackGroups: []string{"asxs-gpt56", "asxs", "asxs-grok"},
 }
 
 func init() {

@@ -8,7 +8,7 @@ import (
 
 var EffortSuffixes = []string{"-max", "-xhigh", "-high", "-medium", "-low", "-minimal"}
 
-var OpenAIEffortSuffixes = []string{"-high", "-minimal", "-low", "-medium", "-none", "-xhigh"}
+var OpenAIEffortSuffixes = []string{"-max", "-xhigh", "-high", "-medium", "-low", "-minimal", "-none"}
 
 var DeepSeekV4EffortSuffixes = []string{"-none", "-max"}
 

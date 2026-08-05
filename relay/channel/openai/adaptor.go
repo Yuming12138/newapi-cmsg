@@ -601,6 +601,9 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 			request.Reasoning.Effort = effort
 		}
 		request.Model = originModel
+		if info != nil && info.ChannelMeta != nil {
+			info.UpstreamModelName = originModel
+		}
 	}
 	if info != nil && request.Reasoning != nil && request.Reasoning.Effort != "" {
 		info.ReasoningEffort = request.Reasoning.Effort

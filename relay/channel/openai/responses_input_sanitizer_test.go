@@ -10,6 +10,28 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+func TestConvertOpenAIResponsesRequestNormalizesMaxReasoningSuffix(t *testing.T) {
+	request := dto.OpenAIResponsesRequest{
+		Model: "gpt-5.6-luna-max",
+	}
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gpt-5.6-luna-max",
+		},
+	}
+
+	convertedAny, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, request)
+	require.NoError(t, err)
+	converted := convertedAny.(dto.OpenAIResponsesRequest)
+
+	require.Equal(t, "gpt-5.6-luna", converted.Model)
+	require.NotNil(t, converted.Reasoning)
+	require.Equal(t, "max", converted.Reasoning.Effort)
+	require.Equal(t, "gpt-5.6-luna", info.UpstreamModelName)
+	require.Equal(t, "max", info.ReasoningEffort)
+}
+
 func TestConvertOpenAIResponsesRequestDropsForeignToolItemIDsForGPT5(t *testing.T) {
 	request := dto.OpenAIResponsesRequest{
 		Model: "gpt-5.6-sol",
