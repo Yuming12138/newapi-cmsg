@@ -52,9 +52,11 @@ DEFAULT_CONFIG = {
     "dynamic_daily_budget_enabled": False,
     "timezone": "Asia/Shanghai",
     "quota_reset_increase_threshold_percent": 10.0,
+    "quota_reset_increase_floor_percent": 5.0,
     "quota_reset_near_full_percent": 90.0,
     "quota_reset_near_full_min_increase_percent": 5.0,
     "quota_reset_confirmation_count": 2,
+    "quota_reset_schedule_tolerance_sec": 300,
     "personal_plan_keywords": ["plus", "free", "team"],
     "protected_plan_keywords": ["pro"],
     "default_account_bucket": "protected",
@@ -85,6 +87,9 @@ OPTION_CONFIG_MAP = {
     "cliproxy_cpa_quota_guard.min_remaining_percent_7d": ("min_remaining_percent_7d", "float"),
     "cliproxy_cpa_quota_guard.dynamic_daily_budget_enabled": ("dynamic_daily_budget_enabled", "bool"),
     "cliproxy_cpa_quota_guard.quota_reset_increase_threshold_percent": ("quota_reset_increase_threshold_percent", "float"),
+    "cliproxy_cpa_quota_guard.quota_reset_increase_floor_percent": ("quota_reset_increase_floor_percent", "float"),
+    "cliproxy_cpa_quota_guard.quota_reset_schedule_tolerance_sec": ("quota_reset_schedule_tolerance_sec", "float"),
+    "cliproxy_cpa_quota_guard.quota_reset_confirmation_count": ("quota_reset_confirmation_count", "float"),
     "cliproxy_cpa_quota_guard.reset_credit_grace_enabled": ("reset_credit_grace_enabled", "bool"),
     "cliproxy_cpa_quota_guard.reset_credit_auto_consume_enabled": ("reset_credit_auto_consume_enabled", "bool"),
     "cliproxy_cpa_quota_guard.reset_credit_release_before_sec": ("reset_credit_release_before_sec", "float"),
@@ -1470,6 +1475,13 @@ def guard_timezone(config: dict[str, Any]) -> dt.tzinfo:
         return dt.timezone.utc
 
 
+def next_guard_day_start(config: dict[str, Any], now: int) -> int:
+    timezone = guard_timezone(config)
+    current = dt.datetime.fromtimestamp(now, timezone)
+    next_day = current.date() + dt.timedelta(days=1)
+    return int(dt.datetime.combine(next_day, dt.time.min, tzinfo=timezone).timestamp())
+
+
 def protected_weekly_budget_snapshot(
     config: dict[str, Any],
     result: dict[str, Any],
@@ -1505,6 +1517,8 @@ def protected_weekly_budget_snapshot(
         0,
         int(number(config.get("reset_credit_auto_consume_before_sec")) or 600),
     )
+    schedule_tolerance_value = number(config.get("quota_reset_schedule_tolerance_sec"))
+    schedule_tolerance = max(0, int(schedule_tolerance_value if schedule_tolerance_value is not None else 300))
 
     remaining_total = 0.0
     weekly_remaining_values: list[float] = []
@@ -1525,6 +1539,9 @@ def protected_weekly_budget_snapshot(
         if five_hour_remaining is not None:
             five_hour_remaining_values.append(max(0.0, float(five_hour_remaining)))
 
+        identity = str(first_non_empty(account.get("account_id_hash"), account.get("auth_index"), f"unknown-{index}"))
+        identities.append(identity)
+        previous_plan = previous_by_account.get(identity)
         reset_after = number(weekly.get("reset_after_seconds"))
         reset_at = number(weekly.get("reset_at"))
         if reset_at is not None and reset_at > 0:
@@ -1533,10 +1550,16 @@ def protected_weekly_budget_snapshot(
             weekly_reset_at = now + int(reset_after)
         else:
             weekly_reset_at = now + WINDOW_7D_SECONDS
-
-        identity = str(first_non_empty(account.get("account_id_hash"), account.get("auth_index"), f"unknown-{index}"))
-        identities.append(identity)
-        previous_plan = previous_by_account.get(identity)
+        observed_weekly_reset_at = weekly_reset_at
+        weekly_reset_observation = "live"
+        if isinstance(previous_plan, dict):
+            previous_weekly_reset_at = int(number(previous_plan.get("weekly_reset_at")) or 0)
+            if (
+                previous_weekly_reset_at > now
+                and abs(weekly_reset_at - previous_weekly_reset_at) <= schedule_tolerance
+            ):
+                weekly_reset_at = previous_weekly_reset_at
+                weekly_reset_observation = "stabilized_within_tolerance"
         reset_credit = None
         reset_credit_observation = "none"
         if credit_planning_enabled and reset_credit_plan_selected(config, account):
@@ -1588,6 +1611,8 @@ def protected_weekly_budget_snapshot(
             "plan_type": account.get("plan_type"),
             "remaining_percent": round(remaining_percent, 6),
             "weekly_reset_at": weekly_reset_at,
+            "observed_weekly_reset_at": observed_weekly_reset_at,
+            "weekly_reset_observation": weekly_reset_observation,
             "effective_reset_at": effective_reset_at,
             "effective_reset_source": effective_reset_source,
             "days_remaining": days_remaining,
@@ -2070,7 +2095,13 @@ def apply_dynamic_daily_budget(
         low_watermark = current_remaining
     low_watermark = min(float(low_watermark), current_remaining)
 
-    increase_threshold = max(0.0, float(number(config.get("quota_reset_increase_threshold_percent")) or 10.0))
+    configured_increase_threshold = max(
+        0.0,
+        float(number(config.get("quota_reset_increase_threshold_percent")) or 10.0),
+    )
+    increase_floor_value = number(config.get("quota_reset_increase_floor_percent"))
+    increase_floor = max(0.0, float(increase_floor_value if increase_floor_value is not None else 5.0))
+    increase_threshold = max(configured_increase_threshold, increase_floor)
     near_full_threshold = clamp_percent(config.get("quota_reset_near_full_percent"), 90.0)
     near_full_min_increase = max(
         0.0,
@@ -2085,6 +2116,8 @@ def apply_dynamic_daily_budget(
 
     reset_reason = ""
     should_reset = False
+    replan_reason = ""
+    should_replan = False
     if previous_baseline is None:
         should_reset = True
         reset_reason = "baseline_missing"
@@ -2142,8 +2175,16 @@ def apply_dynamic_daily_budget(
 
             confirmation_count = max(1, int(number(config.get("quota_reset_confirmation_count")) or 2))
             if int(candidate["count"]) >= confirmation_count:
-                should_reset = True
-                reset_reason = "+".join(candidate_reasons)
+                hard_reset_reasons = {
+                    "account_signature_changed",
+                    "weekly_quota_refilled",
+                }
+                if any(reason in hard_reset_reasons for reason in candidate_reasons):
+                    should_reset = True
+                    reset_reason = "+".join(candidate_reasons)
+                else:
+                    should_replan = True
+                    replan_reason = "+".join(candidate_reasons)
         else:
             budget_state.pop("reset_candidate", None)
 
@@ -2166,10 +2207,24 @@ def apply_dynamic_daily_budget(
             "baseline_reset_previous_percent": round(float(previous_baseline), 6) if previous_baseline is not None else None,
         }
         low_watermark = current_remaining
+    elif should_replan:
+        daily_limit = protected_dynamic_daily_limit(snapshot["account_plans"], reserve_per_account)
+        budget_state.update({
+            "account_signature": snapshot["account_signature"],
+            "weekly_signature": snapshot["weekly_signature"],
+            "planning_signature": snapshot["planning_signature"],
+            "reset_at": int(snapshot["weekly_reset_at"]),
+            "daily_limit_percent": round(daily_limit, 6),
+            "baseline_account_plans": snapshot["account_plans"],
+            "last_replan_reason": replan_reason,
+            "last_replan_at": now,
+        })
+        budget_state.pop("reset_candidate", None)
 
     baseline = float(number(budget_state.get("baseline_remaining_percent")) or current_remaining)
     daily_limit = max(0.0, float(number(budget_state.get("daily_limit_percent")) or 0.0))
-    consumed_today = max(0.0, baseline - current_remaining)
+    consumption_low_watermark = min(float(low_watermark), current_remaining)
+    consumed_today = max(0.0, baseline - consumption_low_watermark)
     calculated_remaining_today = max(0.0, daily_limit - consumed_today)
     minimum_remaining_7d = float(snapshot["minimum_remaining_percent_7d"])
     minimum_remaining_5h = number(snapshot.get("minimum_remaining_percent_5h"))
@@ -2182,6 +2237,7 @@ def apply_dynamic_daily_budget(
         daily_exhausted = True
         budget_state["daily_exhausted_at"] = now
     remaining_today = calculated_remaining_today if daily_budget_available else 0.0
+    next_daily_reset_at = next_guard_day_start(config, now)
     original_quota_ok = bool(result.get("quota_ok", result.get("within_share")))
     quota_ok = original_quota_ok and hard_reserve_available and daily_budget_available
 
@@ -2198,12 +2254,15 @@ def apply_dynamic_daily_budget(
         "days_remaining": int(snapshot["days_remaining"]),
         "reset_after_seconds": int(snapshot["reset_after_seconds"]),
         "credit_probe_degraded_account_count": int(snapshot["credit_probe_degraded_account_count"]),
+        "configured_quota_reset_increase_threshold_percent": round(configured_increase_threshold, 6),
+        "effective_quota_reset_increase_threshold_percent": round(increase_threshold, 6),
         "reserve_percent": round(reserve_total, 6),
         "minimum_remaining_percent_7d": round(minimum_remaining_7d, 6),
         "minimum_remaining_percent_5h": round(minimum_remaining_5h, 6) if minimum_remaining_5h is not None else None,
         "consumed_today_percent": round(consumed_today, 6),
         "calculated_remaining_today_percent": round(calculated_remaining_today, 6),
         "remaining_today_percent": round(remaining_today, 6),
+        "next_daily_budget_reset_at": next_daily_reset_at,
         "daily_exhausted": daily_exhausted,
         "quota_ok": quota_ok,
     })
@@ -2225,8 +2284,27 @@ def apply_dynamic_daily_budget(
         return result
     if not hard_reserve_available:
         result["reason"] = "protected_reserve_reached"
+        retry_at = max(now + 1, int(snapshot["effective_reset_at"]))
+        result["quota_block"] = {
+            "kind": "protected_reserve",
+            "code": "channel_protected_reserve_reached",
+            "reason": result["reason"],
+            "http_status": 429,
+            "retry_at": retry_at,
+            "retry_after_seconds": max(1, retry_at - now),
+            "timezone": str(config.get("timezone") or "Asia/Shanghai"),
+        }
     elif not daily_budget_available:
         result["reason"] = "dynamic_daily_budget_exhausted"
+        result["quota_block"] = {
+            "kind": "daily_protected_budget",
+            "code": "channel_daily_protected_budget_exhausted",
+            "reason": result["reason"],
+            "http_status": 429,
+            "retry_at": next_daily_reset_at,
+            "retry_after_seconds": max(1, next_daily_reset_at - now),
+            "timezone": str(config.get("timezone") or "Asia/Shanghai"),
+        }
     else:
         result["reason"] = "dynamic_daily_budget_available"
     return result
@@ -2341,7 +2419,7 @@ def build_quota_source(result: dict[str, Any], balance: float, spendable: bool, 
     if quota_feature:
         raw_source["quota_feature"] = quota_feature
         raw_source["quota_feature_limit_name"] = str(result.get("quota_feature_limit_name") or "").strip()
-    return {
+    source = {
         "source_type": source_type,
         "unit": "percent" if quota_feature else "quota_unit",
         "balance": round(max(float(balance), 0.0), 6),
@@ -2353,6 +2431,10 @@ def build_quota_source(result: dict[str, Any], balance: float, spendable: bool, 
         "updated_at": now,
         "raw_source": raw_source,
     }
+    quota_block = result.get("quota_block")
+    if isinstance(quota_block, dict):
+        source["block"] = dict(quota_block)
+    return source
 
 
 def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state: dict[str, Any]) -> str:
