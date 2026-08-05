@@ -271,6 +271,8 @@ distributor.invalid_playground_request: "Invalid playground request: {{.Error}}"
 distributor.group_access_denied: "No permission to access this group"
 distributor.get_channel_failed: "Failed to get available channel for model {{.Model}} under group {{.Group}} (distributor): {{.Error}}"
 distributor.no_available_channel: "No available channel for model {{.Model}} under group {{.Group}} (distributor)"
+distributor.daily_protected_budget_exhausted: "Today's protected channel budget is exhausted. Expected recovery at {{.RecoveryTime}}; please retry later"
+distributor.protected_reserve_reached: "The channel has reached its protected quota reserve. Expected recovery at {{.RecoveryTime}}; please retry later"
 distributor.invalid_midjourney_request: "Invalid Midjourney request: {{.Error}}"
 distributor.invalid_request_parse_model: "Invalid request, unable to parse model"
 

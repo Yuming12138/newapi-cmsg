@@ -48,6 +48,10 @@ func Distribute() func(c *gin.Context) {
 				return
 			}
 			if channel.Status != common.ChannelStatusEnabled {
+				if block := service.GetChannelQuotaProtectionBlock(channel); block != nil {
+					abortWithChannelQuotaProtection(c, block)
+					return
+				}
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
 				return
 			}
@@ -106,6 +110,7 @@ func Distribute() func(c *gin.Context) {
 				if hasModelRoute {
 					affinityGroup = modelRoute.PreferredGroup
 				}
+				quotaProtectionGroups := distributorQuotaProtectionGroups(usingGroup, userGroup, modelRoute, hasModelRoute)
 
 				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, affinityGroup); found {
 					preferred, err := model.CacheGetChannel(preferredChannelID)
@@ -162,6 +167,9 @@ func Distribute() func(c *gin.Context) {
 						Retry:       common.GetPointer(0),
 					})
 					if err != nil {
+						if abortIfChannelQuotaProtection(c, quotaProtectionGroups, modelRequest.Model, requestPath) {
+							return
+						}
 						showGroup := usingGroup
 						if usingGroup == "auto" {
 							showGroup = fmt.Sprintf("auto(%s)", selectGroup)
@@ -176,6 +184,9 @@ func Distribute() func(c *gin.Context) {
 						return
 					}
 					if channel == nil {
+						if abortIfChannelQuotaProtection(c, quotaProtectionGroups, modelRequest.Model, requestPath) {
+							return
+						}
 						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": modelRequest.Model}), types.ErrorCodeModelNotFound)
 						return
 					}
@@ -205,6 +216,45 @@ func channelSupportsRequestPath(channel *model.Channel, requestPath string) bool
 	}
 	config := channel.GetOtherSettings().AdvancedCustom
 	return config != nil && config.SupportsPath(requestPath)
+}
+
+func distributorQuotaProtectionGroups(usingGroup string, userGroup string, route service.ModelGroupRoute, hasModelRoute bool) []string {
+	if hasModelRoute {
+		return []string{route.PreferredGroup, route.FallbackGroup}
+	}
+	if usingGroup == "auto" {
+		return service.GetUserAutoGroup(userGroup)
+	}
+	return []string{usingGroup}
+}
+
+func abortIfChannelQuotaProtection(c *gin.Context, groups []string, modelName string, requestPath string) bool {
+	block, err := service.FindChannelQuotaProtectionBlock(c.Request.Context(), groups, modelName, requestPath)
+	if err != nil {
+		common.SysError(fmt.Sprintf("failed to inspect channel quota protection: %v", err))
+		return false
+	}
+	if block == nil {
+		return false
+	}
+	abortWithChannelQuotaProtection(c, block)
+	return true
+}
+
+func abortWithChannelQuotaProtection(c *gin.Context, block *service.ChannelQuotaProtectionBlock) {
+	now := time.Now().Unix()
+	if block.RetryAt <= now {
+		block.RetryAt = now + 60
+	}
+	block.RetryAfterSeconds = max(int64(1), block.RetryAt-now)
+	messageKey := i18n.MsgDistributorDailyProtectedBudgetExhausted
+	errorCode := types.ErrorCodeChannelDailyProtectedBudgetExhausted
+	if block.Code == string(types.ErrorCodeChannelProtectedReserveReached) {
+		messageKey = i18n.MsgDistributorProtectedReserveReached
+		errorCode = types.ErrorCodeChannelProtectedReserveReached
+	}
+	message := i18n.T(c, messageKey, map[string]any{"RecoveryTime": block.RecoveryTime()})
+	abortWithOpenAiQuotaMessage(c, message, errorCode, block.RetryAt, block.RetryAfterSeconds)
 }
 
 // getModelFromRequest 从请求中读取模型信息

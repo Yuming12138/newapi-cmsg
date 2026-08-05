@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"fmt"
+	"net/http"
+	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -24,6 +26,24 @@ func abortWithOpenAiMessage(c *gin.Context, statusCode int, message string, code
 	})
 	c.Abort()
 	logger.LogError(c.Request.Context(), fmt.Sprintf("user %d | %s", userId, message))
+}
+
+func abortWithOpenAiQuotaMessage(c *gin.Context, message string, code types.ErrorCode, retryAt int64, retryAfterSeconds int64) {
+	if retryAfterSeconds < 1 {
+		retryAfterSeconds = 1
+	}
+	c.Header("Retry-After", strconv.FormatInt(retryAfterSeconds, 10))
+	c.JSON(http.StatusTooManyRequests, gin.H{
+		"error": gin.H{
+			"message":             common.MessageWithRequestId(message, c.GetString(common.RequestIdKey)),
+			"type":                "quota_protection_error",
+			"code":                string(code),
+			"retry_at":            retryAt,
+			"retry_after_seconds": retryAfterSeconds,
+		},
+	})
+	c.Abort()
+	logger.LogError(c.Request.Context(), fmt.Sprintf("user %d | %s", c.GetInt("id"), message))
 }
 
 func abortWithMidjourneyMessage(c *gin.Context, statusCode int, code int, description string) {

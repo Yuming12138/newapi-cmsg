@@ -469,6 +469,25 @@ class QuotaFeatureTest(unittest.TestCase):
         self.assertEqual("percent", source["unit"])
         self.assertEqual("codex_bengalfox", source["raw_source"]["quota_feature"])
 
+    def test_quota_source_includes_structured_protection_block(self) -> None:
+        result = {
+            "ok": True,
+            "reason": "dynamic_daily_budget_exhausted",
+            "quota_block": {
+                "kind": "daily_protected_budget",
+                "code": "channel_daily_protected_budget_exhausted",
+                "http_status": 429,
+                "retry_at": 1_800_028_800,
+                "retry_after_seconds": 28_800,
+                "timezone": "UTC",
+            },
+        }
+
+        source = guard.build_quota_source(result, 0.0, False, 1_800_000_000)
+
+        self.assertEqual(429, source["block"]["http_status"])
+        self.assertEqual("channel_daily_protected_budget_exhausted", source["block"]["code"])
+
 
 class QuotaHealthEndpointTest(unittest.TestCase):
     def test_probe_failure_payload_falls_back_instead_of_reporting_zero_quota(self) -> None:
@@ -775,6 +794,7 @@ class DynamicDailyBudgetTest(unittest.TestCase):
         self.assertEqual("protected_reserve_reached", result["reason"])
 
     def test_small_quota_increase_does_not_rebuild_or_reopen_budget(self) -> None:
+        self.config["quota_reset_increase_threshold_percent"] = 0.25
         state: dict = {}
         guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
         exhausted = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(87.0), state, self.now + 60)
@@ -783,8 +803,89 @@ class DynamicDailyBudgetTest(unittest.TestCase):
         self.assertFalse(exhausted["quota_ok"])
         self.assertFalse(result["quota_ok"])
         self.assertEqual(100.0, result["dynamic_daily_budget"]["baseline_remaining_percent"])
+        self.assertEqual(13.0, result["dynamic_daily_budget"]["consumed_today_percent"])
+        self.assertEqual(5.0, result["dynamic_daily_budget"]["effective_quota_reset_increase_threshold_percent"])
         self.assertTrue(result["dynamic_daily_budget"]["daily_exhausted"])
         self.assertEqual(0.0, result["dynamic_daily_budget"]["remaining_today_percent"])
+
+    def test_weekly_reset_schedule_change_replans_without_reopening_exhausted_budget(self) -> None:
+        state: dict = {}
+        initial = guard.apply_dynamic_daily_budget(
+            self.config,
+            dynamic_budget_result(100.0, reset_at=self.now + 7 * 86_400),
+            state,
+            self.now,
+        )
+        exhausted = guard.apply_dynamic_daily_budget(
+            self.config,
+            dynamic_budget_result(87.0, reset_at=self.now + 7 * 86_400),
+            state,
+            self.now + 60,
+        )
+        changed_reset_at = self.now + 6 * 86_400
+        pending = guard.apply_dynamic_daily_budget(
+            self.config,
+            dynamic_budget_result(87.0, reset_at=changed_reset_at),
+            state,
+            self.now + 120,
+        )
+        replanned = guard.apply_dynamic_daily_budget(
+            self.config,
+            dynamic_budget_result(87.0, reset_at=changed_reset_at),
+            state,
+            self.now + 180,
+        )
+
+        self.assertEqual("baseline_missing", initial["dynamic_daily_budget"]["baseline_reset_reason"])
+        self.assertFalse(exhausted["quota_ok"])
+        self.assertFalse(pending["quota_ok"])
+        self.assertFalse(replanned["quota_ok"])
+        self.assertEqual(100.0, replanned["dynamic_daily_budget"]["baseline_remaining_percent"])
+        self.assertEqual(13.0, replanned["dynamic_daily_budget"]["consumed_today_percent"])
+        self.assertTrue(replanned["dynamic_daily_budget"]["daily_exhausted"])
+        self.assertEqual(
+            "weekly_reset_schedule_changed",
+            replanned["dynamic_daily_budget"]["last_replan_reason"],
+        )
+        self.assertNotEqual(
+            "weekly_reset_schedule_changed",
+            replanned["dynamic_daily_budget"]["baseline_reset_reason"],
+        )
+
+    def test_countdown_reset_jitter_is_stabilized(self) -> None:
+        state: dict = {}
+        first_result = dynamic_budget_result(100.0)
+        first_weekly = first_result["accounts"][0]["windows"]["7d"]
+        first_weekly.pop("reset_at")
+        first_weekly["reset_after_seconds"] = 7 * 86_400
+        first = guard.apply_dynamic_daily_budget(self.config, first_result, state, self.now)
+
+        jittered_result = dynamic_budget_result(99.0)
+        jittered_weekly = jittered_result["accounts"][0]["windows"]["7d"]
+        jittered_weekly.pop("reset_at")
+        jittered_weekly["reset_after_seconds"] = 7 * 86_400 - 58
+        second = guard.apply_dynamic_daily_budget(self.config, jittered_result, state, self.now + 60)
+
+        self.assertEqual(
+            first["dynamic_daily_budget"]["weekly_signature"],
+            second["dynamic_daily_budget"]["observed_weekly_signature"],
+        )
+        self.assertNotIn("reset_candidate", second["dynamic_daily_budget"])
+        self.assertEqual(
+            "stabilized_within_tolerance",
+            second["dynamic_daily_budget"]["account_plans"][0]["weekly_reset_observation"],
+        )
+
+    def test_exhausted_budget_exposes_next_midnight_retry(self) -> None:
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+        result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(87.0), state, self.now + 60)
+        expected_retry_at = guard.next_guard_day_start(self.config, self.now + 60)
+
+        self.assertEqual(429, result["quota_block"]["http_status"])
+        self.assertEqual("channel_daily_protected_budget_exhausted", result["quota_block"]["code"])
+        self.assertEqual(expected_retry_at, result["quota_block"]["retry_at"])
+        self.assertGreater(result["quota_block"]["retry_after_seconds"], 0)
 
     def test_large_same_day_refill_requires_confirmation_then_rebuilds(self) -> None:
         state: dict = {}
@@ -985,9 +1086,10 @@ class DynamicDailyBudgetTest(unittest.TestCase):
         self.assertEqual(1, degraded_candidate_count)
         self.assertAlmostEqual(85.0 / 7.0, degraded_daily_limit, places=6)
         self.assertAlmostEqual(85.0 / 3.0, confirmed["dynamic_daily_budget"]["daily_limit_percent"], places=6)
+        self.assertEqual("baseline_missing", confirmed["dynamic_daily_budget"]["baseline_reset_reason"])
         self.assertEqual(
             "reset_credit_schedule_changed",
-            confirmed["dynamic_daily_budget"]["baseline_reset_reason"],
+            confirmed["dynamic_daily_budget"]["last_replan_reason"],
         )
 
     def test_transient_reset_credit_probe_failure_keeps_effective_plan(self) -> None:
