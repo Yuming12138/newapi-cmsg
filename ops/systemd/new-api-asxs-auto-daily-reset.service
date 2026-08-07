@@ -1,0 +1,28 @@
+[Unit]
+Description=New API ASXS automatic subscription daily reset
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/opt/new-api/ops/asxs_auto_daily_reset.json
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/new-api
+ExecStart=/usr/bin/python3 /opt/new-api/ops/asxs_auto_daily_reset.py --config /opt/new-api/ops/asxs_auto_daily_reset.json
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=60s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6
+ReadWritePaths=/opt/new-api/ops /run/lock

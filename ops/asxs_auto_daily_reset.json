@@ -1,0 +1,20 @@
+{
+  "enabled": false,
+  "site_id": "aliyun",
+  "allowed_hostnames": [
+    "izuf63zn7615wtls32ucxdz"
+  ],
+  "base_url": "https://api.asxs.top",
+  "state_endpoint": "/api/me/billing/state",
+  "reset_endpoint": "/api/me/billing/daily-reset",
+  "env_path": "/opt/new-api/ops/asxs_auto_daily_reset.env",
+  "state_path": "/opt/new-api/ops/asxs_auto_daily_reset_state.json",
+  "lock_path": "/run/lock/new-api-asxs-auto-daily-reset.lock",
+  "timeout_sec": 20,
+  "minimum_usage_percent": 90.0,
+  "minimum_remaining_days_after_reset": 2,
+  "target_cooldown_sec": 300,
+  "max_resets_per_run": 1,
+  "verify_after_reset": true,
+  "state_retention_days": 30
+}
