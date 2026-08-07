@@ -786,6 +786,138 @@ class DynamicDailyBudgetTest(unittest.TestCase):
         self.assertFalse(result["quota_ok"])
         self.assertEqual("protected_reserve_reached", result["reason"])
 
+    def test_manual_force_unlock_restores_original_quota_until_reset(self) -> None:
+        state: dict = {}
+        initial = guard.apply_dynamic_daily_budget(
+            self.config,
+            dynamic_budget_result(100.0),
+            state,
+            self.now,
+        )
+        self.config["manual_force_unlock"] = {
+            "active": True,
+            "until": self.now + 3_600,
+            "cycle_signature": initial["dynamic_daily_budget"]["planning_signature"],
+        }
+
+        result = guard.apply_dynamic_daily_budget(
+            self.config,
+            dynamic_budget_result(87.0),
+            state,
+            self.now + 60,
+        )
+
+        self.assertTrue(result["quota_ok"])
+        self.assertEqual(87.0, result["usable_balance_units"])
+        self.assertEqual("manual_force_unlock_active", result["reason"])
+        self.assertTrue(result["manual_force_unlock"]["active"])
+        self.assertNotIn("quota_block", result)
+        self.assertTrue(result["dynamic_daily_budget"]["daily_exhausted"])
+
+    def test_manual_force_unlock_expires_automatically(self) -> None:
+        state: dict = {}
+        initial = guard.apply_dynamic_daily_budget(
+            self.config,
+            dynamic_budget_result(100.0),
+            state,
+            self.now,
+        )
+        self.config["manual_force_unlock"] = {
+            "active": True,
+            "until": self.now + 30,
+            "cycle_signature": initial["dynamic_daily_budget"]["planning_signature"],
+        }
+
+        result = guard.apply_dynamic_daily_budget(
+            self.config,
+            dynamic_budget_result(87.0),
+            state,
+            self.now + 60,
+        )
+
+        self.assertFalse(result["quota_ok"])
+        self.assertFalse(result["manual_force_unlock"]["active"])
+        self.assertEqual("dynamic_daily_budget_exhausted", result["reason"])
+
+    def test_manual_force_unlock_stops_when_official_cycle_changes(self) -> None:
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(
+            self.config,
+            dynamic_budget_result(100.0),
+            state,
+            self.now,
+        )
+        self.config["manual_force_unlock"] = {
+            "active": True,
+            "until": self.now + 3_600,
+            "cycle_signature": "different-cycle",
+        }
+
+        result = guard.apply_dynamic_daily_budget(
+            self.config,
+            dynamic_budget_result(87.0),
+            state,
+            self.now + 60,
+        )
+
+        self.assertFalse(result["quota_ok"])
+        self.assertFalse(result["manual_force_unlock"]["active"])
+
+    def test_manual_force_unlock_does_not_bypass_real_upstream_exhaustion(self) -> None:
+        state: dict = {}
+        initial = guard.apply_dynamic_daily_budget(
+            self.config,
+            dynamic_budget_result(100.0),
+            state,
+            self.now,
+        )
+        self.config["manual_force_unlock"] = {
+            "active": True,
+            "until": self.now + 3_600,
+            "cycle_signature": initial["dynamic_daily_budget"]["planning_signature"],
+        }
+        exhausted = dynamic_budget_result(0.0)
+        exhausted["quota_ok"] = False
+        exhausted["within_share"] = False
+        exhausted["usable_balance_units"] = 0.0
+        exhausted["remaining_share_percent"] = 0.0
+
+        result = guard.apply_dynamic_daily_budget(
+            self.config,
+            exhausted,
+            state,
+            self.now + 60,
+        )
+
+        self.assertFalse(result["quota_ok"])
+        self.assertEqual(0.0, result["usable_balance_units"])
+        self.assertTrue(result["manual_force_unlock"]["active"])
+
+    def test_manual_force_unlock_requires_explicit_active_flag_and_cycle_signature(self) -> None:
+        state: dict = {}
+        initial = guard.apply_dynamic_daily_budget(
+            self.config,
+            dynamic_budget_result(100.0),
+            state,
+            self.now,
+        )
+        planning_signature = initial["dynamic_daily_budget"]["planning_signature"]
+
+        for override in (
+            {"until": self.now + 3_600, "cycle_signature": planning_signature},
+            {"active": True, "until": self.now + 3_600},
+        ):
+            with self.subTest(override=override):
+                self.config["manual_force_unlock"] = override
+                result = guard.apply_dynamic_daily_budget(
+                    self.config,
+                    dynamic_budget_result(87.0),
+                    state,
+                    self.now + 60,
+                )
+                self.assertFalse(result["manual_force_unlock"]["active"])
+                self.assertFalse(result["quota_ok"])
+
     def test_five_hour_reserve_uses_same_fifteen_percent_line(self) -> None:
         state: dict = {}
         result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(80.0, remaining_5h=15.0), state, self.now)

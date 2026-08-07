@@ -143,6 +143,18 @@ export type CliproxyCPADispatchAuditsResponse = {
   }
 }
 
+export type ChannelQuotaForceUnlockResponse = {
+  success: boolean
+  message?: string
+  data?: {
+    channel_id: number
+    active: boolean
+    until?: number
+    channel_enabled: boolean
+    protection_restored_on?: number
+  }
+}
+
 // ============================================================================
 // Base Channel CRUD Operations
 // ============================================================================
@@ -418,6 +430,35 @@ export async function resetCliproxyCPAQuotaState(
   const res = await api.post(
     `/api/channel/${channelId}/cpa/reset_quota`,
     { auth_index: authIndex },
+    config
+  )
+  return res.data
+}
+
+export async function forceUnlockChannelQuotaProtection(
+  channelId: number
+): Promise<ChannelQuotaForceUnlockResponse> {
+  const config: ExtendedApiConfig = {
+    skipBusinessError: true,
+    disableDuplicate: true,
+  }
+  const res = await api.post(
+    `/api/channel/${channelId}/quota_protection/force_unlock`,
+    {},
+    config
+  )
+  return res.data
+}
+
+export async function cancelChannelQuotaProtectionForceUnlock(
+  channelId: number
+): Promise<ChannelQuotaForceUnlockResponse> {
+  const config: ExtendedApiConfig = {
+    skipBusinessError: true,
+    disableDuplicate: true,
+  }
+  const res = await api.delete(
+    `/api/channel/${channelId}/quota_protection/force_unlock`,
     config
   )
   return res.data

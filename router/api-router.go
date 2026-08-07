@@ -266,6 +266,8 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.GET("/:id/cpa/dispatch_audits", controller.GetCliproxyCPADispatchAudits)
 			channelRoute.POST("/:id/cpa/reset_credit", controller.ConsumeCliproxyCPAResetCredit)
 			channelRoute.POST("/:id/cpa/reset_quota", controller.ResetCliproxyCPAQuotaState)
+			channelRoute.POST("/:id/quota_protection/force_unlock", middleware.RootAuth(), middleware.CriticalRateLimit(), controller.ForceUnlockChannelQuotaProtection)
+			channelRoute.DELETE("/:id/quota_protection/force_unlock", middleware.RootAuth(), middleware.CriticalRateLimit(), controller.CancelChannelQuotaProtectionForceUnlock)
 			channelRoute.POST("/ollama/pull", controller.OllamaPullModel)
 			channelRoute.POST("/ollama/pull/stream", controller.OllamaPullModelStream)
 			channelRoute.DELETE("/ollama/delete", controller.OllamaDeleteModel)

@@ -50,6 +50,7 @@ DEFAULT_CONFIG = {
     "fail_closed_after_consecutive_failures": 3,
     "balance_units_per_percent": 1.0,
     "dynamic_daily_budget_enabled": False,
+    "manual_force_unlock": {},
     "timezone": "Asia/Shanghai",
     "quota_reset_increase_threshold_percent": 10.0,
     "quota_reset_increase_floor_percent": 5.0,
@@ -86,6 +87,7 @@ OPTION_CONFIG_MAP = {
     "cliproxy_cpa_quota_guard.min_remaining_percent_5h": ("min_remaining_percent_5h", "float"),
     "cliproxy_cpa_quota_guard.min_remaining_percent_7d": ("min_remaining_percent_7d", "float"),
     "cliproxy_cpa_quota_guard.dynamic_daily_budget_enabled": ("dynamic_daily_budget_enabled", "bool"),
+    "cliproxy_cpa_quota_guard.force_unlock": ("manual_force_unlock", "json"),
     "cliproxy_cpa_quota_guard.quota_reset_increase_threshold_percent": ("quota_reset_increase_threshold_percent", "float"),
     "cliproxy_cpa_quota_guard.quota_reset_increase_floor_percent": ("quota_reset_increase_floor_percent", "float"),
     "cliproxy_cpa_quota_guard.quota_reset_schedule_tolerance_sec": ("quota_reset_schedule_tolerance_sec", "float"),
@@ -218,6 +220,13 @@ where key in ({keys});
         elif value_type == "float":
             parsed = number(value)
             if parsed is not None:
+                overrides[config_key] = parsed
+        elif value_type == "json":
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
                 overrides[config_key] = parsed
     return overrides
 
@@ -2065,6 +2074,12 @@ def apply_dynamic_daily_budget(
         return result
 
     now = int(time.time()) if now is None else int(now)
+    force_unlock = config.get("manual_force_unlock")
+    if not isinstance(force_unlock, dict):
+        force_unlock = {}
+    force_unlock_requested = bool_value(force_unlock.get("active"), False)
+    force_unlock_until = int(number(force_unlock.get("until")) or 0)
+    force_unlock_cycle_signature = str(force_unlock.get("cycle_signature") or "").strip()
     budget_state = state.get("dynamic_daily_budget")
     if not isinstance(budget_state, dict):
         budget_state = {}
@@ -2239,7 +2254,19 @@ def apply_dynamic_daily_budget(
     remaining_today = calculated_remaining_today if daily_budget_available else 0.0
     next_daily_reset_at = next_guard_day_start(config, now)
     original_quota_ok = bool(result.get("quota_ok", result.get("within_share")))
-    quota_ok = original_quota_ok and hard_reserve_available and daily_budget_available
+    original_usable_balance = max(0.0, float(number(result.get("usable_balance_units")) or 0.0))
+    original_remaining_share = max(0.0, float(number(result.get("remaining_share_percent")) or 0.0))
+    current_cycle_signature = str(snapshot.get("planning_signature") or "").strip()
+    force_unlock_active = (
+        force_unlock_requested
+        and force_unlock_until > now
+        and bool(force_unlock_cycle_signature)
+        and bool(current_cycle_signature)
+        and force_unlock_cycle_signature == current_cycle_signature
+    )
+    quota_ok = original_quota_ok and (
+        force_unlock_active or (hard_reserve_available and daily_budget_available)
+    )
 
     budget_state.update({
         "last_remaining_percent": round(current_remaining, 6),
@@ -2265,22 +2292,40 @@ def apply_dynamic_daily_budget(
         "next_daily_budget_reset_at": next_daily_reset_at,
         "daily_exhausted": daily_exhausted,
         "quota_ok": quota_ok,
+        "manual_force_unlock_active": force_unlock_active,
+        "manual_force_unlock_until": force_unlock_until if force_unlock_until > 0 else None,
+        "manual_force_unlock_cycle_signature": force_unlock_cycle_signature or None,
     })
     state["dynamic_daily_budget"] = budget_state
 
     units_per_percent = max(0.0, float(number(config.get("balance_units_per_percent")) or 1.0))
     visible_balance = remaining_today * units_per_percent if quota_ok else 0.0
-    original_usable = max(0.0, float(number(result.get("usable_balance_units")) or 0.0))
-    if original_usable > 0:
-        visible_balance = min(visible_balance, original_usable)
+    if force_unlock_active and original_quota_ok:
+        visible_balance = original_usable_balance
+    elif original_usable_balance > 0:
+        visible_balance = min(visible_balance, original_usable_balance)
 
     result["guard_mode"] = "bucket_dynamic_daily_budget"
     result["quota_ok"] = quota_ok
     result["within_share"] = quota_ok
     result["usable_balance_units"] = round(visible_balance, 6)
-    result["remaining_share_percent"] = round(remaining_today if quota_ok else 0.0, 6)
+    result["remaining_share_percent"] = round(
+        original_remaining_share if force_unlock_active and original_quota_ok else remaining_today if quota_ok else 0.0,
+        6,
+    )
     result["dynamic_daily_budget"] = {"enabled": True, "applied": True, **budget_state}
+    result["manual_force_unlock"] = {
+        "active": force_unlock_active,
+        "until": force_unlock_until if force_unlock_until > 0 else None,
+        "cycle_signature": force_unlock_cycle_signature or None,
+        "scope": "dynamic_daily_budget_and_protected_reserve",
+        "upstream_quota_available": original_quota_ok,
+    }
     if not original_quota_ok:
+        return result
+    if force_unlock_active:
+        result.pop("quota_block", None)
+        result["reason"] = "manual_force_unlock_active"
         return result
     if not hard_reserve_available:
         result["reason"] = "protected_reserve_reached"

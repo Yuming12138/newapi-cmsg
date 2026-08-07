@@ -34,8 +34,12 @@ import {
   Trash2,
   RefreshCw,
   Loader2,
+  ShieldCheck,
+  ShieldOff,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+import { formatTimestampToDate } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -51,6 +55,10 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import {
+  cancelChannelQuotaProtectionForceUnlock,
+  forceUnlockChannelQuotaProtection,
+} from '../api'
 import { MODEL_FETCHABLE_TYPES } from '../constants'
 import {
   channelsQueryKeys,
@@ -68,17 +76,75 @@ interface DataTableRowActionsProps {
   row: Row<Channel>
 }
 
+type ChannelQuotaProtectionState = {
+  active: boolean
+  until: number | null
+  resetAt: number | null
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function timestampValue(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null
+}
+
+function channelQuotaProtectionState(
+  channel: Channel
+): ChannelQuotaProtectionState | null {
+  if (channel.id !== 12 || !channel.other_info) return null
+  try {
+    const otherInfo = recordValue(JSON.parse(channel.other_info))
+    const guard = recordValue(otherInfo?.cliproxy_cpa_quota_guard)
+    if (guard?.managed !== true) return null
+    const health = recordValue(guard.health)
+    const dynamicBudget = recordValue(health?.dynamic_daily_budget)
+    if (dynamicBudget?.applied !== true) return null
+    const manualOverride =
+      recordValue(health?.manual_force_unlock) ??
+      recordValue(guard.manual_force_unlock)
+    const until = timestampValue(manualOverride?.until)
+    const windows = recordValue(health?.windows)
+    const weeklyWindow = recordValue(windows?.['7d'])
+    const now = Math.floor(Date.now() / 1000)
+    const resetCandidates = [
+      timestampValue(dynamicBudget.next_daily_budget_reset_at),
+      timestampValue(dynamicBudget.weekly_reset_at),
+      timestampValue(dynamicBudget.effective_reset_at),
+      timestampValue(weeklyWindow?.reset_at),
+    ].filter((value): value is number => value != null && value > now)
+    const active =
+      manualOverride?.active === true && until != null && until > now
+    return {
+      active,
+      until,
+      resetAt: resetCandidates.length > 0 ? Math.min(...resetCandidates) : null,
+    }
+  } catch {
+    return null
+  }
+}
+
 export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const { t } = useTranslation()
   const channel = row.original
   const { setOpen, setCurrentRow, upstream } = useChannels()
   const queryClient = useQueryClient()
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [quotaProtectionConfirmOpen, setQuotaProtectionConfirmOpen] =
+    useState(false)
   const [isTesting, setIsTesting] = useState(false)
   const [isTogglingStatus, setIsTogglingStatus] = useState(false)
+  const [isUpdatingQuotaProtection, setIsUpdatingQuotaProtection] =
+    useState(false)
 
   const isEnabled = isChannelEnabled(channel)
   const isMultiKey = isMultiKeyChannel(channel)
+  const quotaProtection = channelQuotaProtectionState(channel)
 
   const handleEdit = () => {
     setCurrentRow(channel)
@@ -94,13 +160,9 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     e.stopPropagation()
     setIsTesting(true)
     try {
-      await handleTestChannel(
-        channel.id,
-        { channelName: channel.name },
-        () => {
-          queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
-        }
-      )
+      await handleTestChannel(channel.id, { channelName: channel.name }, () => {
+        queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+      })
     } finally {
       setIsTesting(false)
     }
@@ -143,11 +205,45 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     }
   }
 
+  const handleQuotaProtectionConfirm = async () => {
+    if (!quotaProtection) return
+    setIsUpdatingQuotaProtection(true)
+    try {
+      const response = quotaProtection.active
+        ? await cancelChannelQuotaProtectionForceUnlock(channel.id)
+        : await forceUnlockChannelQuotaProtection(channel.id)
+      if (!response.success) {
+        toast.error(response.message || t('Failed to update quota protection'))
+        return
+      }
+      toast.success(
+        quotaProtection.active
+          ? t('Channel 12 quota protection restored')
+          : t('Channel 12 quota protection force-unlocked')
+      )
+      setQuotaProtectionConfirmOpen(false)
+      await queryClient.invalidateQueries({
+        queryKey: channelsQueryKeys.lists(),
+      })
+    } catch {
+      toast.error(t('Failed to update quota protection'))
+    } finally {
+      setIsUpdatingQuotaProtection(false)
+    }
+  }
+
   let statusIcon = <Power className='size-4' />
   if (isTogglingStatus) {
     statusIcon = <Loader2 className='size-4 animate-spin' />
   } else if (isEnabled) {
     statusIcon = <PowerOff className='size-4' />
+  }
+
+  let quotaProtectionConfirmText = t('Force unlock until reset')
+  if (isUpdatingQuotaProtection) {
+    quotaProtectionConfirmText = t('Updating')
+  } else if (quotaProtection?.active) {
+    quotaProtectionConfirmText = t('Restore protection')
   }
 
   return (
@@ -245,6 +341,31 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             </DropdownMenuShortcut>
           </DropdownMenuItem>
 
+          {quotaProtection && (
+            <DropdownMenuItem
+              onSelect={(event) => {
+                event.preventDefault()
+                setQuotaProtectionConfirmOpen(true)
+              }}
+              className={
+                quotaProtection.active
+                  ? undefined
+                  : 'text-amber-700 focus:text-amber-700 dark:text-amber-400 dark:focus:text-amber-400'
+              }
+            >
+              {quotaProtection.active
+                ? t('Restore channel 12 quota protection')
+                : t('Force unlock channel 12 quota protection')}
+              <DropdownMenuShortcut>
+                {quotaProtection.active ? (
+                  <ShieldCheck size={16} />
+                ) : (
+                  <ShieldOff size={16} />
+                )}
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+          )}
+
           {/* Fetch Models */}
           <DropdownMenuItem onClick={handleFetchModels}>
             {t('Fetch Models')}
@@ -327,6 +448,47 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <ConfirmDialog
+        open={quotaProtectionConfirmOpen}
+        onOpenChange={setQuotaProtectionConfirmOpen}
+        title={
+          quotaProtection?.active
+            ? t('Restore channel 12 quota protection?')
+            : t('Force unlock channel 12 quota protection?')
+        }
+        desc={
+          quotaProtection?.active ? (
+            t(
+              'The automatic daily budget and protected reserve checks will resume on the next guard run (within about one minute).'
+            )
+          ) : (
+            <div className='space-y-2 text-sm'>
+              <p>
+                {t(
+                  'This temporarily bypasses only the New API daily budget and protected reserve for channel 12. It does not consume a reset credit or bypass actual CPA quota exhaustion or account unavailability.'
+                )}
+              </p>
+              <p className='text-muted-foreground'>
+                {t(
+                  'The override expires automatically at the detected reset boundary: {{time}}.',
+                  {
+                    time: formatTimestampToDate(
+                      quotaProtection?.resetAt ??
+                        quotaProtection?.until ??
+                        undefined
+                    ),
+                  }
+                )}
+              </p>
+            </div>
+          )
+        }
+        confirmText={quotaProtectionConfirmText}
+        destructive={!quotaProtection?.active}
+        isLoading={isUpdatingQuotaProtection}
+        handleConfirm={handleQuotaProtectionConfirm}
+      />
 
       <ConfirmDialog
         open={deleteConfirmOpen}
