@@ -1,0 +1,13 @@
+[Unit]
+Description=Run New API ASXS automatic daily reset guard every minute
+
+[Timer]
+OnBootSec=120s
+OnUnitInactiveSec=60s
+AccuracySec=5s
+RandomizedDelaySec=5s
+Persistent=true
+Unit=new-api-asxs-auto-daily-reset.service
+
+[Install]
+WantedBy=timers.target
