@@ -27,7 +27,7 @@ NOW = 1_800_000_000.0
 
 def billing_payload(
     *,
-    usage: float = 95.0,
+    usage: float = 99.0,
     eligible: bool = True,
     limit_reached: bool = False,
     remaining_days: float = 10.0,
@@ -98,6 +98,22 @@ class SelectionTest(unittest.TestCase):
         self.assertIsNone(candidate)
         self.assertEqual(1, summary["threshold_rejected_count"])
 
+    def test_default_threshold_triggers_only_at_99_percent(self) -> None:
+        candidate, summary = guard.select_candidate(
+            self.config, billing_payload(usage=98.99), self.state, NOW
+        )
+
+        self.assertIsNone(candidate)
+        self.assertEqual(99.0, summary["threshold_percent"])
+        self.assertEqual(1, summary["threshold_rejected_count"])
+
+        candidate, summary = guard.select_candidate(
+            self.config, billing_payload(usage=99.0), self.state, NOW
+        )
+
+        self.assertIsNotNone(candidate)
+        self.assertEqual(99.0, summary["threshold_percent"])
+
     def test_limit_reached_is_rejected(self) -> None:
         candidate, summary = guard.select_candidate(
             self.config, billing_payload(limit_reached=True), self.state, NOW
@@ -151,7 +167,7 @@ class StateAndTokenTest(unittest.TestCase):
                 subscription_id=SUBSCRIPTION_ID,
                 target_hash=guard.hash_target(SUBSCRIPTION_ID),
                 usage_percent=95.0,
-                threshold_percent=90.0,
+                threshold_percent=99.0,
                 remaining_days=10.0,
                 used_today=2,
                 daily_limit=4,
