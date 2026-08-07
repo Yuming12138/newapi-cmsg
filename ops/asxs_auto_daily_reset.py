@@ -37,7 +37,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "state_path": "/opt/new-api/ops/asxs_auto_daily_reset_state.json",
     "lock_path": "/run/lock/new-api-asxs-auto-daily-reset.lock",
     "timeout_sec": 20,
-    "minimum_usage_percent": 90.0,
+    "minimum_usage_percent": 99.0,
     "minimum_remaining_days_after_reset": 2,
     "target_cooldown_sec": 300,
     "max_resets_per_run": 1,
