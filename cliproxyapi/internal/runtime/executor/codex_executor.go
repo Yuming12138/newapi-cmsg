@@ -813,6 +813,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 	if errReplay != nil {
 		return resp, errReplay
 	}
+	body = normalizeCodexNamespacedCustomToolHistory(body)
 	reporter.SetTranslatedReasoningEffort(body, to.String())
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
@@ -984,6 +985,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	body = normalizeCodexInstructions(body)
 	body = sanitizeOpenAIResponsesReasoningEncryptedContent(ctx, "codex executor", body)
 	body = normalizeCodexParallelToolCalls(body, opts.Headers)
+	body = normalizeCodexNamespacedCustomToolHistory(body)
 	reporter.SetTranslatedReasoningEffort(body, to.String())
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses/compact"
@@ -1100,6 +1102,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 	if errReplay != nil {
 		return nil, errReplay
 	}
+	body = normalizeCodexNamespacedCustomToolHistory(body)
 	reporter.SetTranslatedReasoningEffort(body, to.String())
 
 	url := strings.TrimSuffix(baseURL, "/") + "/responses"
@@ -1799,6 +1802,30 @@ func normalizeCodexInstructions(body []byte) []byte {
 	instructions := gjson.GetBytes(body, "instructions")
 	if !instructions.Exists() || instructions.Type == gjson.Null {
 		body, _ = sjson.SetBytes(body, "instructions", "")
+	}
+	return body
+}
+
+// normalizeCodexNamespacedCustomToolHistory removes the namespace field only
+// from custom-tool history items. The Codex upstream accepts namespace on
+// function-call history and namespace tool declarations, but rejects it on
+// custom_tool_call history as an unknown parameter. Call IDs remain unchanged,
+// so same-named custom tools from different namespaces stay paired with their
+// respective outputs without flattening the declared namespace tool tree.
+func normalizeCodexNamespacedCustomToolHistory(body []byte) []byte {
+	input := gjson.GetBytes(body, "input")
+	if !input.IsArray() {
+		return body
+	}
+
+	for index, item := range input.Array() {
+		switch strings.TrimSpace(item.Get("type").String()) {
+		case "custom_tool_call", "custom_tool_call_output":
+			if !item.Get("namespace").Exists() {
+				continue
+			}
+			body, _ = sjson.DeleteBytes(body, fmt.Sprintf("input.%d.namespace", index))
+		}
 	}
 	return body
 }
