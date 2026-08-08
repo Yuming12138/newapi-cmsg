@@ -3692,7 +3692,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			}
 		} else {
 			if result.Model != "" {
-				if !isRequestScopedNotFoundResultError(result.Error) {
+				if !isRequestInvalidResultError(result.Error) {
 					disableCooling := m.cooldownDisabledForAuth(auth)
 					state := ensureModelState(auth, result.Model)
 					state.Unavailable = true
@@ -4259,11 +4259,8 @@ func isRequestScopedNotFoundMessage(message string) bool {
 		strings.Contains(lower, "items are not persisted when `store` is set to false")
 }
 
-func isRequestScopedNotFoundResultError(err *Error) bool {
-	if err == nil || statusCodeFromResult(err) != http.StatusNotFound {
-		return false
-	}
-	return isRequestScopedNotFoundMessage(err.Message)
+func isRequestInvalidResultError(err *Error) bool {
+	return err != nil && isRequestInvalidError(err)
 }
 
 // isRequestInvalidError returns true if the error represents a client request
@@ -4289,7 +4286,10 @@ func isRequestInvalidError(err error) bool {
 	switch status {
 	case http.StatusBadRequest:
 		msg := err.Error()
+		msgLower := strings.ToLower(msg)
 		return strings.Contains(msg, "invalid_request_error") ||
+			strings.Contains(msgLower, "unknown parameter") ||
+			strings.Contains(msgLower, "unknown_parameter") ||
 			strings.Contains(msg, "INVALID_ARGUMENT") ||
 			strings.Contains(msg, "FAILED_PRECONDITION")
 	case http.StatusNotFound:
@@ -4309,7 +4309,7 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 	if auth == nil {
 		return
 	}
-	if isRequestScopedNotFoundResultError(resultErr) {
+	if isRequestInvalidResultError(resultErr) {
 		return
 	}
 	auth.Unavailable = true

@@ -63,7 +63,7 @@ func TestCacheGetRandomSatisfiedChannelUsesPreferredThenFallbackGroup(t *testing
 	cfg.SourceGroups = []string{"asxs"}
 	cfg.ModelPrefixes = []string{"gpt-5.6-sol", "gpt-image"}
 	cfg.PreferredGroup = "cliproxy-codex"
-	cfg.FallbackGroup = "asxs"
+	cfg.FallbackGroup = "asxs-gpt56-direct"
 	t.Cleanup(func() { *cfg = originalCfg })
 
 	originalDB := model.DB
@@ -83,13 +83,13 @@ func TestCacheGetRandomSatisfiedChannelUsesPreferredThenFallbackGroup(t *testing
 
 	priority := int64(0)
 	channels := []model.Channel{
-		{Id: 1, Name: "asxs-cgm-1.2", Group: "asxs", Models: "gpt-5.6-sol", Status: common.ChannelStatusEnabled, Key: "test", Priority: &priority},
+		{Id: 27, Name: "asxs-gpt56-direct", Group: "asxs-gpt56-direct", Models: "gpt-5.6-sol", Status: common.ChannelStatusEnabled, Key: "test", Priority: &priority},
 		{Id: 12, Name: "cliproxy-codex-pool", Group: "cliproxy-codex", Models: "gpt-5.6-sol", Status: common.ChannelStatusEnabled, Key: "test", Priority: &priority},
 		{Id: 23, Name: "cliproxy-image-pool", Group: "cliproxy-codex", Models: "gpt-image-2", Status: common.ChannelStatusEnabled, Key: "test", Priority: &priority},
 	}
 	require.NoError(t, db.Create(&channels).Error)
 	abilities := []model.Ability{
-		{Group: "asxs", Model: "gpt-5.6-sol", ChannelId: 1, Enabled: true, Priority: &priority},
+		{Group: "asxs-gpt56-direct", Model: "gpt-5.6-sol", ChannelId: 27, Enabled: true, Priority: &priority},
 		{Group: "cliproxy-codex", Model: "gpt-5.6-sol", ChannelId: 12, Enabled: true, Priority: &priority},
 		{Group: "cliproxy-codex", Model: "gpt-image-2", ChannelId: 23, Enabled: true, Priority: &priority},
 	}
@@ -124,8 +124,18 @@ func TestCacheGetRandomSatisfiedChannelUsesPreferredThenFallbackGroup(t *testing
 	channel, group, err = CacheGetRandomSatisfiedChannel(&RetryParam{
 		Ctx: preferredContext, TokenGroup: "asxs", ModelName: "gpt-5.6-sol", Retry: common.GetPointer(1),
 	})
-	require.Error(t, err)
-	require.Nil(t, channel)
+	require.NoError(t, err)
+	require.Equal(t, 27, channel.Id)
+	require.Empty(t, channel.GetModelMapping())
+	require.Equal(t, "asxs-gpt56-direct", group)
+	require.Equal(t, "asxs-gpt56-direct", common.GetContextKeyString(preferredContext, constant.ContextKeyAutoGroup))
+
+	newRequestAfterRecovery := newContext()
+	channel, group, err = CacheGetRandomSatisfiedChannel(&RetryParam{
+		Ctx: newRequestAfterRecovery, TokenGroup: "asxs", ModelName: "gpt-5.6-sol", Retry: common.GetPointer(0),
+	})
+	require.NoError(t, err)
+	require.Equal(t, 12, channel.Id)
 	require.Equal(t, "cliproxy-codex", group)
 
 	require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 12).Update("status", common.ChannelStatusAutoDisabled).Error)
@@ -135,7 +145,7 @@ func TestCacheGetRandomSatisfiedChannelUsesPreferredThenFallbackGroup(t *testing
 		Ctx: fallbackContext, TokenGroup: "asxs", ModelName: "gpt-5.6-sol", Retry: common.GetPointer(0),
 	})
 	require.NoError(t, err)
-	require.Equal(t, 1, channel.Id)
-	require.Equal(t, "asxs", group)
-	require.Equal(t, "asxs", common.GetContextKeyString(fallbackContext, constant.ContextKeyAutoGroup))
+	require.Equal(t, 27, channel.Id)
+	require.Equal(t, "asxs-gpt56-direct", group)
+	require.Equal(t, "asxs-gpt56-direct", common.GetContextKeyString(fallbackContext, constant.ContextKeyAutoGroup))
 }
