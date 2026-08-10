@@ -7,16 +7,17 @@ import (
 )
 
 type ChannelSettings struct {
-	ForceFormat                 bool   `json:"force_format,omitempty"`
-	ThinkingToContent           bool   `json:"thinking_to_content,omitempty"`
-	Proxy                       string `json:"proxy"`
-	PassThroughBodyEnabled      bool   `json:"pass_through_body_enabled,omitempty"`
-	SystemPrompt                string `json:"system_prompt,omitempty"`
-	SystemPromptOverride        bool   `json:"system_prompt_override,omitempty"`
-	NewAPIBalanceAccessToken    string `json:"new_api_balance_access_token,omitempty"`
-	NewAPIBalanceAccessTokenEnv string `json:"new_api_balance_access_token_env,omitempty"`
-	NewAPIBalanceUserID         string `json:"new_api_balance_user_id,omitempty"`
-	NewAPIBalanceUserIDEnv      string `json:"new_api_balance_user_id_env,omitempty"`
+	ForceFormat                  bool   `json:"force_format,omitempty"`
+	ThinkingToContent            bool   `json:"thinking_to_content,omitempty"`
+	Proxy                        string `json:"proxy"`
+	PassThroughBodyEnabled       bool   `json:"pass_through_body_enabled,omitempty"`
+	SystemPrompt                 string `json:"system_prompt,omitempty"`
+	SystemPromptOverride         bool   `json:"system_prompt_override,omitempty"`
+	ResponseHeaderTimeoutSeconds int    `json:"response_header_timeout_seconds,omitempty"`
+	NewAPIBalanceAccessToken     string `json:"new_api_balance_access_token,omitempty"`
+	NewAPIBalanceAccessTokenEnv  string `json:"new_api_balance_access_token_env,omitempty"`
+	NewAPIBalanceUserID          string `json:"new_api_balance_user_id,omitempty"`
+	NewAPIBalanceUserIDEnv       string `json:"new_api_balance_user_id_env,omitempty"`
 }
 
 type VertexKeyType string

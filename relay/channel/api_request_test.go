@@ -98,6 +98,39 @@ func TestNewDoRequestFailedErrorSanitizesLogAndKeepsErrorCode(t *testing.T) {
 	require.Equal(t, "upstream error: do request failed", apiErr.Error())
 }
 
+func TestNewDoRequestFailedErrorClassifiesActiveRequestTimeoutAsGatewayTimeout(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	original := &url.Error{
+		Op:  http.MethodPost,
+		URL: "https://example.test/v1/responses",
+		Err: context.DeadlineExceeded,
+	}
+
+	apiErr := newDoRequestFailedError(ctx, original)
+
+	require.Equal(t, http.StatusGatewayTimeout, apiErr.StatusCode)
+	require.Equal(t, types.ErrorCodeChannelResponseTimeExceeded, apiErr.GetErrorCode())
+	require.Equal(t, "upstream timeout while waiting for response headers", apiErr.Error())
+}
+
+func TestNewDoRequestFailedErrorDoesNotRelabelCanceledParentRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	requestContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
+
+	apiErr := newDoRequestFailedError(ctx, context.DeadlineExceeded)
+
+	require.Equal(t, http.StatusInternalServerError, apiErr.StatusCode)
+	require.Equal(t, types.ErrorCodeDoRequestFailed, apiErr.GetErrorCode())
+}
+
 func TestApplyUpstreamRequestID(t *testing.T) {
 	t.Parallel()
 

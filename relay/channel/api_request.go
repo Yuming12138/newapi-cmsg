@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -326,6 +327,14 @@ func newWSSDialError(fullRequestURL string, err error) error {
 func newDoRequestFailedError(c *gin.Context, err error) *types.NewAPIError {
 	sanitizedErr := common.SanitizeURLErrorForLog(err)
 	logger.LogError(c, "do request failed: "+sanitizedErr.Error())
+	var timeoutErr net.Error
+	requestContextActive := c == nil || c.Request == nil || c.Request.Context().Err() == nil
+	if requestContextActive && errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return types.NewError(sanitizedErr, types.ErrorCodeChannelResponseTimeExceeded,
+			types.ErrOptionWithStatusCode(http.StatusGatewayTimeout),
+			types.ErrOptionWithHideErrMsg("upstream timeout while waiting for response headers"),
+		)
+	}
 	return types.NewError(sanitizedErr, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
 }
 
@@ -522,15 +531,13 @@ func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	return doRequest(c, req, info)
 }
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
-	var client *http.Client
-	var err error
-	if info.ChannelSetting.Proxy != "" {
-		client, err = service.NewProxyHttpClient(info.ChannelSetting.Proxy)
-		if err != nil {
-			return nil, fmt.Errorf("new proxy http client failed: %w", err)
-		}
-	} else {
-		client = service.GetHttpClient()
+	responseHeaderTimeout := time.Duration(0)
+	if info.IsStream && info.ChannelSetting.ResponseHeaderTimeoutSeconds > 0 {
+		responseHeaderTimeout = time.Duration(info.ChannelSetting.ResponseHeaderTimeoutSeconds) * time.Second
+	}
+	client, err := service.GetHttpClientWithProxyAndResponseHeaderTimeout(info.ChannelSetting.Proxy, responseHeaderTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("new relay http client failed: %w", err)
 	}
 
 	var stopPinger context.CancelFunc
