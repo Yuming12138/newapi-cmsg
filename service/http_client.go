@@ -24,13 +24,19 @@ var (
 		clients: make(map[string]*http.Client),
 		aliases: make(map[string]string),
 	}
-	legacyProxyURLWarnings sync.Map
+	responseHeaderTimeoutClients sync.Map
+	legacyProxyURLWarnings       sync.Map
 )
 
 type proxyHTTPClientCache struct {
 	mutex   sync.RWMutex
 	clients map[string]*http.Client
 	aliases map[string]string
+}
+
+type responseHeaderTimeoutClientKey struct {
+	baseClient *http.Client
+	timeout    time.Duration
 }
 
 type proxyURLConfig struct {
@@ -97,6 +103,7 @@ func newRelayHTTPClient(transport *http.Transport) *http.Client {
 }
 
 func InitHttpClient() {
+	resetResponseHeaderTimeoutClients()
 	transport := newRelayHTTPTransport()
 	transport.Proxy = http.ProxyFromEnvironment
 	httpClient = newRelayHTTPClient(transport)
@@ -268,6 +275,59 @@ func GetHttpClientWithProxy(rawProxyURL string) (*http.Client, error) {
 	return proxyClients.getOrCreate(trimmedProxyURL, config)
 }
 
+func clientWithResponseHeaderTimeout(baseClient *http.Client, timeout time.Duration) (*http.Client, error) {
+	if timeout <= 0 {
+		return baseClient, nil
+	}
+	if baseClient == nil {
+		baseClient = http.DefaultClient
+	}
+	key := responseHeaderTimeoutClientKey{baseClient: baseClient, timeout: timeout}
+	if cached, ok := responseHeaderTimeoutClients.Load(key); ok {
+		return cached.(*http.Client), nil
+	}
+
+	baseTransport := baseClient.Transport
+	if baseTransport == nil {
+		baseTransport = http.DefaultTransport
+	}
+	transport, ok := baseTransport.(*http.Transport)
+	if !ok || transport == nil {
+		return nil, fmt.Errorf("response header timeout requires *http.Transport, got %T", baseTransport)
+	}
+	clonedTransport := transport.Clone()
+	clonedTransport.ResponseHeaderTimeout = timeout
+	clonedClient := *baseClient
+	clonedClient.Transport = clonedTransport
+
+	actual, loaded := responseHeaderTimeoutClients.LoadOrStore(key, &clonedClient)
+	if loaded {
+		clonedTransport.CloseIdleConnections()
+		return actual.(*http.Client), nil
+	}
+	return &clonedClient, nil
+}
+
+// GetHttpClientWithProxyAndResponseHeaderTimeout returns a cached relay client
+// whose timeout applies only while waiting for upstream response headers.
+func GetHttpClientWithProxyAndResponseHeaderTimeout(rawProxyURL string, timeout time.Duration) (*http.Client, error) {
+	baseClient, err := GetHttpClientWithProxy(rawProxyURL)
+	if err != nil {
+		return nil, err
+	}
+	return clientWithResponseHeaderTimeout(baseClient, timeout)
+}
+
+func resetResponseHeaderTimeoutClients() {
+	responseHeaderTimeoutClients.Range(func(key, value any) bool {
+		if client, ok := value.(*http.Client); ok && client != nil {
+			client.CloseIdleConnections()
+		}
+		responseHeaderTimeoutClients.Delete(key)
+		return true
+	})
+}
+
 // InvalidateProxyClient removes one proxy client and closes its idle connections.
 func InvalidateProxyClient(rawProxyURL string) {
 	parsedURL, legacySuffixStripped, err := common.ParseProxyURLRuntime(rawProxyURL)
@@ -280,11 +340,13 @@ func InvalidateProxyClient(rawProxyURL string) {
 	}
 	if client := proxyClients.remove(config.cacheKey); client != nil {
 		client.CloseIdleConnections()
+		resetResponseHeaderTimeoutClients()
 	}
 }
 
 // ResetProxyClientCache clears all cached proxy clients.
 func ResetProxyClientCache() {
+	resetResponseHeaderTimeoutClients()
 	for _, client := range proxyClients.reset() {
 		client.CloseIdleConnections()
 	}
