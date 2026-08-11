@@ -329,6 +329,12 @@ func newDoRequestFailedError(c *gin.Context, err error) *types.NewAPIError {
 	logger.LogError(c, "do request failed: "+sanitizedErr.Error())
 	var timeoutErr net.Error
 	requestContextActive := c == nil || c.Request == nil || c.Request.Context().Err() == nil
+	if requestContextActive && errors.Is(err, service.ErrPreResponseTimeout) {
+		return types.NewError(sanitizedErr, types.ErrorCodeChannelResponseTimeExceeded,
+			types.ErrOptionWithStatusCode(http.StatusGatewayTimeout),
+			types.ErrOptionWithHideErrMsg("upstream timeout while sending request or waiting for response headers"),
+		)
+	}
 	if requestContextActive && errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
 		return types.NewError(sanitizedErr, types.ErrorCodeChannelResponseTimeExceeded,
 			types.ErrOptionWithStatusCode(http.StatusGatewayTimeout),
@@ -560,7 +566,8 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
-	resp, err := client.Do(req)
+	preResponseTimeout := time.Duration(info.ChannelSetting.PreResponseTimeoutSeconds) * time.Second
+	resp, err := service.DoRequestWithPreResponseTimeout(client, req, preResponseTimeout)
 	if err != nil {
 		return nil, newDoRequestFailedError(c, err)
 	}

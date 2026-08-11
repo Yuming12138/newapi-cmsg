@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -165,4 +166,129 @@ func TestClientWithResponseHeaderTimeoutDoesNotLimitBodyAfterHeaders(t *testing.
 	if string(body) != "stream complete" {
 		t.Fatalf("body = %q, want %q", body, "stream complete")
 	}
+}
+
+func TestDoRequestWithPreResponseTimeoutStopsBlockedRequestUpload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	reader, writer := io.Pipe()
+	defer func() { _ = reader.Close() }()
+	defer func() { _ = writer.Close() }()
+	req, err := http.NewRequest(http.MethodPost, server.URL, reader)
+	if err != nil {
+		t.Fatalf("http.NewRequest() error = %v", err)
+	}
+	writeDone := make(chan error, 1)
+	go func() {
+		_, writeErr := writer.Write([]byte("partial request body"))
+		writeDone <- writeErr
+	}()
+
+	started := time.Now()
+	resp, err := DoRequestWithPreResponseTimeout(http.DefaultClient, req, 40*time.Millisecond)
+	elapsed := time.Since(started)
+	_ = writer.Close()
+	if writeErr := <-writeDone; writeErr != nil && !errors.Is(writeErr, io.ErrClosedPipe) {
+		t.Fatalf("write request body prefix error = %v", writeErr)
+	}
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if !errors.Is(err, ErrPreResponseTimeout) {
+		t.Fatalf("request error = %v, want ErrPreResponseTimeout", err)
+	}
+	if elapsed >= 200*time.Millisecond {
+		t.Fatalf("pre-response timeout elapsed = %s, want less than 200ms", elapsed)
+	}
+}
+
+func TestDoRequestWithPreResponseTimeoutDoesNotLimitBodyAfterHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		time.Sleep(100 * time.Millisecond)
+		_, _ = io.WriteString(w, "stream complete")
+	}))
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest() error = %v", err)
+	}
+	resp, err := DoRequestWithPreResponseTimeout(http.DefaultClient, req, 25*time.Millisecond)
+	if err != nil {
+		t.Fatalf("request failed after headers were flushed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body after pre-response timeout window: %v", err)
+	}
+	if string(body) != "stream complete" {
+		t.Fatalf("body = %q, want %q", body, "stream complete")
+	}
+}
+
+func TestDoRequestWithPreResponseTimeoutPreservesParentCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	parentCtx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(parentCtx, http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatalf("http.NewRequestWithContext() error = %v", err)
+	}
+	time.AfterFunc(20*time.Millisecond, cancel)
+
+	resp, err := DoRequestWithPreResponseTimeout(http.DefaultClient, req, 150*time.Millisecond)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("request error = %v, want context.Canceled", err)
+	}
+	if errors.Is(err, ErrPreResponseTimeout) {
+		t.Fatalf("parent cancellation was mislabeled as pre-response timeout: %v", err)
+	}
+}
+
+func TestDoRequestWithPreResponseTimeoutZeroKeepsOriginalRequest(t *testing.T) {
+	req, err := http.NewRequest(http.MethodGet, "https://example.test", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest() error = %v", err)
+	}
+	var gotRequest *http.Request
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		gotRequest = request
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Body:       http.NoBody,
+			Header:     make(http.Header),
+			Request:    request,
+		}, nil
+	})}
+
+	resp, err := DoRequestWithPreResponseTimeout(client, req, 0)
+	if err != nil {
+		t.Fatalf("DoRequestWithPreResponseTimeout() error = %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if gotRequest != req {
+		t.Fatal("zero timeout should pass the original request to the client")
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
 }
