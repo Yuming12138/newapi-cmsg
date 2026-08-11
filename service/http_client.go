@@ -3,11 +3,13 @@ package service
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -37,6 +39,35 @@ type proxyHTTPClientCache struct {
 type responseHeaderTimeoutClientKey struct {
 	baseClient *http.Client
 	timeout    time.Duration
+}
+
+// ErrPreResponseTimeout identifies a timeout while sending the upstream
+// request or waiting for its response headers. It intentionally unwraps to
+// context.DeadlineExceeded so existing timeout classification keeps working.
+var ErrPreResponseTimeout = fmt.Errorf("upstream pre-response timeout: %w", context.DeadlineExceeded)
+
+type cancelOnCloseReadCloser struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (body *cancelOnCloseReadCloser) release() {
+	body.once.Do(body.cancel)
+}
+
+func (body *cancelOnCloseReadCloser) Read(p []byte) (int, error) {
+	n, err := body.ReadCloser.Read(p)
+	if err != nil {
+		body.release()
+	}
+	return n, err
+}
+
+func (body *cancelOnCloseReadCloser) Close() error {
+	err := body.ReadCloser.Close()
+	body.release()
+	return err
 }
 
 type proxyURLConfig struct {
@@ -316,6 +347,65 @@ func GetHttpClientWithProxyAndResponseHeaderTimeout(rawProxyURL string, timeout 
 		return nil, err
 	}
 	return clientWithResponseHeaderTimeout(baseClient, timeout)
+}
+
+// DoRequestWithPreResponseTimeout limits only the phase before client.Do
+// returns: connection setup, request-body upload, and response-header wait.
+// Once headers arrive, the timer is stopped and the response body (including
+// an SSE stream) may continue until its normal completion or parent cancel.
+func DoRequestWithPreResponseTimeout(client *http.Client, req *http.Request, timeout time.Duration) (*http.Response, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	if timeout <= 0 || req == nil {
+		return client.Do(req)
+	}
+
+	parentCtx := req.Context()
+	requestCtx, cancel := context.WithCancel(parentCtx)
+	timedOut := atomic.Bool{}
+	timerDone := make(chan struct{})
+	timer := time.AfterFunc(timeout, func() {
+		timedOut.Store(true)
+		cancel()
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+		close(timerDone)
+	})
+
+	resp, err := client.Do(req.Clone(requestCtx))
+	if !timer.Stop() {
+		<-timerDone
+	}
+
+	if timedOut.Load() {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		cancel()
+		if parentCtx.Err() == nil {
+			return nil, ErrPreResponseTimeout
+		}
+		if err != nil {
+			return nil, err
+		}
+		return nil, parentCtx.Err()
+	}
+	if err != nil {
+		cancel()
+		return resp, err
+	}
+	if resp == nil || resp.Body == nil {
+		cancel()
+		return resp, nil
+	}
+
+	resp.Body = &cancelOnCloseReadCloser{
+		ReadCloser: resp.Body,
+		cancel:     cancel,
+	}
+	return resp, nil
 }
 
 func resetResponseHeaderTimeoutClients() {

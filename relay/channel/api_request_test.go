@@ -11,6 +11,7 @@ import (
 
 	common2 "github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -115,6 +116,19 @@ func TestNewDoRequestFailedErrorClassifiesActiveRequestTimeoutAsGatewayTimeout(t
 	require.Equal(t, http.StatusGatewayTimeout, apiErr.StatusCode)
 	require.Equal(t, types.ErrorCodeChannelResponseTimeExceeded, apiErr.GetErrorCode())
 	require.Equal(t, "upstream timeout while waiting for response headers", apiErr.Error())
+}
+
+func TestNewDoRequestFailedErrorClassifiesPreResponseTimeout(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	apiErr := newDoRequestFailedError(ctx, service.ErrPreResponseTimeout)
+
+	require.Equal(t, http.StatusGatewayTimeout, apiErr.StatusCode)
+	require.Equal(t, types.ErrorCodeChannelResponseTimeExceeded, apiErr.GetErrorCode())
+	require.Equal(t, "upstream timeout while sending request or waiting for response headers", apiErr.Error())
 }
 
 func TestNewDoRequestFailedErrorDoesNotRelabelCanceledParentRequest(t *testing.T) {

@@ -14,6 +14,7 @@ type ChannelSettings struct {
 	SystemPrompt                 string `json:"system_prompt,omitempty"`
 	SystemPromptOverride         bool   `json:"system_prompt_override,omitempty"`
 	ResponseHeaderTimeoutSeconds int    `json:"response_header_timeout_seconds,omitempty"`
+	PreResponseTimeoutSeconds    int    `json:"pre_response_timeout_seconds,omitempty"`
 	NewAPIBalanceAccessToken     string `json:"new_api_balance_access_token,omitempty"`
 	NewAPIBalanceAccessTokenEnv  string `json:"new_api_balance_access_token_env,omitempty"`
 	NewAPIBalanceUserID          string `json:"new_api_balance_user_id,omitempty"`
