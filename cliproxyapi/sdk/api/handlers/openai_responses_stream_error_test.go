@@ -46,3 +46,35 @@ func TestBuildOpenAIResponsesStreamErrorChunkExtractsHTTPErrorBody(t *testing.T)
 		t.Fatalf("message = %v, want %q", payload["message"], "oops")
 	}
 }
+
+func TestBuildOpenAIResponsesStreamFailedChunkPreservesNestedError(t *testing.T) {
+	chunk := BuildOpenAIResponsesStreamFailedChunk(
+		http.StatusBadRequest,
+		`{"error":{"type":"invalid_request","code":"cyber_policy","message":"blocked","param":null}}`,
+		0,
+	)
+
+	var payload struct {
+		Type           string `json:"type"`
+		SequenceNumber int    `json:"sequence_number"`
+		Response       struct {
+			Status string `json:"status"`
+			Error  struct {
+				Type    string `json:"type"`
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(chunk, &payload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if payload.Type != "response.failed" || payload.Response.Status != "failed" {
+		t.Fatalf("unexpected response.failed payload: %#v", payload)
+	}
+	if payload.Response.Error.Type != "invalid_request" ||
+		payload.Response.Error.Code != "cyber_policy" ||
+		payload.Response.Error.Message != "blocked" {
+		t.Fatalf("nested error was not preserved: %#v", payload.Response.Error)
+	}
+}

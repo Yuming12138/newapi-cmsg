@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -358,8 +359,36 @@ func writeResponsesStreamErrorEvent(c *gin.Context, errMsg *interfaces.ErrorMess
 	if errMsg.Error != nil && errMsg.Error.Error() != "" {
 		errText = errMsg.Error.Error()
 	}
+	if isCodexResponsesClientRequest(c) {
+		chunk := handlers.BuildOpenAIResponsesStreamFailedChunk(status, errText, 0)
+		_, _ = fmt.Fprintf(c.Writer, "\nevent: response.failed\ndata: %s\n\n", string(chunk))
+		return
+	}
 	chunk := handlers.BuildOpenAIResponsesStreamErrorChunk(status, errText, 0)
 	_, _ = fmt.Fprintf(c.Writer, "\nevent: error\ndata: %s\n\n", string(chunk))
+}
+
+// isCodexResponsesClientRequest limits the alternate terminal event to official Codex clients.
+func isCodexResponsesClientRequest(c *gin.Context) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	userAgent := strings.TrimSpace(c.GetHeader("User-Agent"))
+	if strings.HasPrefix(userAgent, "Codex Desktop/") ||
+		strings.HasPrefix(userAgent, "codex-tui/") ||
+		userAgent == "codex_cli_rs" ||
+		strings.HasPrefix(userAgent, "codex_cli_rs/") {
+		return true
+	}
+
+	switch originator := strings.ToLower(strings.TrimSpace(c.GetHeader("Originator"))); originator {
+	case "codex desktop", "codex-tui", "codex_cli_rs":
+		return true
+	default:
+		return strings.HasPrefix(originator, "codex desktop/") ||
+			strings.HasPrefix(originator, "codex-tui/") ||
+			strings.HasPrefix(originator, "codex_cli_rs/")
+	}
 }
 
 // OpenAIResponsesAPIHandler contains the handlers for OpenAIResponses API endpoints.

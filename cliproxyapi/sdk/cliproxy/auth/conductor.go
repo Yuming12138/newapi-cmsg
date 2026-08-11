@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/home"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
@@ -2641,10 +2643,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		var errPrepare error
 		auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
 		if errPrepare != nil {
-			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: &Error{Message: errPrepare.Error()}}
-			if se, ok := errors.AsType[cliproxyexecutor.StatusError](errPrepare); ok && se != nil {
-				result.Error.HTTPStatus = se.StatusCode()
-			}
+			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: resultErrorFromError(errPrepare)}
 			m.MarkResult(execCtx, result)
 			lastErr = errPrepare
 			continue
@@ -2662,10 +2661,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 				if errCtx := execCtx.Err(); errCtx != nil {
 					return cliproxyexecutor.Response{}, errCtx
 				}
-				result.Error = &Error{Message: errExec.Error()}
-				if se, ok := errors.AsType[cliproxyexecutor.StatusError](errExec); ok && se != nil {
-					result.Error.HTTPStatus = se.StatusCode()
-				}
+				result.Error = resultErrorFromError(errExec)
 				if ra := retryAfterFromError(errExec); ra != nil {
 					result.RetryAfter = ra
 				}
@@ -2744,10 +2740,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		var errPrepare error
 		auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
 		if errPrepare != nil {
-			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: &Error{Message: errPrepare.Error()}}
-			if se, ok := errors.AsType[cliproxyexecutor.StatusError](errPrepare); ok && se != nil {
-				result.Error.HTTPStatus = se.StatusCode()
-			}
+			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: resultErrorFromError(errPrepare)}
 			m.MarkResult(execCtx, result)
 			lastErr = errPrepare
 			continue
@@ -2765,10 +2758,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 				if errCtx := execCtx.Err(); errCtx != nil {
 					return cliproxyexecutor.Response{}, errCtx
 				}
-				result.Error = &Error{Message: errExec.Error()}
-				if se, ok := errors.AsType[cliproxyexecutor.StatusError](errExec); ok && se != nil {
-					result.Error.HTTPStatus = se.StatusCode()
-				}
+				result.Error = resultErrorFromError(errExec)
 				if ra := retryAfterFromError(errExec); ra != nil {
 					result.RetryAfter = ra
 				}
@@ -2845,10 +2835,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		var errPrepare error
 		auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
 		if errPrepare != nil {
-			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: &Error{Message: errPrepare.Error()}}
-			if se, ok := errors.AsType[cliproxyexecutor.StatusError](errPrepare); ok && se != nil {
-				result.Error.HTTPStatus = se.StatusCode()
-			}
+			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: resultErrorFromError(errPrepare)}
 			m.MarkResult(execCtx, result)
 			lastErr = errPrepare
 			continue
@@ -3692,7 +3679,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			}
 		} else {
 			if result.Model != "" {
-				if !isRequestInvalidResultError(result.Error) {
+				if !shouldSkipCredentialCooldown(result.Error) {
 					disableCooling := m.cooldownDisabledForAuth(auth)
 					state := ensureModelState(auth, result.Model)
 					state.Unavailable = true
@@ -4032,7 +4019,88 @@ func resultErrorFromError(err error) *Error {
 	if err == nil {
 		return nil
 	}
-	return &Error{Message: err.Error(), HTTPStatus: statusCodeFromError(err)}
+	var sourceErr *Error
+	var resultErr *Error
+	if errors.As(err, &sourceErr) && sourceErr != nil {
+		resultErr = cloneError(sourceErr)
+	} else {
+		resultErr = &Error{Message: err.Error()}
+	}
+	if resultErr.HTTPStatus == 0 {
+		resultErr.HTTPStatus = statusCodeFromError(err)
+	}
+	switch {
+	case isRequestInvalidError(err):
+		resultErr.Code = requestScopedErrorCode
+	case isConnectionLifecycleError(err):
+		if resultErr.Code == "" || resultErr.Code == connectionLifecycleErrorCode {
+			resultErr.Code = connectionLifecycleErrorCode
+		}
+	}
+	return resultErr
+}
+
+// shouldSkipCredentialCooldown reports failures that must not mark auth/model cooling.
+// Connection lifecycle is intentionally separate from request_scoped so transport
+// drops can still rotate to another credential.
+func shouldSkipCredentialCooldown(err *Error) bool {
+	return isRequestScopedResultError(err) ||
+		isConnectionLifecycleResultError(err) ||
+		isRequestInvalidError(err)
+}
+
+// isConnectionLifecycleError reports transport/session lifecycle failures that must
+// not cool credentials: client cancellation and WebSocket close/EOF disconnects.
+func isConnectionLifecycleError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) && closeErr != nil {
+		switch closeErr.Code {
+		case websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseAbnormalClosure:
+			return true
+		}
+	}
+	// Credential, quota, and upstream HTTP statuses remain authoritative even
+	// when their response text happens to contain lifecycle wording.
+	if statusCodeFromError(err) != 0 {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	return isConnectionLifecycleMessage(err.Error())
+}
+
+func isConnectionLifecycleResultError(err *Error) bool {
+	if err == nil {
+		return false
+	}
+	if err.Code == connectionLifecycleErrorCode {
+		return true
+	}
+	if statusCodeFromResult(err) != 0 {
+		return false
+	}
+	return isConnectionLifecycleMessage(err.Message)
+}
+
+func isConnectionLifecycleMessage(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	if lower == "" {
+		return false
+	}
+	switch lower {
+	case "context canceled", "context deadline exceeded", "eof", "unexpected eof":
+		return true
+	}
+	if strings.Contains(lower, "websocket: close 1000") ||
+		strings.Contains(lower, "websocket: close 1001") ||
+		strings.Contains(lower, "websocket: close 1006") {
+		return true
+	}
+	return strings.Contains(lower, "unexpected eof")
 }
 
 func redactStreamFailureError(message string) string {
@@ -4249,18 +4317,12 @@ func nextCloudflareCooldown(backoffLevel int, disableCooling bool, now time.Time
 	}
 	return next, backoffLevel
 }
-func isRequestScopedNotFoundMessage(message string) bool {
-	if message == "" {
+func isRequestScopedResultError(err *Error) bool {
+	if err == nil {
 		return false
 	}
-	lower := strings.ToLower(message)
-	return strings.Contains(lower, "item with id") &&
-		strings.Contains(lower, "not found") &&
-		strings.Contains(lower, "items are not persisted when `store` is set to false")
-}
-
-func isRequestInvalidResultError(err *Error) bool {
-	return err != nil && isRequestInvalidError(err)
+	return err.IsRequestScoped() ||
+		(statusCodeFromResult(err) == http.StatusNotFound && clienterror.IsItemNotPersisted(err.Message))
 }
 
 // isRequestInvalidError returns true if the error represents a client request
@@ -4283,33 +4345,22 @@ func isRequestInvalidError(err error) bool {
 		return false
 	}
 	status := statusCodeFromError(err)
-	switch status {
-	case http.StatusBadRequest:
-		msg := err.Error()
-		msgLower := strings.ToLower(msg)
-		return strings.Contains(msg, "invalid_request_error") ||
-			strings.Contains(msgLower, "unknown parameter") ||
-			strings.Contains(msgLower, "unknown_parameter") ||
-			strings.Contains(msg, "INVALID_ARGUMENT") ||
-			strings.Contains(msg, "FAILED_PRECONDITION")
-	case http.StatusNotFound:
-		return isRequestScopedNotFoundMessage(err.Error())
-	case http.StatusUnprocessableEntity:
+	if clienterror.IsRequestFault(status, err) {
 		return true
-	case http.StatusInternalServerError:
+	}
+	if status == http.StatusInternalServerError {
 		msg := err.Error()
 		return strings.Contains(msg, "\"status\":\"UNKNOWN\"") ||
 			strings.Contains(msg, "\"status\": \"UNKNOWN\"")
-	default:
-		return false
 	}
+	return false
 }
 
 func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Duration, now time.Time, disableCooling bool) {
 	if auth == nil {
 		return
 	}
-	if isRequestInvalidResultError(resultErr) {
+	if shouldSkipCredentialCooldown(resultErr) {
 		return
 	}
 	auth.Unavailable = true
@@ -5407,10 +5458,7 @@ func (m *Manager) tryAntigravityCreditsExecute(ctx context.Context, req cliproxy
 			resp, errExec := c.executor.Execute(creditsCtx, c.auth, execReq, creditsOpts)
 			result := Result{AuthID: c.auth.ID, Provider: c.provider, Model: resultModel, Success: errExec == nil}
 			if errExec != nil {
-				result.Error = &Error{Message: errExec.Error()}
-				if se, ok := errors.AsType[cliproxyexecutor.StatusError](errExec); ok && se != nil {
-					result.Error.HTTPStatus = se.StatusCode()
-				}
+				result.Error = resultErrorFromError(errExec)
 				if ra := retryAfterFromError(errExec); ra != nil {
 					result.RetryAfter = ra
 				}
