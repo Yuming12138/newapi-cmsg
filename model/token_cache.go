@@ -7,89 +7,113 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 )
 
-func cacheSetToken(token Token) error {
-	key := common.GenerateHMAC(token.Key)
-	token.Clean()
-	err := common.RedisHSetObj(fmt.Sprintf("token:%s", key), &token, time.Duration(common.RedisKeyCacheSeconds())*time.Second)
-	if err != nil {
-		return err
-	}
-	return nil
+const tokenCacheSchemaVersion = 1
+
+func getTokenCacheKey(key string) string {
+	return fmt.Sprintf("token:%s", common.GenerateHMAC(key))
 }
 
-func cacheDeleteToken(key string) error {
-	key = common.GenerateHMAC(key)
-	err := common.RedisDelKey(fmt.Sprintf("token:%s", key))
-	if err != nil {
-		return err
-	}
-	return nil
+func getTokenCacheFenceKey(key string) string {
+	return fmt.Sprintf("token:fence:%s", common.GenerateHMAC(key))
 }
 
-func cacheIncrTokenQuota(key string, increment int64) error {
-	return cacheAdjustTokenQuota(key, increment)
-}
-
-func cacheAdjustTokenQuota(key string, quotaDelta int64) error {
-	redisKey := fmt.Sprintf("token:%s", common.GenerateHMAC(key))
-	ctx := context.Background()
-
-	ttl, err := common.RDB.TTL(ctx, redisKey).Result()
-	if err != nil {
-		return err
-	}
+func tokenCacheTTLSeconds() int {
+	ttl := common.RedisKeyCacheSeconds()
 	if ttl <= 0 {
+		return 60
+	}
+	return ttl
+}
+
+// tokenCacheFenceSeconds must outlive a token mutation's database write plus
+// any in-flight reader's DB-read-to-cache-init gap. The fence is not deleted
+// after commit; it expires naturally so a reader holding a pre-mutation
+// snapshot cannot publish it right after the mutation cleared the cache.
+// While the fence exists readers simply serve the database without caching.
+const tokenCacheFenceSeconds = 10
+
+// invalidateTokenCacheForMutation is called before a token metadata mutation
+// writes to the database: it raises the fence and drops the cached hash so no
+// reader can act on (or re-publish) the pre-mutation state.
+func invalidateTokenCacheForMutation(key string) error {
+	if !common.RedisEnabled || key == "" {
 		return nil
 	}
-
-	unlimitedRaw, err := common.RDB.HGet(ctx, redisKey, "UnlimitedQuota").Result()
+	ctx := context.Background()
+	err := common.RDB.Set(ctx, getTokenCacheFenceKey(key), 1, time.Duration(tokenCacheFenceSeconds)*time.Second).Err()
 	if err != nil {
 		return err
 	}
-	unlimited, err := strconv.ParseBool(unlimitedRaw)
-	if err != nil {
-		return err
-	}
-
-	txn := common.RDB.TxPipeline()
-	if unlimited {
-		txn.HSet(ctx, redisKey, constant.TokenFiledRemainQuota, 0)
-	} else {
-		txn.HIncrBy(ctx, redisKey, constant.TokenFiledRemainQuota, quotaDelta)
-	}
-	txn.HIncrBy(ctx, redisKey, constant.TokenFieldUsedQuota, -quotaDelta)
-	txn.Expire(ctx, redisKey, ttl)
-
-	_, err = txn.Exec(ctx)
-	return err
+	return common.RDB.Del(ctx, getTokenCacheKey(key)).Err()
 }
 
-func cacheDecrTokenQuota(key string, decrement int64) error {
-	return cacheIncrTokenQuota(key, -decrement)
-}
-
-func cacheSetTokenField(key string, field string, value string) error {
-	key = common.GenerateHMAC(key)
-	err := common.RedisHSetField(fmt.Sprintf("token:%s", key), field, value)
-	if err != nil {
-		return err
+// cacheInitToken publishes a database snapshot only when no mutation fence is
+// active and the hash is cold. An existing hash only gets its TTL refreshed:
+// its RemainQuota may already be ahead of this snapshot because atomic
+// pre-consume decrements Redis first, so a snapshot must never overwrite any
+// field of a live hash.
+// 返回值：0=被 fence 拦截，1=完成初始化，2=哈希已存在，仅刷新 TTL。
+func cacheInitToken(token Token) (int, error) {
+	if !common.RedisEnabled {
+		return 0, nil
 	}
-	return nil
+	allowIps := ""
+	if token.AllowIps != nil {
+		allowIps = *token.AllowIps
+	}
+	const script = `
+if redis.call('EXISTS', KEYS[2]) == 1 then
+  return 0
+end
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  if tonumber(redis.call('HGET', KEYS[1], 'Id') or '0') == tonumber(ARGV[1])
+    and tonumber(redis.call('HGET', KEYS[1], 'CacheSchema') or '0') == tonumber(ARGV[16])
+    and redis.call('HEXISTS', KEYS[1], 'RemainQuota') == 1
+    and redis.call('HEXISTS', KEYS[1], 'UsedQuota') == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[17])
+    return 2
+  end
+  redis.call('DEL', KEYS[1])
+end
+redis.call('HSET', KEYS[1],
+  'Id', ARGV[1], 'UserId', ARGV[2], 'Status', ARGV[3], 'Name', ARGV[4],
+  'CreatedTime', ARGV[5], 'AccessedTime', ARGV[6], 'ExpiredTime', ARGV[7],
+  'UnlimitedQuota', ARGV[8], 'ModelLimitsEnabled', ARGV[9], 'ModelLimits', ARGV[10],
+  'AllowIps', ARGV[11], 'Group', ARGV[12], 'CrossGroupRetry', ARGV[13],
+  'RemainQuota', ARGV[14], 'UsedQuota', ARGV[15], 'CacheSchema', ARGV[16])
+redis.call('EXPIRE', KEYS[1], ARGV[17])
+return 1`
+
+	return common.RDB.Eval(context.Background(), script, []string{
+		getTokenCacheKey(token.Key), getTokenCacheFenceKey(token.Key),
+	},
+		token.Id, token.UserId, token.Status, token.Name,
+		token.CreatedTime, token.AccessedTime, token.ExpiredTime,
+		strconv.FormatBool(token.UnlimitedQuota), strconv.FormatBool(token.ModelLimitsEnabled),
+		token.ModelLimits, allowIps, token.Group, strconv.FormatBool(token.CrossGroupRetry),
+		token.RemainQuota, token.UsedQuota,
+		tokenCacheSchemaVersion,
+		tokenCacheTTLSeconds(),
+	).Int()
 }
 
-// CacheGetTokenByKey 从缓存中获取 token，如果缓存中不存在，则从数据库中获取
+// cacheGetTokenByKey 从缓存读取 token；不完整的哈希（如仅有配额字段）会被拒绝。
 func cacheGetTokenByKey(key string) (*Token, error) {
-	hmacKey := common.GenerateHMAC(key)
 	if !common.RedisEnabled {
 		return nil, fmt.Errorf("redis is not enabled")
 	}
 	var token Token
-	err := common.RedisHGetObj(fmt.Sprintf("token:%s", hmacKey), &token)
-	if err != nil {
+	if err := common.RedisHGetObj(getTokenCacheKey(key), &token); err != nil {
 		return nil, err
+	}
+	if token.Id <= 0 {
+		return nil, fmt.Errorf("token cache is incomplete")
+	}
+	schema, err := common.RDB.HGet(context.Background(), getTokenCacheKey(key), "CacheSchema").Int()
+	if err != nil || schema != tokenCacheSchemaVersion {
+		return nil, fmt.Errorf("token cache schema is stale")
 	}
 	token.Key = key
 	return &token, nil
