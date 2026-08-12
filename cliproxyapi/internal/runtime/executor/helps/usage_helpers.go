@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	internallogging "github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -381,9 +382,36 @@ func failFromErrors(errs ...error) usage.Failure {
 		if errors.As(err, &se) && se != nil {
 			fail.StatusCode = se.StatusCode()
 		}
+		if fail.StatusCode == 0 && isUsageConnectionLifecycleError(err) {
+			fail.Code = usage.FailureCodeConnectionLifecycle
+		}
 		return fail
 	}
 	return usage.Failure{}
+}
+
+func isUsageConnectionLifecycleError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) && closeErr != nil {
+		switch closeErr.Code {
+		case websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseAbnormalClosure:
+			return true
+		}
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	if lower == "eof" || lower == "unexpected eof" ||
+		strings.Contains(lower, "websocket: close 1000") ||
+		strings.Contains(lower, "websocket: close 1001") ||
+		strings.Contains(lower, "websocket: close 1006") {
+		return true
+	}
+	return strings.Contains(lower, "unexpected eof")
 }
 
 func (r *UsageReporter) latency() time.Duration {

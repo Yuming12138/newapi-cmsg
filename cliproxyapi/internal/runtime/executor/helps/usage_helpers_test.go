@@ -2,12 +2,14 @@ package helps
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
 
@@ -326,6 +328,39 @@ func TestUsageReporterBuildRecordIncludesLatency(t *testing.T) {
 	}
 	if record.Latency > 3*time.Second {
 		t.Fatalf("latency = %v, want <= 3s", record.Latency)
+	}
+}
+
+type usageFailureStatusError struct {
+	status int
+	msg    string
+}
+
+func (e usageFailureStatusError) Error() string   { return e.msg }
+func (e usageFailureStatusError) StatusCode() int { return e.status }
+
+func TestFailFromErrorsClassifiesConnectionLifecycleWithoutHTTPStatus(t *testing.T) {
+	tests := map[string]error{
+		"unexpected EOF sentinel": io.ErrUnexpectedEOF,
+		"wrapped unexpected EOF":  fmt.Errorf("post request: %w", io.ErrUnexpectedEOF),
+		"context canceled":        context.Canceled,
+		"context deadline":        context.DeadlineExceeded,
+		"websocket close":         &websocket.CloseError{Code: websocket.CloseAbnormalClosure, Text: "unexpected EOF"},
+	}
+	for name, err := range tests {
+		t.Run(name, func(t *testing.T) {
+			failure := failFromErrors(err)
+			if failure.Code != usage.FailureCodeConnectionLifecycle || failure.StatusCode != 0 {
+				t.Fatalf("failFromErrors() = %+v, want connection lifecycle without HTTP status", failure)
+			}
+		})
+	}
+}
+
+func TestFailFromErrorsPreservesAuthoritativeHTTPStatus(t *testing.T) {
+	failure := failFromErrors(usageFailureStatusError{status: http.StatusInternalServerError, msg: "unexpected EOF"})
+	if failure.StatusCode != http.StatusInternalServerError || failure.Code != "" {
+		t.Fatalf("failFromErrors() = %+v, want authoritative HTTP 500 without lifecycle code", failure)
 	}
 }
 

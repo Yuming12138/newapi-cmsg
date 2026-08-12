@@ -13,6 +13,10 @@ import (
 // DefaultServiceTier is used when a request does not specify service_tier.
 const DefaultServiceTier = "default"
 
+// FailureCodeConnectionLifecycle marks a transport or session lifecycle failure
+// that did not receive an authoritative upstream HTTP response.
+const FailureCodeConnectionLifecycle = "connection_lifecycle"
+
 // Record contains the usage statistics captured for a single provider request.
 type Record struct {
 	Provider string
@@ -49,6 +53,7 @@ type Record struct {
 type Failure struct {
 	StatusCode int
 	Body       string
+	Code       string
 }
 
 // Detail holds the token usage breakdown.
