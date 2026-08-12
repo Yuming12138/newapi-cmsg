@@ -8,6 +8,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+var benchmarkSanitizeCodexInputItemIDsOutput []byte
+
 func TestSanitizeCodexInputItemIDsBoundaries(t *testing.T) {
 	id64 := strings.Repeat("a", 64)
 	id65 := strings.Repeat("b", 65)
@@ -244,5 +246,23 @@ func TestSanitizeCodexInputItemIDsLeavesUnsupportedPayloadsUnchanged(t *testing.
 		if got := string(SanitizeCodexInputItemIDs(body)); got != string(body) {
 			t.Fatalf("payload changed: got=%q want=%q", got, body)
 		}
+	}
+}
+
+func TestSanitizeCodexInputItemIDsNoopReturnsOriginalSlice(t *testing.T) {
+	body := []byte(`{"input":[{"type":"message","id":"msg_1","role":"user","content":"hello"}]}`)
+	got := SanitizeCodexInputItemIDs(body)
+	if &got[0] != &body[0] {
+		t.Fatal("noop path should return the original body slice")
+	}
+}
+
+func BenchmarkSanitizeCodexInputItemIDsLargeNoopPayload(b *testing.B) {
+	body := []byte(`{"input":[{"type":"message","id":"msg_1","role":"user","content":"` + strings.Repeat("x", 8<<20) + `"}]}`)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(body)))
+	b.ResetTimer()
+	for b.Loop() {
+		benchmarkSanitizeCodexInputItemIDsOutput = SanitizeCodexInputItemIDs(body)
 	}
 }
