@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
@@ -756,12 +757,7 @@ func (h *BaseAPIHandler) executeWithAuthManagerFormats(ctx context.Context, entr
 	resp, err := h.AuthManager.Execute(ctx, providers, req, opts)
 	if err != nil {
 		err = enrichAuthSelectionError(err, providers, normalizedModel)
-		status := http.StatusInternalServerError
-		if se, ok := err.(interface{ StatusCode() int }); ok && se != nil {
-			if code := se.StatusCode(); code > 0 {
-				status = code
-			}
-		}
+		status := clienterror.HTTPStatusFromErrorOr(err, http.StatusInternalServerError)
 		var addon http.Header
 		if he, ok := err.(interface{ Headers() http.Header }); ok && he != nil {
 			if hdr := he.Headers(); hdr != nil {
@@ -820,12 +816,7 @@ func (h *BaseAPIHandler) executeCountWithAuthManager(ctx context.Context, handle
 	resp, err := h.AuthManager.ExecuteCount(ctx, providers, req, opts)
 	if err != nil {
 		err = enrichAuthSelectionError(err, providers, normalizedModel)
-		status := http.StatusInternalServerError
-		if se, ok := err.(interface{ StatusCode() int }); ok && se != nil {
-			if code := se.StatusCode(); code > 0 {
-				status = code
-			}
-		}
+		status := clienterror.HTTPStatusFromErrorOr(err, http.StatusInternalServerError)
 		var addon http.Header
 		if he, ok := err.(interface{ Headers() http.Header }); ok && he != nil {
 			if hdr := he.Headers(); hdr != nil {
@@ -930,12 +921,7 @@ func (h *BaseAPIHandler) applyRequestInterceptorsAfterPluginExecutorRoute(ctx co
 }
 
 func executionErrorMessage(err error) *interfaces.ErrorMessage {
-	status := http.StatusInternalServerError
-	if se, ok := err.(interface{ StatusCode() int }); ok && se != nil {
-		if code := se.StatusCode(); code > 0 {
-			status = code
-		}
-	}
+	status := clienterror.HTTPStatusFromErrorOr(err, http.StatusInternalServerError)
 	var addon http.Header
 	if he, ok := err.(interface{ Headers() http.Header }); ok && he != nil {
 		if hdr := he.Headers(); hdr != nil {
@@ -1147,12 +1133,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 	if err != nil {
 		err = enrichAuthSelectionError(err, providers, normalizedModel)
 		errChan := make(chan *interfaces.ErrorMessage, 1)
-		status := http.StatusInternalServerError
-		if se, ok := err.(interface{ StatusCode() int }); ok && se != nil {
-			if code := se.StatusCode(); code > 0 {
-				status = code
-			}
-		}
+		status := clienterror.HTTPStatusFromErrorOr(err, http.StatusInternalServerError)
 		var addon http.Header
 		if he, ok := err.(interface{ Headers() http.Header }); ok && he != nil {
 			if hdr := he.Headers(); hdr != nil {
@@ -1342,12 +1323,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 						}
 					}
 
-					status := http.StatusInternalServerError
-					if se, ok := streamErr.(interface{ StatusCode() int }); ok && se != nil {
-						if code := se.StatusCode(); code > 0 {
-							status = code
-						}
-					}
+					status := clienterror.HTTPStatusFromErrorOr(streamErr, http.StatusInternalServerError)
 					var addon http.Header
 					if he, ok := streamErr.(interface{ Headers() http.Header }); ok && he != nil {
 						if hdr := he.Headers(); hdr != nil {
@@ -1439,15 +1415,7 @@ func validateSSEDataJSON(chunk []byte) error {
 }
 
 func statusFromError(err error) int {
-	if err == nil {
-		return 0
-	}
-	if se, ok := err.(interface{ StatusCode() int }); ok && se != nil {
-		if code := se.StatusCode(); code > 0 {
-			return code
-		}
-	}
-	return 0
+	return clienterror.HTTPStatusFromError(err)
 }
 
 func logStreamBootstrapRetry(ctx context.Context, providers []string, model string, requestedModel string, responseProtocol string, retryAttempt int, maxRetries int, err error, metadata map[string]any) {

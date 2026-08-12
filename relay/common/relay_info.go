@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -161,6 +162,12 @@ type RelayInfo struct {
 	// *bytes.Reader/Buffer/strings.Reader). 0 means "let net/http decide".
 	UpstreamRequestBodySize int64
 
+	// UpstreamRequestGetBody returns a fresh reader over the full marshaled
+	// upstream request body. It is set alongside UpstreamRequestBodySize when
+	// the body is wrapped in a BodyStorage, allowing net/http to replay the
+	// request after a retryable HTTP/2 stream reset.
+	UpstreamRequestGetBody func() (io.ReadCloser, error)
+
 	PriceData types.PriceData
 
 	// TieredBillingSnapshot is a frozen snapshot of tiered billing rules
@@ -189,6 +196,11 @@ type RelayInfo struct {
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
+	// RelayInfo is reused across channel attempts. Do not retain body metadata
+	// that may refer to storage already closed by the previous attempt.
+	info.UpstreamRequestBodySize = 0
+	info.UpstreamRequestGetBody = nil
+
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
 	headerOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelHeaderOverride)

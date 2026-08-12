@@ -43,6 +43,25 @@ func applyUpstreamContentLength(req *http.Request, info *common.RelayInfo) {
 	}
 }
 
+// applyUpstreamGetBody restores the replay hook that net/http cannot infer
+// from a type-erased BodyStorage reader. HTTP/2 may use it to transparently
+// retry a request after a retryable stream reset.
+func applyUpstreamGetBody(req *http.Request, info *common.RelayInfo) {
+	if req == nil || info == nil || info.UpstreamRequestGetBody == nil {
+		return
+	}
+	if req.GetBody == nil {
+		req.GetBody = info.UpstreamRequestGetBody
+	}
+}
+
+// ApplyUpstreamBodyMetadata restores request body metadata for adaptors that
+// construct an http.Request from a type-erased reader.
+func ApplyUpstreamBodyMetadata(req *http.Request, info *common.RelayInfo) {
+	applyUpstreamContentLength(req, info)
+	applyUpstreamGetBody(req, info)
+}
+
 func applyUpstreamRequestID(req *http.Request, info *common.RelayInfo) {
 	if req == nil || info == nil || strings.TrimSpace(info.RequestId) == "" {
 		return
@@ -354,7 +373,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
-	applyUpstreamContentLength(req, info)
+	ApplyUpstreamBodyMetadata(req, info)
 	headers := req.Header
 	err = a.SetupRequestHeader(c, &headers, info)
 	if err != nil {
@@ -385,7 +404,7 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
-	applyUpstreamContentLength(req, info)
+	ApplyUpstreamBodyMetadata(req, info)
 	// set form data
 	req.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 	headers := req.Header
@@ -536,6 +555,11 @@ func sendPingData(c *gin.Context, info *common.RelayInfo, mutex *sync.Mutex) err
 func DoRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
 	return doRequest(c, req, info)
 }
+
+func keepUpstreamRedirectResponse(_ *http.Request, _ []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
 	responseHeaderTimeout := time.Duration(0)
 	if info.IsStream && info.ChannelSetting.ResponseHeaderTimeoutSeconds > 0 {
@@ -545,6 +569,10 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	if err != nil {
 		return nil, fmt.Errorf("new relay http client failed: %w", err)
 	}
+	// Cached clients are shared across channels. Override redirects on a shallow
+	// copy so transport pools remain shared without mutating global behavior.
+	relayClient := *client
+	relayClient.CheckRedirect = keepUpstreamRedirectResponse
 
 	var stopPinger context.CancelFunc
 	var pingerDone <-chan struct{}
@@ -567,7 +595,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	}
 
 	preResponseTimeout := time.Duration(info.ChannelSetting.PreResponseTimeoutSeconds) * time.Second
-	resp, err := service.DoRequestWithPreResponseTimeout(client, req, preResponseTimeout)
+	resp, err := service.DoRequestWithPreResponseTimeout(&relayClient, req, preResponseTimeout)
 	if err != nil {
 		return nil, newDoRequestFailedError(c, err)
 	}
@@ -589,10 +617,7 @@ func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, req
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
-	applyUpstreamContentLength(req, info)
-	req.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(requestBody), nil
-	}
+	ApplyUpstreamBodyMetadata(req, info)
 
 	err = a.BuildRequestHeader(c, req, info)
 	if err != nil {
