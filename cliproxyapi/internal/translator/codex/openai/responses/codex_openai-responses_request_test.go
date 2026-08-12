@@ -371,6 +371,29 @@ func TestTruncationRemovedForCodexCompatibility(t *testing.T) {
 	}
 }
 
+func TestConvertOpenAIResponsesRequestToCodexReusesNormalizedPayload(t *testing.T) {
+	inputJSON := []byte(`{"model":"gpt-5.6","stream":true,"store":false,"parallel_tool_calls":true,"include":["reasoning.encrypted_content"],"service_tier":"priority","input":[{"type":"message","role":"user","content":"hello"}]}`)
+
+	output := ConvertOpenAIResponsesRequestToCodex("gpt-5.6", inputJSON, true)
+
+	if &output[0] != &inputJSON[0] {
+		t.Fatal("normalized request payload was copied")
+	}
+	if string(output) != string(inputJSON) {
+		t.Fatalf("normalized request changed:\n got: %s\nwant: %s", output, inputJSON)
+	}
+}
+
+func BenchmarkConvertOpenAIResponsesRequestToCodexLargeNormalizedPayload(b *testing.B) {
+	inputJSON := []byte(`{"model":"gpt-5.6","stream":true,"store":false,"parallel_tool_calls":true,"include":["reasoning.encrypted_content"],"service_tier":"priority","input":[{"type":"message","role":"user","content":"` + strings.Repeat("x", 8<<20) + `"}]}`)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(inputJSON)))
+	b.ResetTimer()
+	for b.Loop() {
+		benchmarkConvertSystemRoleOutput = ConvertOpenAIResponsesRequestToCodex("gpt-5.6", inputJSON, true)
+	}
+}
+
 func BenchmarkConvertSystemRoleToDeveloperLargeInput(b *testing.B) {
 	cases := []struct {
 		name      string
