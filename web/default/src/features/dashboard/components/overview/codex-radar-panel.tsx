@@ -57,6 +57,12 @@ const METRIC_GROUPS: MetricGroup[] = [
     efforts: ['xhigh', 'high'],
     firstCardClassName: 'xl:col-start-3',
   },
+  {
+    family: 'deepseek-v4-flash',
+    label: 'DeepSeek V4 Flash',
+    efforts: ['max', 'high'],
+    firstCardClassName: 'xl:col-start-3',
+  },
 ]
 
 const FAMILY_STYLES: Record<
@@ -86,6 +92,12 @@ const FAMILY_STYLES: Record<
     border: 'border-cyan-500/40',
     surface: 'bg-cyan-500/5',
     value: 'text-cyan-600 dark:text-cyan-400',
+  },
+  'deepseek-v4-flash': {
+    accent: 'bg-violet-500',
+    border: 'border-violet-500/40',
+    surface: 'bg-violet-500/5',
+    value: 'text-violet-600 dark:text-violet-400',
   },
 }
 
@@ -183,7 +195,9 @@ export function CodexRadarPanel() {
     queryFn: getCodexRadarOverview,
     staleTime: REFRESH_INTERVAL_MS,
     refetchInterval: REFRESH_INTERVAL_MS,
-    retry: 1,
+    // The backend already keeps a 24-hour stale cache. Retrying a failed
+    // dashboard fetch only duplicates the global error toast.
+    retry: false,
   })
   const metrics = query.data?.metrics ?? []
   const metricsBySlot = new Map(
