@@ -262,6 +262,9 @@ type Manager struct {
 	refreshLoop   *authAutoRefreshLoop
 
 	requestPrepareLocks sync.Map
+	// homeRefreshStates serializes refreshes for ephemeral Home credentials and
+	// retains only the latest in-memory auth snapshot for concurrent 401 recovery.
+	homeRefreshStates sync.Map
 
 	dispatchAuditMu  sync.Mutex
 	dispatchAuditSeq uint64
@@ -1924,23 +1927,43 @@ func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, re
 	return &cliproxyexecutor.StreamResult{Headers: headers, Chunks: out}
 }
 
-func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor ProviderExecutor, auth *Auth, provider string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, routeModel string, execModels []string, pooled bool, aliasResult OAuthModelAliasResult) (*cliproxyexecutor.StreamResult, error) {
+func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor ProviderExecutor, auth *Auth, provider string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options, routeModel string, execModels []string, pooled bool, aliasResult OAuthModelAliasResult, homeMode bool) (*cliproxyexecutor.StreamResult, error) {
 	if executor == nil {
 		return nil, &Error{Code: "executor_not_found", Message: "executor not registered"}
 	}
 	ctx = contextWithRequestedModelAlias(ctx, opts, routeModel)
 	var lastErr error
+	didRefreshOnUnauthorized := false
 	for idx, execModel := range execModels {
 		resultModel := m.stateModelForExecution(auth, routeModel, execModel, pooled)
 		execReq := req
 		execReq.Model = execModel
 		execOpts := opts
 		execReq, execOpts = applyRequestAfterAuthInterceptor(ctx, executor, provider, execReq, execOpts, requestedModelAliasFromOptions(execOpts, routeModel))
-		streamResult, errStream := executor.ExecuteStream(ctx, auth, execReq, execOpts)
+		executeStream := func() (*cliproxyexecutor.StreamResult, error) {
+			return executor.ExecuteStream(ctx, auth, execReq, execOpts)
+		}
+		streamResult, errStream := executeStream()
 		if errStream != nil {
 			if errCtx := ctx.Err(); errCtx != nil {
 				return nil, errCtx
 			}
+			if homeMode && isUnauthorizedError(errStream) {
+				alreadyTried := didRefreshOnUnauthorized
+				if refreshed, okRefresh, errRefresh := m.refreshHomeAuthAfterUnauthorized(ctx, executor, auth, errStream, alreadyTried); errRefresh != nil {
+					errStream = errRefresh
+				} else if okRefresh {
+					auth = refreshed
+					didRefreshOnUnauthorized = true
+					publishSelectedAuthMetadata(execOpts.Metadata, auth.ID)
+					streamResult, errStream = executeStream()
+				}
+				if !alreadyTried {
+					didRefreshOnUnauthorized = true
+				}
+			}
+		}
+		if errStream != nil {
 			rerr := resultErrorFromError(errStream)
 			m.logStreamFailure(ctx, auth.ID, provider, resultModel, true, errStream)
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
@@ -1952,7 +1975,9 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			lastErr = errStream
 			continue
 		}
-		if m.streamingEagerHeadersEnabled() {
+		// Home requests must inspect the bootstrap chunk so a pre-payload 401 can
+		// refresh and replay once. After the first payload, the stream is committed.
+		if !homeMode && m.streamingEagerHeadersEnabled() {
 			return m.wrapStreamResult(ctx, auth.Clone(), provider, resultModel, streamResult.Headers, nil, streamResult.Chunks, aliasResult), nil
 		}
 
@@ -1961,6 +1986,48 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			if errCtx := ctx.Err(); errCtx != nil {
 				discardStreamChunks(streamResult.Chunks)
 				return nil, errCtx
+			}
+			if homeMode && isUnauthorizedError(bootstrapErr) {
+				alreadyTried := didRefreshOnUnauthorized
+				if refreshed, okRefresh, errRefresh := m.refreshHomeAuthAfterUnauthorized(ctx, executor, auth, bootstrapErr, alreadyTried); errRefresh != nil {
+					bootstrapErr = errRefresh
+				} else if okRefresh {
+					discardStreamChunks(streamResult.Chunks)
+					auth = refreshed
+					didRefreshOnUnauthorized = true
+					publishSelectedAuthMetadata(execOpts.Metadata, auth.ID)
+					retryResult, retryErr := executeStream()
+					streamResult = retryResult
+					bootstrapErr = retryErr
+					if bootstrapErr != nil && streamResult == nil {
+						streamResult = &cliproxyexecutor.StreamResult{}
+					}
+					if bootstrapErr == nil && (streamResult == nil || streamResult.Chunks == nil) {
+						bootstrapErr = &Error{Code: "empty_stream", Message: "upstream stream has no source", Retryable: true}
+						if streamResult == nil {
+							streamResult = &cliproxyexecutor.StreamResult{}
+						}
+					}
+					if bootstrapErr == nil {
+						buffered, closed, bootstrapErr = readStreamBootstrap(ctx, streamResult.Chunks)
+					}
+				}
+				if !alreadyTried {
+					didRefreshOnUnauthorized = true
+				}
+			}
+			if bootstrapErr == nil {
+				if closed && len(buffered) == 0 {
+					bootstrapErr = &Error{Code: "empty_stream", Message: "upstream stream closed before first payload", Retryable: true}
+				} else {
+					remaining := streamResult.Chunks
+					if closed {
+						closedCh := make(chan cliproxyexecutor.StreamChunk)
+						close(closedCh)
+						remaining = closedCh
+					}
+					return m.wrapStreamResult(ctx, auth.Clone(), provider, resultModel, streamResult.Headers, buffered, remaining, aliasResult), nil
+				}
 			}
 			if isRequestInvalidError(bootstrapErr) {
 				rerr := resultErrorFromError(bootstrapErr)
@@ -2641,7 +2708,11 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		}
 		attempted[auth.ID] = struct{}{}
 		var errPrepare error
-		auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
+		if homeMode {
+			auth, errPrepare = m.prepareHomeAuthSnapshot(execCtx, executor, auth)
+		} else {
+			auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
+		}
 		if errPrepare != nil {
 			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: resultErrorFromError(errPrepare)}
 			m.MarkResult(execCtx, result)
@@ -2649,13 +2720,31 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			continue
 		}
 		var authErr error
+		didRefreshOnUnauthorized := false
 		for _, upstreamModel := range models {
 			resultModel := m.stateModelForExecution(auth, routeModel, upstreamModel, pooled)
 			execReq := req
 			execReq.Model = upstreamModel
 			execOpts := opts
 			execReq, execOpts = applyRequestAfterAuthInterceptor(execCtx, executor, provider, execReq, execOpts, requestedModelAliasFromOptions(execOpts, routeModel))
-			resp, errExec := executor.Execute(execCtx, auth, execReq, execOpts)
+			execute := func() (cliproxyexecutor.Response, error) {
+				return executor.Execute(execCtx, auth, execReq, execOpts)
+			}
+			resp, errExec := execute()
+			if homeMode && isUnauthorizedError(errExec) {
+				alreadyTried := didRefreshOnUnauthorized
+				if refreshed, okRefresh, errRefresh := m.refreshHomeAuthAfterUnauthorized(execCtx, executor, auth, errExec, alreadyTried); errRefresh != nil {
+					errExec = errRefresh
+				} else if okRefresh {
+					auth = refreshed
+					didRefreshOnUnauthorized = true
+					publishSelectedAuthMetadata(opts.Metadata, auth.ID)
+					resp, errExec = execute()
+				}
+				if !alreadyTried {
+					didRefreshOnUnauthorized = true
+				}
+			}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: errExec == nil}
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
@@ -2738,7 +2827,11 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		}
 		attempted[auth.ID] = struct{}{}
 		var errPrepare error
-		auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
+		if homeMode {
+			auth, errPrepare = m.prepareHomeAuthSnapshot(execCtx, executor, auth)
+		} else {
+			auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
+		}
 		if errPrepare != nil {
 			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: resultErrorFromError(errPrepare)}
 			m.MarkResult(execCtx, result)
@@ -2746,13 +2839,35 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			continue
 		}
 		var authErr error
+		didRefreshOnUnauthorized := false
 		for _, upstreamModel := range models {
 			resultModel := m.stateModelForExecution(auth, routeModel, upstreamModel, pooled)
 			execReq := req
 			execReq.Model = upstreamModel
 			execOpts := opts
 			execReq, execOpts = applyRequestAfterAuthInterceptor(execCtx, executor, provider, execReq, execOpts, requestedModelAliasFromOptions(execOpts, routeModel))
-			resp, errExec := executor.CountTokens(execCtx, auth, execReq, execOpts)
+			execute := func() (cliproxyexecutor.Response, error) {
+				return executor.CountTokens(execCtx, auth, execReq, execOpts)
+			}
+			resp, errExec := execute()
+			if homeMode && isUnauthorizedError(errExec) {
+				m.reportHomeUnauthorized(execCtx, auth, provider, resultModel)
+				alreadyTried := didRefreshOnUnauthorized
+				if refreshed, okRefresh, errRefresh := m.refreshHomeAuthAfterUnauthorized(execCtx, executor, auth, errExec, alreadyTried); errRefresh != nil {
+					errExec = errRefresh
+				} else if okRefresh {
+					auth = refreshed
+					didRefreshOnUnauthorized = true
+					publishSelectedAuthMetadata(opts.Metadata, auth.ID)
+					resp, errExec = execute()
+					if isUnauthorizedError(errExec) {
+						m.reportHomeUnauthorized(execCtx, auth, provider, resultModel)
+					}
+				}
+				if !alreadyTried {
+					didRefreshOnUnauthorized = true
+				}
+			}
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: errExec == nil}
 			if errExec != nil {
 				if errCtx := execCtx.Err(); errCtx != nil {
@@ -2833,7 +2948,11 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		}
 		attempted[auth.ID] = struct{}{}
 		var errPrepare error
-		auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
+		if homeMode {
+			auth, errPrepare = m.prepareHomeAuthSnapshot(execCtx, executor, auth)
+		} else {
+			auth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
+		}
 		if errPrepare != nil {
 			result := Result{AuthID: auth.ID, Provider: provider, Model: routeModel, Success: false, Error: resultErrorFromError(errPrepare)}
 			m.MarkResult(execCtx, result)
@@ -2841,7 +2960,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			continue
 		}
 		execReq := sanitizeDownstreamWebsocketFallbackRequest(execCtx, auth, req)
-		streamResult, errStream := m.executeStreamWithModelPool(execCtx, executor, auth, provider, execReq, opts, routeModel, models, pooled, aliasResult)
+		streamResult, errStream := m.executeStreamWithModelPool(execCtx, executor, auth, provider, execReq, opts, routeModel, models, pooled, aliasResult, homeMode)
 		if errStream != nil {
 			if errCtx := execCtx.Err(); errCtx != nil {
 				return nil, errCtx
@@ -2946,6 +3065,123 @@ func hasRequestedModelMetadata(meta map[string]any) bool {
 
 type requestAuthPrepareLock struct {
 	mu sync.Mutex
+}
+
+type homeRefreshState struct {
+	mu                sync.Mutex
+	failedFingerprint string
+	auth              *Auth
+}
+
+// prepareHomeAuthSnapshot prepares an ephemeral Home auth without persisting it.
+func (m *Manager) prepareHomeAuthSnapshot(ctx context.Context, executor ProviderExecutor, auth *Auth) (*Auth, error) {
+	if m == nil || executor == nil || auth == nil {
+		return auth, nil
+	}
+	preparer, ok := executor.(RequestAuthPreparer)
+	if !ok || preparer == nil || !preparer.ShouldPrepareRequestAuth(auth) {
+		return auth, nil
+	}
+
+	prepare := func() (*Auth, error) {
+		target := auth.Clone()
+		if !preparer.ShouldPrepareRequestAuth(target) {
+			return target, nil
+		}
+		updated, errPrepare := preparer.PrepareRequestAuth(ctx, target)
+		if errPrepare != nil {
+			return auth, errPrepare
+		}
+		if updated == nil {
+			return target, nil
+		}
+		return updated, nil
+	}
+
+	id := strings.TrimSpace(auth.ID)
+	if id == "" {
+		return prepare()
+	}
+	lockValue, _ := m.requestPrepareLocks.LoadOrStore(id, &requestAuthPrepareLock{})
+	lock, ok := lockValue.(*requestAuthPrepareLock)
+	if !ok || lock == nil {
+		return prepare()
+	}
+	lock.mu.Lock()
+	defer lock.mu.Unlock()
+	return prepare()
+}
+
+func preserveHomeRoutingAttributes(updated, previous *Auth) {
+	if updated == nil || previous == nil || previous.Attributes == nil {
+		return
+	}
+	if updated.Attributes == nil {
+		updated.Attributes = make(map[string]string)
+	}
+	if value := strings.TrimSpace(previous.Attributes[homeUpstreamModelAttributeKey]); value != "" {
+		updated.Attributes[homeUpstreamModelAttributeKey] = value
+	}
+}
+
+func (m *Manager) refreshHomeAuthAfterUnauthorized(ctx context.Context, executor ProviderExecutor, failedAuth *Auth, execErr error, alreadyTried bool) (*Auth, bool, error) {
+	if m == nil || executor == nil || failedAuth == nil || alreadyTried || execErr == nil || !isUnauthorizedError(execErr) || failedAuth.AuthKind() != AuthKindOAuth {
+		return failedAuth, false, nil
+	}
+	authID := strings.TrimSpace(failedAuth.ID)
+	if authID == "" {
+		return failedAuth, false, nil
+	}
+	value, _ := m.homeRefreshStates.LoadOrStore(authID, &homeRefreshState{})
+	state, ok := value.(*homeRefreshState)
+	if !ok || state == nil {
+		return failedAuth, false, &Error{Code: "home_refresh_unavailable", Message: "home refresh state unavailable", HTTPStatus: http.StatusServiceUnavailable}
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	failedFingerprint := AccessTokenSHA256(failedAuth)
+	if state.auth != nil && state.failedFingerprint == failedFingerprint {
+		cachedFingerprint := AccessTokenSHA256(state.auth)
+		if cachedFingerprint != "" && failedFingerprint != "" && cachedFingerprint != failedFingerprint {
+			prepared, errPrepare := m.prepareHomeAuthSnapshot(ctx, executor, state.auth.Clone())
+			if errPrepare != nil {
+				return failedAuth, false, errPrepare
+			}
+			preserveHomeRoutingAttributes(prepared, failedAuth)
+			return prepared, true, nil
+		}
+	}
+
+	target := failedAuth.Clone()
+	updated, errRefresh := executor.Refresh(ctx, target)
+	if errRefresh != nil {
+		return failedAuth, false, errRefresh
+	}
+	if updated == nil {
+		updated = target
+	}
+	if updated.ID == "" {
+		updated.ID = failedAuth.ID
+	}
+	if updated.Index == "" {
+		updated.Index = failedAuth.Index
+	}
+	if updated.Provider == "" {
+		updated.Provider = failedAuth.Provider
+	}
+	if updated.Runtime == nil {
+		updated.Runtime = failedAuth.Runtime
+	}
+	preserveHomeRoutingAttributes(updated, failedAuth)
+	prepared, errPrepare := m.prepareHomeAuthSnapshot(ctx, executor, updated)
+	if errPrepare != nil {
+		return failedAuth, false, errPrepare
+	}
+	preserveHomeRoutingAttributes(prepared, failedAuth)
+	state.failedFingerprint = failedFingerprint
+	state.auth = prepared.Clone()
+	return prepared, true, nil
 }
 
 func (m *Manager) prepareRequestAuth(ctx context.Context, executor ProviderExecutor, auth *Auth) (*Auth, error) {
@@ -5499,7 +5735,7 @@ func (m *Manager) tryAntigravityCreditsExecuteStream(ctx context.Context, req cl
 		if len(models) == 0 {
 			continue
 		}
-		result, errStream := m.executeStreamWithModelPool(creditsCtx, c.executor, c.auth, c.provider, req, creditsOpts, routeModel, models, pooled, aliasResult)
+		result, errStream := m.executeStreamWithModelPool(creditsCtx, c.executor, c.auth, c.provider, req, creditsOpts, routeModel, models, pooled, aliasResult, false)
 		if errStream != nil {
 			continue
 		}
