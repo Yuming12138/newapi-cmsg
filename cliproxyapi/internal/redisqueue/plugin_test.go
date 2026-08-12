@@ -31,6 +31,7 @@ func TestUsageQueuePluginPayloadIncludesStableFieldsAndSuccess(t *testing.T) {
 			Alias:               "client-gpt",
 			APIKey:              "test-key",
 			AuthIndex:           "0",
+			AccessTokenSHA256:   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 			AuthType:            "apikey",
 			Source:              "user@example.com",
 			ReasoningEffort:     "medium",
@@ -60,6 +61,8 @@ func TestUsageQueuePluginPayloadIncludesStableFieldsAndSuccess(t *testing.T) {
 		requireStringField(t, payload, "service_tier", "priority")
 		requireStringField(t, payload, "request_service_tier", "priority")
 		requireStringField(t, payload, "response_service_tier", "default")
+		requireStringField(t, payload, "access_token_sha256", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+		requireMissingField(t, payload, "access_token")
 		requireIntField(t, payload, "accounting_version", coreusage.TokenAccountingSchemaVersion)
 		requireValidTokenBreakdown(t, payload)
 		requireTokenBoolField(t, payload, "cache_read_tokens_present", true)

@@ -3,6 +3,7 @@ package helps
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -21,19 +22,60 @@ func TestStatusFromHomeErrorCodeMapsAuthenticationErrorToUnauthorized(t *testing
 }
 
 type fakeHomeRefreshClient struct {
-	calls     atomic.Int32
-	authIndex string
-	raw       []byte
+	calls             atomic.Int32
+	authIndex         string
+	accessTokenSHA256 string
+	raw               []byte
+	err               error
 }
 
 func (c *fakeHomeRefreshClient) HeartbeatOK() bool {
 	return true
 }
 
-func (c *fakeHomeRefreshClient) GetRefreshAuth(_ context.Context, authIndex string) ([]byte, error) {
+func (c *fakeHomeRefreshClient) GetRefreshAuth(_ context.Context, authIndex string, accessTokenSHA256 string) ([]byte, error) {
 	c.calls.Add(1)
 	c.authIndex = authIndex
-	return c.raw, nil
+	c.accessTokenSHA256 = accessTokenSHA256
+	return c.raw, c.err
+}
+
+func TestRefreshAuthViaHomeMapsTemporaryFailuresSafely(t *testing.T) {
+	client := &fakeHomeRefreshClient{err: errors.New("redis endpoint details must not escape")}
+	oldCurrentHomeRefreshClient := currentHomeRefreshClient
+	currentHomeRefreshClient = func() homeRefreshClient { return client }
+	t.Cleanup(func() { currentHomeRefreshClient = oldCurrentHomeRefreshClient })
+
+	_, handled, err := RefreshAuthViaHome(context.Background(), &config.Config{Home: config.HomeConfig{Enabled: true}}, &cliproxyauth.Auth{
+		ID: "home-auth-1", Index: "home-index-1", Metadata: map[string]any{"access_token": "old-access-token"},
+	})
+	if !handled || err == nil {
+		t.Fatalf("RefreshAuthViaHome() = handled %v, err %v", handled, err)
+	}
+	if statusErr, ok := err.(interface{ StatusCode() int }); !ok || statusErr.StatusCode() != http.StatusServiceUnavailable {
+		t.Fatalf("refresh error = %v, want 503", err)
+	}
+	if err.Error() != "home refresh temporarily unavailable" {
+		t.Fatalf("refresh error = %q, want redacted temporary message", err.Error())
+	}
+}
+
+func TestRefreshAuthViaHomeRejectsDisabledCredential(t *testing.T) {
+	raw, errMarshal := json.Marshal(cliproxyauth.Auth{ID: "home-auth-1", Disabled: true})
+	if errMarshal != nil {
+		t.Fatal(errMarshal)
+	}
+	client := &fakeHomeRefreshClient{raw: raw}
+	oldCurrentHomeRefreshClient := currentHomeRefreshClient
+	currentHomeRefreshClient = func() homeRefreshClient { return client }
+	t.Cleanup(func() { currentHomeRefreshClient = oldCurrentHomeRefreshClient })
+
+	_, _, err := RefreshAuthViaHome(context.Background(), &config.Config{Home: config.HomeConfig{Enabled: true}}, &cliproxyauth.Auth{
+		ID: "home-auth-1", Index: "home-index-1", Metadata: map[string]any{"access_token": "old-access-token"},
+	})
+	if statusErr, ok := err.(interface{ StatusCode() int }); !ok || statusErr.StatusCode() != http.StatusUnauthorized {
+		t.Fatalf("disabled refresh error = %v, want 401", err)
+	}
 }
 
 func TestRefreshAuthViaHomeAcceptsAuthEnvelope(t *testing.T) {
@@ -69,6 +111,7 @@ func TestRefreshAuthViaHomeAcceptsAuthEnvelope(t *testing.T) {
 		Provider: "antigravity",
 		Index:    "home-index-1",
 		Metadata: map[string]any{
+			"access_token":  "old-access-token",
 			"refresh_token": "refresh-token",
 		},
 	}
@@ -85,6 +128,9 @@ func TestRefreshAuthViaHomeAcceptsAuthEnvelope(t *testing.T) {
 	}
 	if client.authIndex != "home-index-1" {
 		t.Fatalf("home refresh auth_index = %q, want home-index-1", client.authIndex)
+	}
+	if want := cliproxyauth.AccessTokenSHA256(auth); client.accessTokenSHA256 != want {
+		t.Fatalf("home refresh access_token_sha256 = %q, want %q", client.accessTokenSHA256, want)
 	}
 	if updated == nil {
 		t.Fatal("updated auth = nil")
