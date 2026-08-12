@@ -208,6 +208,36 @@ func TestUsageQueuePluginAsyncIgnoresRecycledGinContext(t *testing.T) {
 	})
 }
 
+func TestUsageQueuePluginIncludesFailureCode(t *testing.T) {
+	withEnabledQueue(t, func() {
+		ctx := internallogging.WithResponseStatusHolder(context.Background())
+		plugin := &usageQueuePlugin{}
+		plugin.HandleUsage(ctx, coreusage.Record{
+			Provider:  "codex",
+			Model:     "gpt-image-2",
+			AuthIndex: "image-auth",
+			Failed:    true,
+			Fail: coreusage.Failure{
+				Body: "unexpected EOF",
+				Code: coreusage.FailureCodeConnectionLifecycle,
+			},
+		})
+
+		payload := popSinglePayload(t)
+		raw := payload["fail"]
+		var got struct {
+			StatusCode int    `json:"status_code"`
+			Code       string `json:"code"`
+		}
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("unmarshal fail: %v", err)
+		}
+		if got.StatusCode != http.StatusInternalServerError || got.Code != coreusage.FailureCodeConnectionLifecycle {
+			t.Fatalf("fail = %+v, want synthesized 500 with lifecycle code", got)
+		}
+	})
+}
+
 func withEnabledQueue(t *testing.T, fn func()) {
 	t.Helper()
 
