@@ -87,6 +87,7 @@ export interface ChannelSettings {
   system_prompt?: string
   system_prompt_override?: boolean
   response_header_timeout_seconds?: number
+  fallback_pre_response_budget_seconds?: number
 }
 
 export interface ChannelOtherSettings {

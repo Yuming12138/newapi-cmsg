@@ -45,6 +45,9 @@ export const usageLogSchema = z.object({
   other: z.string().default(''),
   request_id: z.string().default(''),
   upstream_request_id: z.string().default(''),
+  fallback_recovered: z.boolean().default(false),
+  recovered_channel: z.number().default(0),
+  recovered_at: z.number().default(0),
 })
 
 export type UsageLog = z.infer<typeof usageLogSchema>

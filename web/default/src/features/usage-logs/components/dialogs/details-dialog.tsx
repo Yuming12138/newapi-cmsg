@@ -33,7 +33,12 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
-import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
+import {
+  formatLogQuota,
+  formatTimestampToDate,
+  formatTokens,
+  formatUseTime,
+} from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { Button } from '@/components/ui/button'
@@ -398,6 +403,8 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const details = props.log.content ?? ''
   const other = parseLogOther(props.log.other)
   const typeConfig = getLogTypeConfig(props.log.type)
+  const fallbackRecovered =
+    props.log.type === 5 && props.log.fallback_recovered === true
 
   const isViolation = isViolationFeeLog(other)
   const isRefund = props.log.type === 6
@@ -520,8 +527,14 @@ export function DetailsDialog(props: DetailsDialogProps) {
         <>
           {t('Log Details')}
           <StatusBadge
-            label={t(typeConfig.label)}
-            variant={typeConfig.color as StatusBadgeProps['variant']}
+            label={t(
+              fallbackRecovered ? 'Fallback recovered' : typeConfig.label
+            )}
+            variant={
+              fallbackRecovered
+                ? 'yellow'
+                : (typeConfig.color as StatusBadgeProps['variant'])
+            }
             size='sm'
             copyable={false}
           />
@@ -542,6 +555,20 @@ export function DetailsDialog(props: DetailsDialogProps) {
       <div className='w-full max-w-full min-w-0 space-y-2.5 overflow-x-hidden py-1 sm:space-y-3'>
         {/* Overview section - key identifiers */}
         <div className='min-w-0 space-y-1'>
+          {fallbackRecovered && (
+            <DetailRow
+              label={t('Recovery result')}
+              value={`${t('Succeeded through fallback')}${
+                props.log.recovered_channel
+                  ? ` · ${t('Channel')} #${props.log.recovered_channel}`
+                  : ''
+              }${
+                props.log.recovered_at
+                  ? ` · ${formatTimestampToDate(props.log.recovered_at)}`
+                  : ''
+              }`}
+            />
+          )}
           {props.log.request_id && (
             <DetailRow
               label={t('Request ID')}

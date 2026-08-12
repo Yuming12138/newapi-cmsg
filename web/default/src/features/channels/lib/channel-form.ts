@@ -189,6 +189,12 @@ export const channelFormSchema = z
       .min(0)
       .max(86400)
       .optional(),
+    fallback_pre_response_budget_seconds: z
+      .number()
+      .int()
+      .min(0)
+      .max(86400)
+      .optional(),
     // Type-specific settings (stored in settings JSON)
     is_enterprise_account: z.boolean().optional(), // OpenRouter specific
     vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
@@ -279,6 +285,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   system_prompt: '',
   system_prompt_override: false,
   response_header_timeout_seconds: 0,
+  fallback_pre_response_budget_seconds: 0,
   // Type-specific settings
   is_enterprise_account: false,
   vertex_key_type: 'json',
@@ -319,6 +326,7 @@ export function transformChannelToFormDefaults(
     system_prompt: '',
     system_prompt_override: false,
     response_header_timeout_seconds: 0,
+    fallback_pre_response_budget_seconds: 0,
   }
 
   if (channel.setting) {
@@ -335,6 +343,11 @@ export function transformChannelToFormDefaults(
           parsed.response_header_timeout_seconds
         )
           ? parsed.response_header_timeout_seconds
+          : 0,
+        fallback_pre_response_budget_seconds: Number.isInteger(
+          parsed.fallback_pre_response_budget_seconds
+        )
+          ? parsed.fallback_pre_response_budget_seconds
           : 0,
       }
     } catch (error) {
@@ -459,6 +472,8 @@ function buildSettingJSON(formData: ChannelFormValues): string {
     system_prompt_override: formData.system_prompt_override || false,
     response_header_timeout_seconds:
       formData.response_header_timeout_seconds || 0,
+    fallback_pre_response_budget_seconds:
+      formData.fallback_pre_response_budget_seconds || 0,
   }
   return JSON.stringify(settingObj)
 }

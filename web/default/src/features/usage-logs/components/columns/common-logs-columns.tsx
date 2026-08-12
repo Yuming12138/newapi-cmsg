@@ -300,6 +300,8 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         const log = row.original
         const timestamp = row.getValue('created_at') as number
         const config = getLogTypeConfig(log.type)
+        const fallbackRecovered =
+          log.type === 5 && log.fallback_recovered === true
 
         return (
           <div className='flex flex-col gap-0.5'>
@@ -307,8 +309,12 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
               {formatTimestampToDate(timestamp)}
             </span>
             <StatusBadge
-              label={t(config.label)}
-              variant={config.color as StatusBadgeProps['variant']}
+              label={t(fallbackRecovered ? 'Fallback recovered' : config.label)}
+              variant={
+                fallbackRecovered
+                  ? 'yellow'
+                  : (config.color as StatusBadgeProps['variant'])
+              }
               size='sm'
               copyable={false}
             />
@@ -843,6 +849,13 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         const [dialogOpen, setDialogOpen] = useState(false)
         const log = row.original
         const other = parseLogOther(log.other)
+        const recoveredSummary = log.fallback_recovered
+          ? `${t('Fallback recovered')}${
+              log.recovered_channel
+                ? ` · ${t('Channel')} #${log.recovered_channel}`
+                : ''
+            }`
+          : ''
 
         const segments = buildDetailSegments(log, other, t)
         const primary = segments[0]
@@ -873,6 +886,10 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                       +{segments.length - 1}
                     </span>
                   )}
+                </span>
+              ) : recoveredSummary ? (
+                <span className='truncate text-amber-700 group-hover:underline dark:text-amber-400'>
+                  {recoveredSummary}
                 </span>
               ) : log.content ? (
                 <span className='text-muted-foreground truncate group-hover:underline'>

@@ -18,26 +18,79 @@ import (
 )
 
 type Log struct {
-	Id               int    `json:"id" gorm:"index:idx_created_at_id,priority:2;index:idx_user_id_id,priority:2"`
-	UserId           int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
-	CreatedAt        int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:1;index:idx_created_at_type"`
-	Type             int    `json:"type" gorm:"index:idx_created_at_type"`
-	Content          string `json:"content"`
-	Username         string `json:"username" gorm:"index;index:index_username_model_name,priority:2;default:''"`
-	TokenName        string `json:"token_name" gorm:"index;default:''"`
-	ModelName        string `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
-	Quota            int    `json:"quota" gorm:"default:0"`
-	PromptTokens     int    `json:"prompt_tokens" gorm:"default:0"`
-	CompletionTokens int    `json:"completion_tokens" gorm:"default:0"`
-	UseTime          int    `json:"use_time" gorm:"default:0"`
-	IsStream         bool   `json:"is_stream"`
-	ChannelId        int    `json:"channel" gorm:"index"`
-	ChannelName      string `json:"channel_name" gorm:"->"`
-	TokenId          int    `json:"token_id" gorm:"default:0;index"`
-	Group            string `json:"group" gorm:"index"`
-	Ip               string `json:"ip" gorm:"index;default:''"`
-	RequestId        string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
-	Other            string `json:"other"`
+	Id                 int    `json:"id" gorm:"index:idx_created_at_id,priority:2;index:idx_user_id_id,priority:2"`
+	UserId             int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
+	CreatedAt          int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:1;index:idx_created_at_type"`
+	Type               int    `json:"type" gorm:"index:idx_created_at_type"`
+	Content            string `json:"content"`
+	Username           string `json:"username" gorm:"index;index:index_username_model_name,priority:2;default:''"`
+	TokenName          string `json:"token_name" gorm:"index;default:''"`
+	ModelName          string `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
+	Quota              int    `json:"quota" gorm:"default:0"`
+	PromptTokens       int    `json:"prompt_tokens" gorm:"default:0"`
+	CompletionTokens   int    `json:"completion_tokens" gorm:"default:0"`
+	UseTime            int    `json:"use_time" gorm:"default:0"`
+	IsStream           bool   `json:"is_stream"`
+	ChannelId          int    `json:"channel" gorm:"index"`
+	ChannelName        string `json:"channel_name" gorm:"->"`
+	TokenId            int    `json:"token_id" gorm:"default:0;index"`
+	Group              string `json:"group" gorm:"index"`
+	Ip                 string `json:"ip" gorm:"index;default:''"`
+	RequestId          string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
+	Other              string `json:"other"`
+	FallbackRecovered  bool   `json:"fallback_recovered,omitempty" gorm:"-"`
+	RecoveredChannelId int    `json:"recovered_channel,omitempty" gorm:"-"`
+	RecoveredAt        int64  `json:"recovered_at,omitempty" gorm:"-"`
+}
+
+type fallbackRecovery struct {
+	RequestId string `gorm:"column:request_id"`
+	ChannelId int    `gorm:"column:channel_id"`
+	CreatedAt int64  `gorm:"column:created_at"`
+}
+
+// attachFallbackRecoveries keeps channel-attempt error rows intact for audit,
+// while annotating errors whose request_id later produced a consume log. The
+// follow-up query also works when the success row is on a different page.
+func attachFallbackRecoveries(logs []*Log) error {
+	requestIds := types.NewSet[string]()
+	for _, log := range logs {
+		if log != nil && log.Type == LogTypeError && strings.TrimSpace(log.RequestId) != "" {
+			requestIds.Add(log.RequestId)
+		}
+	}
+	if requestIds.Len() == 0 {
+		return nil
+	}
+
+	var recoveries []fallbackRecovery
+	if err := LOG_DB.Model(&Log{}).
+		Select("request_id, channel_id, created_at").
+		Where("type = ? AND request_id IN ?", LogTypeConsume, requestIds.Items()).
+		Order("created_at asc, id asc").
+		Find(&recoveries).Error; err != nil {
+		return err
+	}
+
+	firstRecovery := make(map[string]fallbackRecovery, len(recoveries))
+	for _, recovery := range recoveries {
+		if _, exists := firstRecovery[recovery.RequestId]; !exists {
+			firstRecovery[recovery.RequestId] = recovery
+		}
+	}
+	for _, log := range logs {
+		if log == nil || log.Type != LogTypeError {
+			continue
+		}
+		recovery, ok := firstRecovery[log.RequestId]
+		if !ok || recovery.CreatedAt < log.CreatedAt {
+			continue
+		}
+		log.FallbackRecovered = true
+		log.RecoveredChannelId = recovery.ChannelId
+		log.RecoveredAt = recovery.CreatedAt
+	}
+	return nil
 }
 
 // don't use iota, avoid change log type value
@@ -488,6 +541,9 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	if err != nil {
 		return nil, 0, err
 	}
+	if err = attachFallbackRecoveries(logs); err != nil {
+		return nil, 0, err
+	}
 
 	channelIds := types.NewSet[int]()
 	for _, log := range logs {
@@ -612,6 +668,10 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	err = tx.Order("logs.created_at desc, logs.id desc").Limit(num).Offset(startIdx).Find(&logs).Error
 	if err != nil {
 		common.SysError("failed to search user logs: " + err.Error())
+		return nil, 0, errors.New("查询日志失败")
+	}
+	if err = attachFallbackRecoveries(logs); err != nil {
+		common.SysError("failed to annotate recovered fallback logs: " + err.Error())
 		return nil, 0, errors.New("查询日志失败")
 	}
 

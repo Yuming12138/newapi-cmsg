@@ -195,10 +195,15 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
         )
       }
       renderRow={(row) => {
-        const logType = (row.original as Record<string, unknown>).type as
-          number | undefined
+        const log = row.original as Record<string, unknown>
+        const logType = log.type as number | undefined
+        const fallbackRecovered = log.fallback_recovered === true
         const tintClass =
-          isCommonLog && logType != null ? (logTypeRowTint[logType] ?? '') : ''
+          isCommonLog && fallbackRecovered
+            ? 'bg-amber-50/35 dark:bg-amber-950/15'
+            : isCommonLog && logType != null
+              ? (logTypeRowTint[logType] ?? '')
+              : ''
 
         return (
           <TableRow key={row.id} className={cn('transition-colors', tintClass)}>
