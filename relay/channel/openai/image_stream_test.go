@@ -102,6 +102,47 @@ func TestOpenaiImageStreamHandlerWrapsJSONResponse(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `data: [DONE]`)
 }
 
+func TestOpenaiImageHandlerRecordsActualImageSizeForBillingAudit(t *testing.T) {
+	oldMode := gin.Mode()
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() { gin.SetMode(oldMode) })
+
+	body := `{"created":1710000000,"requested_size":"2048x1152","actual_size":"1536x1024","size":"1536x1024","size_mismatch":true,"data":[{"b64_json":"final","requested_size":"2048x1152","actual_size":"1536x1024","size_mismatch":true}],"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}`
+	c, _, resp, info := newImageTestContext(t, body, "application/json", false)
+
+	usage, err := OpenaiImageHandler(c, info, resp)
+	require.Nil(t, err)
+	require.Equal(t, 7, usage.TotalTokens)
+	require.NotNil(t, info.ImageResultInfo)
+	require.Equal(t, "2048x1152", info.ImageResultInfo.RequestedSize)
+	require.Equal(t, "1536x1024", info.ImageResultInfo.ActualSize)
+	require.True(t, info.ImageResultInfo.SizeMismatch)
+	require.Equal(t, "actual_usage", info.ImageResultInfo.BillingBasis)
+}
+
+func TestOpenaiImageStreamHandlerForwardsActualImageSize(t *testing.T) {
+	oldMode := gin.Mode()
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() { gin.SetMode(oldMode) })
+
+	body := strings.Join([]string{
+		`event: image_generation.completed`,
+		`data: {"type":"image_generation.completed","b64_json":"final","requested_size":"2048x1152","actual_size":"1536x1024","size":"1536x1024","size_mismatch":true,"usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}`,
+		``,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+	c, recorder, resp, info := newImageTestContext(t, body, "text/event-stream", true)
+
+	usage, err := OpenaiImageStreamHandler(c, info, resp)
+	require.Nil(t, err)
+	require.Equal(t, 7, usage.TotalTokens)
+	require.NotNil(t, info.ImageResultInfo)
+	require.Equal(t, "1536x1024", info.ImageResultInfo.ActualSize)
+	require.Contains(t, recorder.Body.String(), `"actual_size":"1536x1024"`)
+	require.Contains(t, recorder.Body.String(), `"size_mismatch":true`)
+}
+
 // TestOpenaiImageHandlersReturnJSONError covers JSON error responses for both
 // entry points: the non-streaming handler and the stream handler's non-SSE
 // fallback. Neither must leak the error body to the client.

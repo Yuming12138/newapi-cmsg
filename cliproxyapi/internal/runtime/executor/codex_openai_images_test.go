@@ -48,7 +48,8 @@ func TestCodexExecutorDirectOpenAIImageGenerationUsesImagesEndpoint(t *testing.T
 	var gotClientRequestID string
 	var gotOriginator string
 	var gotBody []byte
-	upstreamBody := []byte(`{"created":1713833628,"data":[{"b64_json":"AA=="}],"usage":{"total_tokens":100,"input_tokens":50,"output_tokens":50}}`)
+	imageB64 := encodeImageForSizeTest(t, "png", 1536, 1024)
+	upstreamBody := []byte(`{"created":1713833628,"data":[{"b64_json":"` + imageB64 + `"}],"usage":{"total_tokens":100,"input_tokens":50,"output_tokens":50}}`)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
@@ -120,8 +121,17 @@ func TestCodexExecutorDirectOpenAIImageGenerationUsesImagesEndpoint(t *testing.T
 	if gjson.GetBytes(gotBody, "stream").Exists() {
 		t.Fatalf("stream should be removed for non-stream execution: %s", string(gotBody))
 	}
-	if !bytes.Equal(resp.Payload, upstreamBody) {
-		t.Fatalf("payload = %s, want %s", string(resp.Payload), string(upstreamBody))
+	if got := gjson.GetBytes(resp.Payload, "requested_size").String(); got != "1024x1024" {
+		t.Fatalf("requested_size = %q, want 1024x1024; payload=%s", got, string(resp.Payload))
+	}
+	if got := gjson.GetBytes(resp.Payload, "actual_size").String(); got != "1536x1024" {
+		t.Fatalf("actual_size = %q, want 1536x1024; payload=%s", got, string(resp.Payload))
+	}
+	if !gjson.GetBytes(resp.Payload, "size_mismatch").Bool() {
+		t.Fatalf("size_mismatch missing; payload=%s", string(resp.Payload))
+	}
+	if got := gjson.GetBytes(resp.Payload, "usage.total_tokens").Int(); got != 100 {
+		t.Fatalf("usage.total_tokens = %d, want 100; payload=%s", got, string(resp.Payload))
 	}
 }
 
@@ -129,6 +139,7 @@ func TestCodexExecutorDirectOpenAIImageGenerationStreamsImagesEndpoint(t *testin
 	var gotPath string
 	var gotAccept string
 	var gotBody []byte
+	imageB64 := encodeImageForSizeTest(t, "png", 1536, 1024)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotAccept = r.Header.Get("Accept")
@@ -139,14 +150,14 @@ func TestCodexExecutorDirectOpenAIImageGenerationStreamsImagesEndpoint(t *testin
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("event: image_generation.partial_image\ndata: {\"type\":\"image_generation.partial_image\",\"b64_json\":\"AA==\",\"partial_image_index\":0}\n\n"))
-		_, _ = w.Write([]byte("event: image_generation.completed\ndata: {\"type\":\"image_generation.completed\",\"b64_json\":\"BB==\",\"usage\":{\"total_tokens\":10,\"input_tokens\":4,\"output_tokens\":6}}\n\n"))
+		_, _ = w.Write([]byte("event: image_generation.completed\ndata: {\"type\":\"image_generation.completed\",\"b64_json\":\"" + imageB64 + "\",\"usage\":{\"total_tokens\":10,\"input_tokens\":4,\"output_tokens\":6}}\n\n"))
 	}))
 	defer server.Close()
 
 	executor := NewCodexExecutor(&config.Config{})
 	stream, errStream := executor.ExecuteStream(context.Background(), newCodexOpenAIImageTestAuth(server.URL), cliproxyexecutor.Request{
 		Model:   "gpt-image-2",
-		Payload: []byte(`{"model":"gpt-image-2","prompt":"A cute baby sea otter","partial_images":2}`),
+		Payload: []byte(`{"model":"gpt-image-2","prompt":"A cute baby sea otter","partial_images":2,"size":"1024x1024"}`),
 	}, codexOpenAIImageTestOptions(codexImagesGenerationsPath, true))
 	if errStream != nil {
 		t.Fatalf("ExecuteStream() error = %v", errStream)
@@ -175,6 +186,9 @@ func TestCodexExecutorDirectOpenAIImageGenerationStreamsImagesEndpoint(t *testin
 	out := combined.String()
 	if !strings.Contains(out, "event: image_generation.partial_image") || !strings.Contains(out, "event: image_generation.completed") {
 		t.Fatalf("stream output missing image events: %q", out)
+	}
+	if !strings.Contains(out, `"actual_size":"1536x1024"`) || !strings.Contains(out, `"size_mismatch":true`) {
+		t.Fatalf("stream output missing verified size metadata: %q", out)
 	}
 }
 

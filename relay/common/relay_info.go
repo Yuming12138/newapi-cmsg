@@ -60,6 +60,14 @@ type ResponsesUsageInfo struct {
 	BuiltInTools map[string]*BuildInToolInfo
 }
 
+type ImageResultInfo struct {
+	RequestedSize string
+	ActualSize    string
+	ReportedSize  string
+	SizeMismatch  bool
+	BillingBasis  string
+}
+
 type ChannelMeta struct {
 	ChannelType          int
 	ChannelId            int
@@ -191,6 +199,7 @@ type RelayInfo struct {
 	*ClaudeConvertInfo
 	*RerankerInfo
 	*ResponsesUsageInfo
+	*ImageResultInfo
 	*ChannelMeta
 	*TaskRelayInfo
 }
@@ -200,6 +209,7 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	// that may refer to storage already closed by the previous attempt.
 	info.UpstreamRequestBodySize = 0
 	info.UpstreamRequestGetBody = nil
+	info.ImageResultInfo = nil
 
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)

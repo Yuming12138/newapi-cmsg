@@ -211,12 +211,21 @@ func (i *ImageRequest) SetModelName(modelName string) {
 }
 
 type ImageResponse struct {
-	Data     []ImageData     `json:"data"`
-	Created  int64           `json:"created"`
-	Metadata json.RawMessage `json:"metadata,omitempty"`
+	Data          []ImageData     `json:"data"`
+	Created       int64           `json:"created"`
+	Metadata      json.RawMessage `json:"metadata,omitempty"`
+	RequestedSize string          `json:"requested_size,omitempty"`
+	ActualSize    string          `json:"actual_size,omitempty"`
+	Size          string          `json:"size,omitempty"`
+	ReportedSize  string          `json:"reported_size,omitempty"`
+	SizeMismatch  *bool           `json:"size_mismatch,omitempty"`
 }
 type ImageData struct {
 	Url           string `json:"url"`
 	B64Json       string `json:"b64_json"`
 	RevisedPrompt string `json:"revised_prompt"`
+	RequestedSize string `json:"requested_size,omitempty"`
+	ActualSize    string `json:"actual_size,omitempty"`
+	Size          string `json:"size,omitempty"`
+	SizeMismatch  *bool  `json:"size_mismatch,omitempty"`
 }

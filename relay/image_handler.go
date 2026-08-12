@@ -150,8 +150,22 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 
 	var logContent []string
 
-	if len(request.Size) > 0 {
-		logContent = append(logContent, fmt.Sprintf("大小 %s", request.Size))
+	resultInfo := info.ImageResultInfo
+	if resultInfo != nil {
+		if resultInfo.RequestedSize != "" {
+			logContent = append(logContent, fmt.Sprintf("请求大小 %s", resultInfo.RequestedSize))
+		}
+		if resultInfo.ActualSize != "" {
+			logContent = append(logContent, fmt.Sprintf("实际大小 %s", resultInfo.ActualSize))
+		} else if resultInfo.RequestedSize != "" {
+			logContent = append(logContent, "实际大小 未确认")
+		}
+		if resultInfo.SizeMismatch {
+			logContent = append(logContent, "尺寸不一致")
+		}
+		logContent = append(logContent, "最终计费依据 实际用量")
+	} else if len(request.Size) > 0 {
+		logContent = append(logContent, fmt.Sprintf("请求大小 %s", request.Size), "实际大小 未确认")
 	}
 	if len(quality) > 0 {
 		logContent = append(logContent, fmt.Sprintf("品质 %s", quality))

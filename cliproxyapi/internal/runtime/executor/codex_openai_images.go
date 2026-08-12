@@ -5,8 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -41,6 +45,7 @@ type codexOpenAIImagePreparedRequest struct {
 	Body           []byte
 	ResponseFormat string
 	StreamPrefix   string
+	RequestedSize  string
 }
 
 type codexImageCallResult struct {
@@ -50,6 +55,7 @@ type codexImageCallResult struct {
 	Size          string
 	Background    string
 	Quality       string
+	ActualSize    string
 }
 
 func isCodexOpenAIImageRequest(opts cliproxyexecutor.Options) bool {
@@ -166,7 +172,7 @@ func (e *CodexExecutor) executeOpenAIImage(ctx context.Context, auth *cliproxyau
 			if len(results) == 0 {
 				return resp, statusErr{code: http.StatusBadGateway, msg: "upstream did not return image output"}
 			}
-			out, errOutput := codexBuildImagesAPIResponse(results, createdAt, usageRaw, firstMeta, prepared.ResponseFormat)
+			out, errOutput := codexBuildImagesAPIResponse(results, createdAt, usageRaw, firstMeta, prepared.ResponseFormat, prepared.RequestedSize)
 			if errOutput != nil {
 				return resp, errOutput
 			}
@@ -298,7 +304,7 @@ func (e *CodexExecutor) executeOpenAIImageStream(ctx context.Context, auth *clip
 					return
 				}
 				for _, img := range results {
-					frame := codexBuildImageCompletedFrame(img, usageRaw, prepared.ResponseFormat, prepared.StreamPrefix)
+					frame := codexBuildImageCompletedFrame(img, usageRaw, prepared.ResponseFormat, prepared.StreamPrefix, prepared.RequestedSize)
 					if len(frame) > 0 && !sendPayload(frame) {
 						return
 					}
@@ -370,6 +376,7 @@ func (e *CodexExecutor) executeDirectOpenAIImage(ctx context.Context, auth *clip
 		err = newCodexStatusErr(httpResp.StatusCode, data)
 		return resp, err
 	}
+	data = codexEnrichOpenAIImagePayload(data, codexRequestedImageSize(body))
 
 	reporter.Publish(ctx, helps.ParseOpenAIUsage(data))
 	reporter.EnsurePublished(ctx)
@@ -441,32 +448,27 @@ func (e *CodexExecutor) executeDirectOpenAIImageStream(ctx context.Context, auth
 			reporter.EnsurePublished(ctx)
 		}()
 
-		buffer := make([]byte, 32*1024)
-		for {
-			n, errRead := httpResp.Body.Read(buffer)
-			if n > 0 {
-				chunk := bytes.Clone(buffer[:n])
-				chunk = applyCodexIdentityConfuseResponsePayload(chunk, identityState)
-				helps.AppendAPIResponseChunk(ctx, e.cfg, chunk)
-				for _, line := range bytes.Split(chunk, []byte("\n")) {
-					streamUsage.ObserveOpenAIStream(bytes.TrimSpace(line))
-				}
-				select {
-				case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
-				case <-ctx.Done():
-					return
-				}
-			}
-			if errRead != nil {
-				if errRead != io.EOF {
-					helps.RecordAPIResponseError(ctx, e.cfg, errRead)
-					reporter.PublishFailure(ctx, errRead)
-					select {
-					case out <- cliproxyexecutor.StreamChunk{Err: errRead}:
-					case <-ctx.Done():
-					}
-				}
+		requestedSize := codexRequestedImageSize(body)
+		scanner := bufio.NewScanner(httpResp.Body)
+		scanner.Buffer(nil, 52_428_800) // completed events can contain a large base64 image
+		for scanner.Scan() {
+			line := applyCodexIdentityConfuseResponsePayload(scanner.Bytes(), identityState)
+			line = codexEnrichOpenAIImageSSELine(line, requestedSize)
+			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
+			streamUsage.ObserveOpenAIStream(bytes.TrimSpace(line))
+			chunk := append(bytes.Clone(line), '\n')
+			select {
+			case out <- cliproxyexecutor.StreamChunk{Payload: chunk}:
+			case <-ctx.Done():
 				return
+			}
+		}
+		if errScan := scanner.Err(); errScan != nil {
+			helps.RecordAPIResponseError(ctx, e.cfg, errScan)
+			reporter.PublishFailure(ctx, errScan)
+			select {
+			case out <- cliproxyexecutor.StreamChunk{Err: errScan}:
+			case <-ctx.Done():
 			}
 		}
 	}()
@@ -495,6 +497,9 @@ func codexPrepareDirectOpenAIImageBody(req cliproxyexecutor.Request, opts clipro
 	body, contentType, errPrepare := codexPrepareDirectOpenAIImagePayload(req, opts, model, stream)
 	if errPrepare != nil {
 		return nil, "", "", errPrepare
+	}
+	if errSize := codexValidateOpenAIImageSize(codexRequestedImageSize(body)); errSize != nil {
+		return nil, "", "", errSize
 	}
 	return body, contentType, model, nil
 }
@@ -710,6 +715,9 @@ func codexPrepareOpenAIImageGenerationJSON(rawJSON []byte, routeModel string) (c
 	if !json.Valid(rawJSON) {
 		return codexOpenAIImagePreparedRequest{}, fmt.Errorf("invalid OpenAI image generation request JSON")
 	}
+	if errSize := codexValidateOpenAIImageSize(codexRequestedImageSize(rawJSON)); errSize != nil {
+		return codexOpenAIImagePreparedRequest{}, errSize
+	}
 	prompt := strings.TrimSpace(gjson.GetBytes(rawJSON, "prompt").String())
 	tool := codexBuildOpenAIImageTool(rawJSON, routeModel, "generate", []string{"size", "quality", "background", "output_format", "moderation"}, []string{"output_compression", "partial_images"})
 	body := codexBuildImagesResponsesRequest(prompt, nil, tool)
@@ -717,12 +725,16 @@ func codexPrepareOpenAIImageGenerationJSON(rawJSON []byte, routeModel string) (c
 		Body:           body,
 		ResponseFormat: codexOpenAIImageResponseFormatFromJSON(rawJSON),
 		StreamPrefix:   "image_generation",
+		RequestedSize:  codexRequestedImageSize(rawJSON),
 	}, nil
 }
 
 func codexPrepareOpenAIImageEditJSON(rawJSON []byte, routeModel string) (codexOpenAIImagePreparedRequest, error) {
 	if !json.Valid(rawJSON) {
 		return codexOpenAIImagePreparedRequest{}, fmt.Errorf("invalid OpenAI image edit request JSON")
+	}
+	if errSize := codexValidateOpenAIImageSize(codexRequestedImageSize(rawJSON)); errSize != nil {
+		return codexOpenAIImagePreparedRequest{}, errSize
 	}
 	prompt := strings.TrimSpace(gjson.GetBytes(rawJSON, "prompt").String())
 	images := make([]string, 0)
@@ -743,6 +755,7 @@ func codexPrepareOpenAIImageEditJSON(rawJSON []byte, routeModel string) (codexOp
 		Body:           body,
 		ResponseFormat: codexOpenAIImageResponseFormatFromJSON(rawJSON),
 		StreamPrefix:   "image_edit",
+		RequestedSize:  codexRequestedImageSize(rawJSON),
 	}, nil
 }
 
@@ -768,6 +781,10 @@ func codexPrepareOpenAIImageEditMultipart(rawBody []byte, routeModel string, con
 
 	prompt := strings.TrimSpace(codexFormValue(form, "prompt"))
 	responseFormat := codexNormalizeImageResponseFormat(codexFormValue(form, "response_format"))
+	requestedSize := strings.TrimSpace(codexFormValue(form, "size"))
+	if errSize := codexValidateOpenAIImageSize(requestedSize); errSize != nil {
+		return codexOpenAIImagePreparedRequest{}, errSize
+	}
 	tool := []byte(`{"type":"image_generation","action":"edit"}`)
 	tool, _ = sjson.SetBytes(tool, "model", codexOpenAIImageToolModel(codexFormValue(form, "model"), routeModel))
 	for _, field := range []string{"size", "quality", "background", "output_format", "input_fidelity", "moderation"} {
@@ -804,6 +821,7 @@ func codexPrepareOpenAIImageEditMultipart(rawBody []byte, routeModel string, con
 		Body:           body,
 		ResponseFormat: responseFormat,
 		StreamPrefix:   "image_edit",
+		RequestedSize:  requestedSize,
 	}, nil
 }
 
@@ -954,6 +972,7 @@ func codexExtractImageResults(completed []byte, itemsByIndex map[int64][]byte, f
 			Background:    strings.TrimSpace(item.Get("background").String()),
 			Quality:       strings.TrimSpace(item.Get("quality").String()),
 		}
+		entry.ActualSize, _ = codexImageDimensionsFromBase64(entry.Result)
 		if len(results) == 0 {
 			firstMeta = entry
 		}
@@ -995,7 +1014,7 @@ func codexExtractImageResults(completed []byte, itemsByIndex map[int64][]byte, f
 	return results, createdAt, usageRaw, firstMeta, nil
 }
 
-func codexBuildImagesAPIResponse(results []codexImageCallResult, createdAt int64, usageRaw []byte, firstMeta codexImageCallResult, responseFormat string) ([]byte, error) {
+func codexBuildImagesAPIResponse(results []codexImageCallResult, createdAt int64, usageRaw []byte, firstMeta codexImageCallResult, responseFormat string, requestedSize string) ([]byte, error) {
 	out := []byte(`{"created":0,"data":[]}`)
 	out, _ = sjson.SetBytes(out, "created", createdAt)
 	responseFormat = codexNormalizeImageResponseFormat(responseFormat)
@@ -1009,6 +1028,7 @@ func codexBuildImagesAPIResponse(results []codexImageCallResult, createdAt int64
 		if img.RevisedPrompt != "" {
 			item, _ = sjson.SetBytes(item, "revised_prompt", img.RevisedPrompt)
 		}
+		item = codexSetImageSizeMetadata(item, "", requestedSize, img.ActualSize)
 		out, _ = sjson.SetRawBytes(out, "data.-1", item)
 	}
 	if firstMeta.Background != "" {
@@ -1020,7 +1040,15 @@ func codexBuildImagesAPIResponse(results []codexImageCallResult, createdAt int64
 	if firstMeta.Quality != "" {
 		out, _ = sjson.SetBytes(out, "quality", firstMeta.Quality)
 	}
-	if firstMeta.Size != "" {
+	actualSize := ""
+	if len(results) > 0 {
+		actualSize = results[0].ActualSize
+	}
+	if firstMeta.Size != "" && actualSize != "" && codexCanonicalImageSize(firstMeta.Size) != codexCanonicalImageSize(actualSize) {
+		out, _ = sjson.SetBytes(out, "reported_size", firstMeta.Size)
+	}
+	out = codexSetImageSizeMetadata(out, "", requestedSize, actualSize)
+	if actualSize == "" && firstMeta.Size != "" {
 		out, _ = sjson.SetBytes(out, "size", firstMeta.Size)
 	}
 	if len(usageRaw) > 0 && json.Valid(usageRaw) {
@@ -1047,7 +1075,7 @@ func codexBuildImagePartialFrame(payload []byte, responseFormat string, streamPr
 	return codexBuildSSEFrame(eventName, data)
 }
 
-func codexBuildImageCompletedFrame(img codexImageCallResult, usageRaw []byte, responseFormat string, streamPrefix string) []byte {
+func codexBuildImageCompletedFrame(img codexImageCallResult, usageRaw []byte, responseFormat string, streamPrefix string, requestedSize string) []byte {
 	eventName := strings.TrimSpace(streamPrefix) + ".completed"
 	data := []byte(`{"type":""}`)
 	data, _ = sjson.SetBytes(data, "type", eventName)
@@ -1056,10 +1084,176 @@ func codexBuildImageCompletedFrame(img codexImageCallResult, usageRaw []byte, re
 	} else {
 		data, _ = sjson.SetBytes(data, "b64_json", img.Result)
 	}
+	data = codexSetImageSizeMetadata(data, "", requestedSize, img.ActualSize)
 	if len(usageRaw) > 0 && json.Valid(usageRaw) {
 		data, _ = sjson.SetRawBytes(data, "usage", usageRaw)
 	}
 	return codexBuildSSEFrame(eventName, data)
+}
+
+func codexRequestedImageSize(payload []byte) string {
+	if !json.Valid(payload) {
+		return ""
+	}
+	return strings.TrimSpace(gjson.GetBytes(payload, "size").String())
+}
+
+func codexValidateOpenAIImageSize(size string) error {
+	switch codexCanonicalImageSize(size) {
+	case "", "auto", "1024x1024", "1536x1024", "1024x1536":
+		return nil
+	default:
+		return statusErr{
+			code: http.StatusBadRequest,
+			msg: fmt.Sprintf(
+				"unsupported image size %q; supported sizes are 1024x1024, 1536x1024, 1024x1536, and auto",
+				strings.TrimSpace(size),
+			),
+		}
+	}
+}
+
+func codexCanonicalImageSize(size string) string {
+	size = strings.ToLower(strings.TrimSpace(size))
+	size = strings.ReplaceAll(size, "×", "x")
+	size = strings.ReplaceAll(size, " ", "")
+	return size
+}
+
+func codexImageSizeMismatch(requestedSize string, actualSize string) bool {
+	requested := codexCanonicalImageSize(requestedSize)
+	actual := codexCanonicalImageSize(actualSize)
+	return requested != "" && requested != "auto" && actual != "" && requested != actual
+}
+
+func codexSetImageSizeMetadata(payload []byte, prefix string, requestedSize string, actualSize string) []byte {
+	path := func(field string) string {
+		if prefix == "" {
+			return field
+		}
+		return prefix + "." + field
+	}
+	if requestedSize != "" {
+		payload, _ = sjson.SetBytes(payload, path("requested_size"), requestedSize)
+	}
+	if actualSize != "" {
+		payload, _ = sjson.SetBytes(payload, path("actual_size"), actualSize)
+		payload, _ = sjson.SetBytes(payload, path("size"), actualSize)
+	}
+	if requestedSize != "" && actualSize != "" {
+		payload, _ = sjson.SetBytes(payload, path("size_mismatch"), codexImageSizeMismatch(requestedSize, actualSize))
+	}
+	return payload
+}
+
+func codexImagePayloadBase64(item gjson.Result) string {
+	if b64 := strings.TrimSpace(item.Get("b64_json").String()); b64 != "" {
+		return b64
+	}
+	url := strings.TrimSpace(item.Get("url").String())
+	if strings.HasPrefix(strings.ToLower(url), "data:image/") {
+		return url
+	}
+	return ""
+}
+
+func codexEnrichOpenAIImagePayload(payload []byte, requestedSize string) []byte {
+	if !json.Valid(payload) {
+		return payload
+	}
+	out := bytes.Clone(payload)
+	firstActualSize := ""
+	if data := gjson.GetBytes(payload, "data"); data.IsArray() {
+		for index, item := range data.Array() {
+			actualSize, ok := codexImageDimensionsFromBase64(codexImagePayloadBase64(item))
+			if !ok {
+				continue
+			}
+			if firstActualSize == "" {
+				firstActualSize = actualSize
+			}
+			out = codexSetImageSizeMetadata(out, fmt.Sprintf("data.%d", index), requestedSize, actualSize)
+		}
+	} else if actualSize, ok := codexImageDimensionsFromBase64(codexImagePayloadBase64(gjson.ParseBytes(payload))); ok {
+		firstActualSize = actualSize
+		out = codexSetImageSizeMetadata(out, "", requestedSize, actualSize)
+	}
+
+	if firstActualSize != "" {
+		reportedSize := strings.TrimSpace(gjson.GetBytes(payload, "size").String())
+		if reportedSize != "" && codexCanonicalImageSize(reportedSize) != codexCanonicalImageSize(firstActualSize) {
+			out, _ = sjson.SetBytes(out, "reported_size", reportedSize)
+		}
+		out = codexSetImageSizeMetadata(out, "", requestedSize, firstActualSize)
+	} else if requestedSize != "" {
+		out, _ = sjson.SetBytes(out, "requested_size", requestedSize)
+	}
+	return out
+}
+
+func codexEnrichOpenAIImageSSELine(line []byte, requestedSize string) []byte {
+	trimmed := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(trimmed, dataTag) {
+		return bytes.Clone(line)
+	}
+	payload := bytes.TrimSpace(trimmed[len(dataTag):])
+	if !json.Valid(payload) {
+		return bytes.Clone(line)
+	}
+	enriched := codexEnrichOpenAIImagePayload(payload, requestedSize)
+	return append([]byte("data: "), enriched...)
+}
+
+func codexImageDimensionsFromBase64(encoded string) (string, bool) {
+	encoded = strings.TrimSpace(encoded)
+	if comma := strings.IndexByte(encoded, ','); strings.HasPrefix(strings.ToLower(encoded), "data:image/") && comma >= 0 {
+		encoded = encoded[comma+1:]
+	}
+	if encoded == "" {
+		return "", false
+	}
+
+	decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(encoded))
+	if cfg, _, errDecode := image.DecodeConfig(decoder); errDecode == nil && cfg.Width > 0 && cfg.Height > 0 {
+		return fmt.Sprintf("%dx%d", cfg.Width, cfg.Height), true
+	}
+
+	decoder = base64.NewDecoder(base64.StdEncoding, strings.NewReader(encoded))
+	header := make([]byte, 30)
+	if _, errRead := io.ReadFull(decoder, header); errRead != nil {
+		return "", false
+	}
+	width, height, ok := codexWebPDimensions(header)
+	if !ok || width < 1 || height < 1 {
+		return "", false
+	}
+	return fmt.Sprintf("%dx%d", width, height), true
+}
+
+func codexWebPDimensions(header []byte) (int, int, bool) {
+	if len(header) < 30 || string(header[0:4]) != "RIFF" || string(header[8:12]) != "WEBP" {
+		return 0, 0, false
+	}
+	switch string(header[12:16]) {
+	case "VP8X":
+		width := int(header[24]) | int(header[25])<<8 | int(header[26])<<16
+		height := int(header[27]) | int(header[28])<<8 | int(header[29])<<16
+		return width + 1, height + 1, true
+	case "VP8 ":
+		if header[23] != 0x9d || header[24] != 0x01 || header[25] != 0x2a {
+			return 0, 0, false
+		}
+		return int(binary.LittleEndian.Uint16(header[26:28]) & 0x3fff), int(binary.LittleEndian.Uint16(header[28:30]) & 0x3fff), true
+	case "VP8L":
+		if header[20] != 0x2f {
+			return 0, 0, false
+		}
+		width := 1 + int(header[21]) + (int(header[22]&0x3f) << 8)
+		height := 1 + int(header[22]>>6) + (int(header[23]) << 2) + (int(header[24]&0x0f) << 10)
+		return width, height, true
+	default:
+		return 0, 0, false
+	}
 }
 
 func codexBuildSSEFrame(eventName string, data []byte) []byte {

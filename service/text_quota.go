@@ -448,6 +448,20 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other["image_ratio"] = summary.ImageRatio
 		other["image_output"] = summary.ImageTokens
 	}
+	if imageResult := relayInfo.ImageResultInfo; imageResult != nil {
+		other["image_result"] = true
+		if imageResult.RequestedSize != "" {
+			other["image_requested_size"] = imageResult.RequestedSize
+		}
+		if imageResult.ActualSize != "" {
+			other["image_actual_size"] = imageResult.ActualSize
+		}
+		if imageResult.ReportedSize != "" {
+			other["image_upstream_reported_size"] = imageResult.ReportedSize
+		}
+		other["image_size_mismatch"] = imageResult.SizeMismatch
+		other["image_billing_basis"] = imageResult.BillingBasis
+	}
 	if summary.WebSearchCallCount > 0 {
 		other["web_search"] = true
 		other["web_search_call_count"] = summary.WebSearchCallCount

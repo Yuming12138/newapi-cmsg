@@ -39,6 +39,11 @@ func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
+	var imageResp dto.ImageResponse
+	if err := common.Unmarshal(responseBody, &imageResp); err == nil {
+		recordOpenAIImageResultInfo(info, &imageResp)
+	}
+
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
@@ -114,6 +119,10 @@ func OpenaiImageStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp 
 			if service.ValidUsage(&usageResp.Usage) {
 				usage = &usageResp.Usage
 			}
+		}
+		var imageResp dto.ImageResponse
+		if err := common.Unmarshal(raw, &imageResp); err == nil {
+			recordOpenAIImageResultInfo(info, &imageResp)
 		}
 		writeOpenaiImageStreamChunk(c, raw)
 	})
@@ -211,6 +220,7 @@ func OpenaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 	if oaiError := usageResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+	recordOpenAIImageResultInfo(info, &imageResp)
 	normalizeOpenAIUsage(&usageResp.Usage)
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
 
@@ -238,6 +248,18 @@ func OpenaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 		if image.RevisedPrompt != "" {
 			payload["revised_prompt"] = image.RevisedPrompt
 		}
+		if image.RequestedSize != "" {
+			payload["requested_size"] = image.RequestedSize
+		}
+		if image.ActualSize != "" {
+			payload["actual_size"] = image.ActualSize
+		}
+		if image.Size != "" {
+			payload["size"] = image.Size
+		}
+		if image.SizeMismatch != nil {
+			payload["size_mismatch"] = *image.SizeMismatch
+		}
 		if service.ValidUsage(&usageResp.Usage) {
 			payload["usage"] = usageResp.Usage
 		}
@@ -262,6 +284,45 @@ func OpenaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
 	}
 	return &usageResp.Usage, nil
+}
+
+func recordOpenAIImageResultInfo(info *relaycommon.RelayInfo, response *dto.ImageResponse) {
+	if info == nil || response == nil {
+		return
+	}
+	requestedSize := strings.TrimSpace(response.RequestedSize)
+	actualSize := strings.TrimSpace(response.ActualSize)
+	reportedSize := strings.TrimSpace(response.ReportedSize)
+	mismatch := response.SizeMismatch != nil && *response.SizeMismatch
+	for _, image := range response.Data {
+		if requestedSize == "" {
+			requestedSize = strings.TrimSpace(image.RequestedSize)
+		}
+		if actualSize == "" {
+			actualSize = strings.TrimSpace(image.ActualSize)
+		}
+		if image.SizeMismatch != nil && *image.SizeMismatch {
+			mismatch = true
+		}
+		if requestedSize != "" && actualSize != "" {
+			break
+		}
+	}
+	if requestedSize == "" {
+		if request, ok := info.Request.(*dto.ImageRequest); ok && request != nil {
+			requestedSize = strings.TrimSpace(request.Size)
+		}
+	}
+	if requestedSize == "" && actualSize == "" && reportedSize == "" {
+		return
+	}
+	info.ImageResultInfo = &relaycommon.ImageResultInfo{
+		RequestedSize: requestedSize,
+		ActualSize:    actualSize,
+		ReportedSize:  reportedSize,
+		SizeMismatch:  mismatch,
+		BillingBasis:  "actual_usage",
+	}
 }
 
 func writeOpenaiImageStreamPayload(c *gin.Context, eventName string, payload any) error {

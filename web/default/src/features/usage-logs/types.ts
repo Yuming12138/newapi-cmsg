@@ -156,6 +156,12 @@ export interface LogOtherData {
   reasoning_effort?: string
   image?: boolean
   image_ratio?: number
+	image_result?: boolean
+	image_requested_size?: string
+	image_actual_size?: string
+	image_upstream_reported_size?: string
+	image_size_mismatch?: boolean
+	image_billing_basis?: string
   image_output?: number
   web_search?: boolean
   web_search_call_count?: number
