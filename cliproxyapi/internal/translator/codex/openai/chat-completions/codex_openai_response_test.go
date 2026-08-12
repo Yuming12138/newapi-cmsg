@@ -91,6 +91,65 @@ func TestConvertCodexResponseToOpenAI_ToolCallArgumentsDeltaOmitsNullContentFiel
 	}
 }
 
+func TestConvertCodexResponseToOpenAI_ToolCallStateFallsBackFromUnknownItemID(t *testing.T) {
+	ctx := context.Background()
+	var param any
+
+	added := ConvertCodexResponseToOpenAI(
+		ctx,
+		"gpt-5.6-terra",
+		nil,
+		nil,
+		[]byte(`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"TaskCreate","arguments":""}}`),
+		&param,
+	)
+	if len(added) != 1 {
+		t.Fatalf("added chunks = %d, want 1", len(added))
+	}
+
+	done := ConvertCodexResponseToOpenAI(
+		ctx,
+		"gpt-5.6-terra",
+		nil,
+		nil,
+		[]byte(`data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"TaskCreate","arguments":"{\"subject\":\"test\"}"}}`),
+		&param,
+	)
+	if len(done) != 1 {
+		t.Fatalf("done chunks = %d, want 1", len(done))
+	}
+
+	addedName := gjson.GetBytes(added[0], "choices.0.delta.tool_calls.0.function.name").String()
+	doneName := gjson.GetBytes(done[0], "choices.0.delta.tool_calls.0.function.name").String()
+	if got := addedName + doneName; got != "TaskCreate" {
+		t.Fatalf("assembled tool name = %q, want %q", got, "TaskCreate")
+	}
+	toolCall := gjson.GetBytes(done[0], "choices.0.delta.tool_calls.0")
+	if toolCall.Get("id").Exists() || toolCall.Get("function.name").Exists() {
+		t.Fatalf("done chunk repeated tool identity: %s", toolCall.Raw)
+	}
+	if got := toolCall.Get("function.arguments").String(); got != `{"subject":"test"}` {
+		t.Fatalf("done arguments = %q", got)
+	}
+}
+
+func TestConvertCodexResponseToOpenAI_TracksParallelToolCallIndexes(t *testing.T) {
+	ctx := context.Background()
+	var param any
+	for index, callID := range []string{"call_0", "call_1"} {
+		chunk := []byte(`data: {"type":"response.output_item.added","output_index":` + string(rune('0'+index)) + `,"item":{"id":"fc_` + string(rune('0'+index)) + `","type":"function_call","call_id":"` + callID + `","name":"lookup"}}`)
+		out := ConvertCodexResponseToOpenAI(ctx, "gpt-5.6-terra", nil, nil, chunk, &param)
+		if len(out) != 1 || gjson.GetBytes(out[0], "choices.0.delta.tool_calls.0.index").Int() != int64(index) {
+			t.Fatalf("added tool %d had unexpected output: %q", index, out)
+		}
+	}
+
+	out := ConvertCodexResponseToOpenAI(ctx, "gpt-5.6-terra", nil, nil, []byte(`data: {"type":"response.function_call_arguments.done","output_index":0,"arguments":"{\"q\":0}"}`), &param)
+	if len(out) != 1 || gjson.GetBytes(out[0], "choices.0.delta.tool_calls.0.index").Int() != 0 {
+		t.Fatalf("first tool arguments were assigned to the wrong index: %q", out)
+	}
+}
+
 func TestConvertCodexResponseToOpenAI_StreamPartialImageEmitsDeltaImages(t *testing.T) {
 	ctx := context.Background()
 	var param any

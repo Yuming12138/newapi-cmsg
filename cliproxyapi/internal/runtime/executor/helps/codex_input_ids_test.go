@@ -1,6 +1,7 @@
 package helps
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -26,7 +27,7 @@ func TestSanitizeCodexInputItemIDsBoundaries(t *testing.T) {
 	}
 }
 
-func TestSanitizeCodexInputItemIDsRemovesIncompatibleMessageIDs(t *testing.T) {
+func TestSanitizeCodexInputItemIDsNormalizesResponseItemIDs(t *testing.T) {
 	body := []byte(`{"input":[` +
 		`{"type":"message","id":"item_e22c64c4a475595bd304a335","role":"assistant","status":"completed","content":[{"type":"output_text","text":"from grok"}]},` +
 		`{"type":"message","id":"550e8400-e29b-41d4-a716-446655440000","role":"user","content":"next"},` +
@@ -45,9 +46,28 @@ func TestSanitizeCodexInputItemIDsRemovesIncompatibleMessageIDs(t *testing.T) {
 	if len(input) != 10 {
 		t.Fatalf("input length = %d, want 10: %s", len(input), got)
 	}
-	for index := 0; index < 5; index++ {
-		if input[index].Get("id").Exists() {
-			t.Fatalf("input.%d incompatible message id was not removed: %s", index, input[index].Raw)
+	wantIDs := []string{
+		"msg_item_e22c64c4a475595bd304a335",
+		"msg_550e8400-e29b-41d4-a716-446655440000",
+		"msg_out-1",
+		"",
+		"",
+		"msg_valid",
+		"msg-valid",
+		"fc_item_call",
+		"item_output",
+		"item_reference",
+	}
+	for index, wantID := range wantIDs {
+		gotID := input[index].Get("id")
+		if wantID == "" {
+			if gotID.Exists() && gotID.Type == gjson.String && gotID.String() != "" {
+				t.Fatalf("input.%d.id = %q, want empty or absent", index, gotID.String())
+			}
+			continue
+		}
+		if gotID.String() != wantID {
+			t.Fatalf("input.%d.id = %q, want %q", index, gotID.String(), wantID)
 		}
 	}
 	if gotText := input[0].Get("content.0.text").String(); gotText != "from grok" {
@@ -59,20 +79,8 @@ func TestSanitizeCodexInputItemIDsRemovesIncompatibleMessageIDs(t *testing.T) {
 	if gotStatus := input[0].Get("status").String(); gotStatus != "completed" {
 		t.Fatalf("message status changed: %q", gotStatus)
 	}
-	if gotID := input[5].Get("id").String(); gotID != "msg_valid" {
-		t.Fatalf("valid underscore message id changed: %q", gotID)
-	}
-	if gotID := input[6].Get("id").String(); gotID != "msg-valid" {
-		t.Fatalf("valid dash message id changed: %q", gotID)
-	}
-	if gotID := input[7].Get("id").String(); gotID != "item_call" {
-		t.Fatalf("function call item id changed: %q", gotID)
-	}
 	if gotCallID := input[7].Get("call_id").String(); gotCallID != "call-1" {
 		t.Fatalf("function call call_id changed: %q", gotCallID)
-	}
-	if gotID := input[8].Get("id").String(); gotID != "item_output" {
-		t.Fatalf("function call output item id changed: %q", gotID)
 	}
 	if gotCallID := input[8].Get("call_id").String(); gotCallID != "call-1" {
 		t.Fatalf("function call output call_id changed: %q", gotCallID)
@@ -82,6 +90,71 @@ func TestSanitizeCodexInputItemIDsRemovesIncompatibleMessageIDs(t *testing.T) {
 	}
 	if second := SanitizeCodexInputItemIDs(got); string(second) != string(got) {
 		t.Fatalf("sanitizer is not idempotent: first=%s second=%s", got, second)
+	}
+}
+
+func TestSanitizeCodexInputItemIDsAvoidsNormalizationCollisions(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		itemType string
+		prefix   string
+	}{
+		{name: "message", itemType: "message", prefix: "msg_"},
+		{name: "reasoning", itemType: "reasoning", prefix: "rs_"},
+		{name: "function call", itemType: "function_call", prefix: "fc_"},
+		{name: "custom tool call", itemType: "custom_tool_call", prefix: "ctc_"},
+		{name: "custom tool call output", itemType: "custom_tool_call_output", prefix: "ctco_"},
+	} {
+		for _, idCase := range []struct {
+			name      string
+			invalidID string
+		}{
+			{name: "short", invalidID: "item_collision"},
+			{name: "overlong", invalidID: strings.Repeat("x", codexInputItemIDLimit-len([]rune(testCase.prefix))+1)},
+		} {
+			prefixedID := testCase.prefix + idCase.invalidID
+			for _, order := range []struct {
+				name          string
+				ids           [2]string
+				prefixedIndex int
+			}{
+				{name: "local first", ids: [2]string{idCase.invalidID, prefixedID}, prefixedIndex: 1},
+				{name: "prefixed first", ids: [2]string{prefixedID, idCase.invalidID}, prefixedIndex: 0},
+			} {
+				t.Run(testCase.name+"/"+idCase.name+"/"+order.name, func(t *testing.T) {
+					body := []byte(fmt.Sprintf(`{"input":[{"type":%q,"id":%q},{"type":%q,"id":%q}]}`, testCase.itemType, order.ids[0], testCase.itemType, order.ids[1]))
+
+					first := SanitizeCodexInputItemIDs(body)
+					second := SanitizeCodexInputItemIDs(body)
+					normalizedAgain := SanitizeCodexInputItemIDs(first)
+					ids := [2]string{
+						gjson.GetBytes(first, "input.0.id").String(),
+						gjson.GetBytes(first, "input.1.id").String(),
+					}
+
+					if ids[0] == ids[1] {
+						t.Fatalf("distinct IDs collided after normalization: %q; payload=%s", ids[0], first)
+					}
+					for index, id := range ids {
+						if !strings.HasPrefix(id, testCase.prefix) {
+							t.Fatalf("input.%d.id = %q, want prefix %q", index, id, testCase.prefix)
+						}
+						if len([]rune(id)) > codexInputItemIDLimit {
+							t.Fatalf("input.%d.id length = %d, want at most %d: %q", index, len([]rune(id)), codexInputItemIDLimit, id)
+						}
+					}
+					if len([]rune(prefixedID)) <= codexInputItemIDLimit && ids[order.prefixedIndex] != prefixedID {
+						t.Fatalf("existing valid ID changed: got %q want %q", ids[order.prefixedIndex], prefixedID)
+					}
+					if string(first) != string(second) {
+						t.Fatalf("collision resolution is not deterministic: first=%s second=%s", first, second)
+					}
+					if string(first) != string(normalizedAgain) {
+						t.Fatalf("collision resolution is not idempotent: first=%s normalized_again=%s", first, normalizedAgain)
+					}
+				})
+			}
+		}
 	}
 }
 

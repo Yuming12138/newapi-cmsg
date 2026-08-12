@@ -198,6 +198,72 @@ func TestConvertOpenAIResponsesRequestToOpenAIChatCompletions_AttachesReasoningT
 	}
 }
 
+func TestConvertOpenAIResponsesRequestToOpenAIChatCompletions_PreservesAssistantContentWithNamespacedToolCalls(t *testing.T) {
+	raw := []byte(`{
+		"input": [
+			{"type":"reasoning","summary":[{"type":"summary_text","text":"inspect the next step"}]},
+			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Step 3 completed; continue to step 4."}]},
+			{"type":"function_call","call_id":"call_4","namespace":"mcp__one__","name":"lookup","arguments":"{}"},
+			{"type":"function_call","call_id":"call_5","namespace":"mcp__two__","name":"lookup","arguments":"{}"},
+			{"type":"function_call_output","call_id":"call_4","output":"ok one"},
+			{"type":"function_call_output","call_id":"call_5","output":"ok two"}
+		]
+	}`)
+
+	out := ConvertOpenAIResponsesRequestToOpenAIChatCompletions("kimi-k3", raw, false)
+	messages := gjson.GetBytes(out, "messages").Array()
+	if len(messages) != 3 {
+		t.Fatalf("messages count = %d, want 3; output=%s", len(messages), out)
+	}
+	assistant := messages[0]
+	if got := assistant.Get("content.0.text").String(); got != "Step 3 completed; continue to step 4." {
+		t.Fatalf("assistant content = %q; output=%s", got, out)
+	}
+	if got := assistant.Get("reasoning_content").String(); got != "inspect the next step" {
+		t.Fatalf("assistant reasoning = %q; output=%s", got, out)
+	}
+	if got := assistant.Get("tool_calls.0.function.name").String(); got != "mcp__one__lookup" {
+		t.Fatalf("first namespaced tool = %q; output=%s", got, out)
+	}
+	if got := assistant.Get("tool_calls.1.function.name").String(); got != "mcp__two__lookup" {
+		t.Fatalf("second namespaced tool = %q; output=%s", got, out)
+	}
+}
+
+func TestConvertOpenAIResponsesRequestToOpenAIChatCompletions_PreservesCustomToolOutputs(t *testing.T) {
+	tests := []struct {
+		name            string
+		output          string
+		wantText        string
+		wantImageURL    string
+		wantImageDetail string
+	}{
+		{name: "plain text", output: `"plain output"`, wantText: "plain output"},
+		{name: "structured text", output: `[{"type":"input_text","text":"done"}]`, wantText: "done"},
+		{name: "stringified image", output: `"[{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,AA==\",\"detail\":\"original\"}]"`, wantImageURL: "data:image/png;base64,AA==", wantImageDetail: "high"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := []byte(`{"input":[{"type":"custom_tool_call","call_id":"call_output","name":"inspect","input":"{}"},{"type":"custom_tool_call_output","call_id":"call_output","output":` + tt.output + `}]}`)
+			out := ConvertOpenAIResponsesRequestToOpenAIChatCompletions("kimi-k3", raw, false)
+			content := gjson.GetBytes(out, "messages.1.content")
+			if tt.wantImageURL != "" {
+				if got := content.Get("0.image_url.url").String(); got != tt.wantImageURL {
+					t.Fatalf("image URL = %q, want %q; output=%s", got, tt.wantImageURL, out)
+				}
+				if got := content.Get("0.image_url.detail").String(); got != tt.wantImageDetail {
+					t.Fatalf("image detail = %q, want %q; output=%s", got, tt.wantImageDetail, out)
+				}
+				return
+			}
+			if got := content.String(); got != tt.wantText {
+				t.Fatalf("custom tool content = %q, want %q; output=%s", got, tt.wantText, out)
+			}
+		})
+	}
+}
+
 func TestConvertOpenAIResponsesRequestToOpenAIChatCompletions_KeepsReasoningBeforeUserMessage(t *testing.T) {
 	raw := []byte(`{
 		"input": [

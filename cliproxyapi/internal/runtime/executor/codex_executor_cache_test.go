@@ -70,7 +70,7 @@ func TestCodexExecutorCacheHelper_OpenAIChatCompletions_StablePromptCacheKeyFrom
 	}
 }
 
-func TestCodexExecutorCacheHelperSanitizesCrossProviderMessageID(t *testing.T) {
+func TestCodexExecutorCacheHelperNormalizesCrossProviderMessageID(t *testing.T) {
 	executor := &CodexExecutor{}
 	rawJSON := []byte(`{"model":"gpt-5.5","input":[{"type":"message","id":"item_e22c64c4a475595bd304a335","role":"assistant","content":[{"type":"output_text","text":"from grok"}]},{"type":"function_call_output","call_id":"call-1","output":"ok"},{"type":"item_reference","id":"item_reference"}]}`)
 	req := cliproxyexecutor.Request{
@@ -82,8 +82,8 @@ func TestCodexExecutorCacheHelperSanitizesCrossProviderMessageID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cacheHelper error: %v", err)
 	}
-	if got := gjson.GetBytes(body, "input.0.id"); got.Exists() {
-		t.Fatalf("cross-provider message id was not removed: %s", body)
+	if got := gjson.GetBytes(body, "input.0.id").String(); got != "msg_item_e22c64c4a475595bd304a335" {
+		t.Fatalf("cross-provider message id = %q, want normalized ID: %s", got, body)
 	}
 	if got := gjson.GetBytes(body, "input.0.content.0.text").String(); got != "from grok" {
 		t.Fatalf("message content changed: %q", got)
