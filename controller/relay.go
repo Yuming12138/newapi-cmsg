@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -30,6 +31,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+)
+
+const (
+	fallbackPreResponseBudgetStartedAtKey = "fallback_pre_response_budget_started_at"
+	fallbackPreResponseBudgetKey          = "fallback_pre_response_budget"
 )
 
 func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
@@ -200,6 +206,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = preferLastRelayError(channelErr, relayInfo.LastError)
 			break
 		}
+		if budgetErr := applyFallbackPreResponseBudget(c); budgetErr != nil {
+			newAPIError = budgetErr
+			break
+		}
 
 		addUsedChannel(c, channel.Id)
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
@@ -254,6 +264,63 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			perfmetrics.RecordRelaySample(relayInfo, false, 0)
 		})
 	}
+}
+
+// applyFallbackPreResponseBudget turns the first selected channel's configured
+// fallback budget into a request-wide deadline for the phase before upstream
+// response headers arrive. The derived per-attempt timeout is injected into the
+// channel setting stored in the Gin context, so RelayInfo.InitChannelMeta picks
+// it up for every retry. Streaming after headers is deliberately unaffected.
+func applyFallbackPreResponseBudget(c *gin.Context) *types.NewAPIError {
+	if c == nil {
+		return nil
+	}
+	setting, ok := common.GetContextKeyType[dto.ChannelSettings](c, constant.ContextKeyChannelSetting)
+	if !ok {
+		return nil
+	}
+
+	budget, hasBudget := c.Get(fallbackPreResponseBudgetKey)
+	if !hasBudget {
+		if setting.FallbackPreResponseBudgetSeconds <= 0 {
+			return nil
+		}
+		budget = time.Duration(setting.FallbackPreResponseBudgetSeconds) * time.Second
+		c.Set(fallbackPreResponseBudgetKey, budget)
+		c.Set(fallbackPreResponseBudgetStartedAtKey, time.Now())
+	}
+
+	totalBudget, ok := budget.(time.Duration)
+	if !ok || totalBudget <= 0 {
+		return nil
+	}
+	startedAtValue, ok := c.Get(fallbackPreResponseBudgetStartedAtKey)
+	if !ok {
+		startedAtValue = time.Now()
+		c.Set(fallbackPreResponseBudgetStartedAtKey, startedAtValue)
+	}
+	startedAt, ok := startedAtValue.(time.Time)
+	if !ok {
+		return nil
+	}
+
+	remaining := totalBudget - time.Since(startedAt)
+	if remaining <= 0 {
+		return types.NewErrorWithStatusCode(
+			context.DeadlineExceeded,
+			types.ErrorCodeChannelResponseTimeExceeded,
+			http.StatusGatewayTimeout,
+			types.ErrOptionWithHideErrMsg("fallback pre-response budget exhausted before upstream response headers"),
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+
+	remainingSeconds := int((remaining + time.Second - 1) / time.Second)
+	if setting.PreResponseTimeoutSeconds <= 0 || setting.PreResponseTimeoutSeconds > remainingSeconds {
+		setting.PreResponseTimeoutSeconds = remainingSeconds
+		common.SetContextKey(c, constant.ContextKeyChannelSetting, setting)
+	}
+	return nil
 }
 
 // preferLastRelayError preserves the real error returned by the most recent
