@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -49,14 +50,33 @@ type CodexRadarOverview struct {
 	Metrics       []CodexRadarMetric `json:"metrics"`
 }
 
+// codexRadarCount accepts integer-valued JSON numbers in either 209 or 209.0
+// form. Codex Radar changed its generated dataset to emit the latter, while
+// these fields still represent counts and must not be silently truncated.
+type codexRadarCount int
+
+func (count *codexRadarCount) UnmarshalJSON(data []byte) error {
+	raw := strings.TrimSpace(string(data))
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsInf(value, 0) || math.IsNaN(value) {
+		return fmt.Errorf("invalid codex radar count %q", raw)
+	}
+	maxInt := int64(^uint(0) >> 1)
+	if value < 0 || math.Trunc(value) != value || value > float64(maxInt) {
+		return fmt.Errorf("codex radar count must be a non-negative integer: %q", raw)
+	}
+	*count = codexRadarCount(int(value))
+	return nil
+}
+
 type codexRadarSourcePoint struct {
-	Model           string  `json:"model"`
-	Effort          string  `json:"effort"`
-	IQ              float64 `json:"iq"`
-	Passed          int     `json:"passed"`
-	ValidTasks      int     `json:"valid_tasks"`
-	AveragePriceUSD float64 `json:"average_price_usd"`
-	AverageMinutes  float64 `json:"average_minutes"`
+	Model           string          `json:"model"`
+	Effort          string          `json:"effort"`
+	IQ              float64         `json:"iq"`
+	Passed          codexRadarCount `json:"passed"`
+	ValidTasks      codexRadarCount `json:"valid_tasks"`
+	AveragePriceUSD float64         `json:"average_price_usd"`
+	AverageMinutes  float64         `json:"average_minutes"`
 }
 
 type codexRadarSource struct {
@@ -279,7 +299,7 @@ func buildCodexRadarOverview(source codexRadarSource) (CodexRadarOverview, error
 
 func isCodexRadarPoint(point codexRadarSourcePoint) bool {
 	model := strings.ToLower(strings.TrimSpace(point.Model))
-	return (strings.HasPrefix(model, "gpt-5.6-") || model == "gpt-5.5") && point.IQ > 0
+	return (strings.HasPrefix(model, "gpt-5.6-") || model == "gpt-5.5" || model == "deepseek-v4-flash") && point.IQ > 0
 }
 
 func makeCodexRadarMetric(point codexRadarSourcePoint, family string, effort string) CodexRadarMetric {
@@ -288,6 +308,9 @@ func makeCodexRadarMetric(point codexRadarSourcePoint, family string, effort str
 	if family == "gpt-5.5" {
 		label = fmt.Sprintf("GPT-5.5 %s", effort)
 		key = "gpt_55_" + effort
+	} else if family == "deepseek-v4-flash" {
+		label = fmt.Sprintf("DeepSeek V4 Flash %s", effort)
+		key = "deepseek_v4_flash_" + effort
 	}
 	return CodexRadarMetric{
 		Key:                  key,
@@ -297,8 +320,8 @@ func makeCodexRadarMetric(point codexRadarSourcePoint, family string, effort str
 		ReasoningEffort:      effort,
 		Score:                point.IQ,
 		Status:               codexRadarStatus(point.IQ),
-		Passed:               point.Passed,
-		Tasks:                point.ValidTasks,
+		Passed:               int(point.Passed),
+		Tasks:                int(point.ValidTasks),
 		AverageCostUSD:       point.AveragePriceUSD,
 		AverageTaskSeconds:   point.AverageMinutes * 60,
 		AverageTaskTimeHuman: fmt.Sprintf("%.0f分钟", point.AverageMinutes),
@@ -317,7 +340,7 @@ func codexRadarStatus(score float64) string {
 
 func codexRadarFamily(model string) string {
 	normalized := strings.ToLower(strings.TrimSpace(model))
-	if normalized == "gpt-5.5" {
+	if normalized == "gpt-5.5" || normalized == "deepseek-v4-flash" {
 		return normalized
 	}
 	return strings.TrimPrefix(normalized, "gpt-5.6-")
@@ -337,7 +360,7 @@ func familyLabel(family string) string {
 }
 
 func sortCodexRadarMetrics(metrics []CodexRadarMetric) {
-	familyOrder := map[string]int{"sol": 0, "terra": 1, "luna": 2, "gpt-5.5": 3}
+	familyOrder := map[string]int{"sol": 0, "terra": 1, "luna": 2, "gpt-5.5": 3, "deepseek-v4-flash": 4}
 	effortOrder := map[string]int{"ultra": 0, "max": 1, "xhigh": 2, "high": 3, "medium": 4, "low": 5}
 	sort.SliceStable(metrics, func(i int, j int) bool {
 		leftFamily, leftOK := familyOrder[metrics[i].Family]
