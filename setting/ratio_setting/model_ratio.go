@@ -274,10 +274,10 @@ var defaultModelRatio = map[string]float64{
 	"deepseek-chat":          0.27 / 2,
 	"deepseek-coder":         0.27 / 2,
 	"deepseek-reasoner":      0.55 / 2, // 0.55 / 1k tokens
-	// DeepSeek V4 public API pricing, updated for V4-Flash-0731 on 2026-07-31.
-	// Model ratio is the input price divided by the $2 / 1M baseline.
-	"deepseek-v4-flash": 0.14 / 2,
-	"deepseek-v4-pro":   0.435 / 2,
+	// DeepSeek V4 public API pricing in CNY per 1M tokens:
+	// V4-Flash-0731 input ¥1/output ¥2; V4-Pro-0813 input ¥3/output ¥6.
+	"deepseek-v4-flash": 1.0 / 1000 * RMB,
+	"deepseek-v4-pro":   3.0 / 1000 * RMB,
 	// Perplexity online 模型对搜索额外收费，有需要应自行调整，此处不计入搜索费用
 	"llama-3-sonar-small-32k-chat":   0.2 / 1000 * USD,
 	"llama-3-sonar-small-32k-online": 0.2 / 1000 * USD,

@@ -179,7 +179,7 @@ func supportsNativeDeepSeekResponses(info *relaycommon.RelayInfo, requestModel s
 	if baseModel, _, _, ok := reasoning.ParseDeepSeekV4ThinkingSuffix(modelName); ok {
 		modelName = baseModel
 	}
-	return modelName == "deepseek-v4-flash"
+	return modelName == "deepseek-v4-flash" || modelName == "deepseek-v4-pro"
 }
 
 func applyDeepSeekV4ResponsesThinkingSuffix(info *relaycommon.RelayInfo, request *dto.OpenAIResponsesRequest) {

@@ -299,7 +299,7 @@ func buildCodexRadarOverview(source codexRadarSource) (CodexRadarOverview, error
 
 func isCodexRadarPoint(point codexRadarSourcePoint) bool {
 	model := strings.ToLower(strings.TrimSpace(point.Model))
-	return (strings.HasPrefix(model, "gpt-5.6-") || model == "gpt-5.5" || model == "deepseek-v4-flash") && point.IQ > 0
+	return (strings.HasPrefix(model, "gpt-5.6-") || model == "gpt-5.5" || model == "deepseek-v4-pro" || model == "deepseek-v4-flash") && point.IQ > 0
 }
 
 func makeCodexRadarMetric(point codexRadarSourcePoint, family string, effort string) CodexRadarMetric {
@@ -311,6 +311,9 @@ func makeCodexRadarMetric(point codexRadarSourcePoint, family string, effort str
 	} else if family == "deepseek-v4-flash" {
 		label = fmt.Sprintf("DeepSeek V4 Flash %s", effort)
 		key = "deepseek_v4_flash_" + effort
+	} else if family == "deepseek-v4-pro" {
+		label = fmt.Sprintf("DeepSeek V4 Pro %s", effort)
+		key = "deepseek_v4_pro_" + effort
 	}
 	return CodexRadarMetric{
 		Key:                  key,
@@ -340,7 +343,7 @@ func codexRadarStatus(score float64) string {
 
 func codexRadarFamily(model string) string {
 	normalized := strings.ToLower(strings.TrimSpace(model))
-	if normalized == "gpt-5.5" || normalized == "deepseek-v4-flash" {
+	if normalized == "gpt-5.5" || normalized == "deepseek-v4-pro" || normalized == "deepseek-v4-flash" {
 		return normalized
 	}
 	return strings.TrimPrefix(normalized, "gpt-5.6-")
@@ -360,7 +363,7 @@ func familyLabel(family string) string {
 }
 
 func sortCodexRadarMetrics(metrics []CodexRadarMetric) {
-	familyOrder := map[string]int{"sol": 0, "terra": 1, "luna": 2, "gpt-5.5": 3, "deepseek-v4-flash": 4}
+	familyOrder := map[string]int{"sol": 0, "terra": 1, "luna": 2, "gpt-5.5": 3, "deepseek-v4-pro": 4, "deepseek-v4-flash": 5}
 	effortOrder := map[string]int{"ultra": 0, "max": 1, "xhigh": 2, "high": 3, "medium": 4, "low": 5}
 	sort.SliceStable(metrics, func(i int, j int) bool {
 		leftFamily, leftOK := familyOrder[metrics[i].Family]
