@@ -243,6 +243,89 @@ class ApplyResultAbilityReconciliationTest(unittest.TestCase):
         self.assertEqual(1, len(db.statements))
         self.assertNotIn("update abilities", db.statements[0])
 
+    def test_fail_closed_preserves_last_balance_and_marks_source_unknown(self) -> None:
+        db = self.RecordingDB()
+        channel = {
+            "id": 12,
+            "name": "test-cpa",
+            "status": guard.STATUS_ENABLED,
+            "balance": 42.5,
+            "other_info": "{}",
+        }
+        result = {
+            "ok": False,
+            "reason": "quota_probe_failed",
+            "error": "management_auth_http_403",
+            "fail_closed": True,
+        }
+
+        message = guard.apply_result(db, channel, result, {"failure_count": 1})
+
+        self.assertEqual(1, len(db.statements))
+        statement = db.statements[0]
+        self.assertNotIn("balance = ", statement)
+        self.assertNotIn("balance_updated_time = ", statement)
+        self.assertIn("status = 3", statement)
+        self.assertIn("update abilities set enabled = false where channel_id = 12;", statement)
+        self.assertIn('"balance": 42.5', statement)
+        self.assertIn('"spendable": false', statement)
+        self.assertIn('"status": "unknown"', statement)
+        self.assertIn("balance_preserved", message)
+
+
+class ManagementAuthBackoffTest(unittest.TestCase):
+    def test_request_json_classifies_management_403_without_response_body(self) -> None:
+        error = guard.urllib.error.HTTPError(
+            "http://home.internal/v0/management/quota-health",
+            403,
+            "Forbidden",
+            {},
+            None,
+        )
+        with mock.patch.object(guard.urllib.request, "urlopen", side_effect=error):
+            with self.assertRaisesRegex(guard.ManagementAuthError, "management_auth_http_403"):
+                guard.request_json("http://home.internal/v0/management/quota-health", {}, 30)
+
+    def test_auth_failure_fails_closed_immediately_and_starts_backoff(self) -> None:
+        state: dict = {}
+        now = 1_800_000_000
+        config = {**guard.DEFAULT_CONFIG, "management_auth_failure_backoff_sec": 1_800}
+
+        result = guard.record_probe_failure(
+            config,
+            state,
+            guard.ManagementAuthError("management_auth_http_403"),
+            now,
+        )
+
+        self.assertTrue(result["fail_closed"])
+        self.assertTrue(result["management_auth_failure"])
+        self.assertEqual(now + 1_800, state["management_auth_backoff_until"])
+        self.assertEqual(1, state["failure_count"])
+
+        backoff = guard.management_auth_backoff_result(state, now + 60)
+        self.assertIsNotNone(backoff)
+        assert backoff is not None
+        self.assertTrue(backoff["fail_closed"])
+        self.assertEqual("management_auth_backoff", backoff["error"])
+        self.assertEqual(1_740, backoff["retry_after_seconds"])
+
+    def test_auth_failure_does_not_probe_fallback_management_endpoints(self) -> None:
+        with (
+            mock.patch.object(
+                guard,
+                "call_cpa_quota_health",
+                side_effect=guard.ManagementAuthError("management_auth_http_403"),
+            ),
+            mock.patch.object(guard, "call_home_quota_health") as home,
+            mock.patch.object(guard, "call_wham_usages") as fallback,
+        ):
+            with self.assertRaisesRegex(guard.ManagementAuthError, "management_auth_http_403"):
+                guard.call_quota_health(guard.DEFAULT_CONFIG, {})
+
+        home.assert_not_called()
+        fallback.assert_not_called()
+
 
 def combined_dynamic_budget_result(*results: dict) -> dict:
     accounts = [account for result in results for account in result["accounts"]]
