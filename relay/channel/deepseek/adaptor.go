@@ -168,6 +168,7 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		return convertResponsesRequest(c, info, request)
 	}
 	applyDeepSeekV4ResponsesThinkingSuffix(info, &request)
+	setNativeResponsesToolMap(c, request.GetToolsMap())
 	return request, nil
 }
 
@@ -218,6 +219,9 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	default:
 		if info.RelayMode == constant.RelayModeResponses && info.GetFinalRequestRelayFormat() == types.RelayFormatOpenAI {
 			return handleResponsesChatResponse(c, resp, info)
+		}
+		if info.RelayMode == constant.RelayModeResponses && supportsNativeDeepSeekResponses(info, info.UpstreamModelName) {
+			return handleNativeResponsesResponse(c, resp, info)
 		}
 		adaptor := openai.Adaptor{}
 		return adaptor.DoResponse(c, resp, info)
