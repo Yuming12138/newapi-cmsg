@@ -51,6 +51,15 @@ const codexRadarTestPayload = `{
       "average_minutes": 31.89
     },
     {
+      "model": "deepseek-v4-pro",
+      "effort": "high",
+      "iq": 87.5,
+      "passed": 14.0,
+      "valid_tasks": 24.0,
+      "average_price_usd": 0.174324,
+      "average_minutes": 22.69
+    },
+    {
       "model": "gpt-5.6-luna",
       "effort": "low",
       "iq": 0
@@ -59,6 +68,11 @@ const codexRadarTestPayload = `{
       "model": "gpt-5.4",
       "effort": "high",
       "iq": 88.0
+    },
+    {
+      "model": "deepseek-v4-unknown",
+      "effort": "high",
+      "iq": 99.0
     }
   ]
 }`
@@ -81,8 +95,8 @@ func TestCodexRadarProviderFiltersAndCachesMetrics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	if len(overview.Metrics) != 4 {
-		t.Fatalf("metrics count = %d, want 4", len(overview.Metrics))
+	if len(overview.Metrics) != 5 {
+		t.Fatalf("metrics count = %d, want 5", len(overview.Metrics))
 	}
 	if overview.Metrics[0].Key != "gpt_56_sol_max" {
 		t.Fatalf("first metric = %q, want gpt_56_sol_max", overview.Metrics[0].Key)
@@ -93,8 +107,11 @@ func TestCodexRadarProviderFiltersAndCachesMetrics(t *testing.T) {
 	if overview.Metrics[2].Key != "gpt_55_high" || overview.Metrics[2].Family != "gpt-5.5" {
 		t.Fatalf("third metric = %#v, want GPT-5.5 high", overview.Metrics[2])
 	}
-	if overview.Metrics[3].Key != "deepseek_v4_flash_max" || overview.Metrics[3].Family != "deepseek-v4-flash" {
-		t.Fatalf("fourth metric = %#v, want DeepSeek V4 Flash max", overview.Metrics[3])
+	if overview.Metrics[3].Key != "deepseek_v4_pro_high" || overview.Metrics[3].Family != "deepseek-v4-pro" {
+		t.Fatalf("fourth metric = %#v, want DeepSeek V4 Pro high", overview.Metrics[3])
+	}
+	if overview.Metrics[4].Key != "deepseek_v4_flash_max" || overview.Metrics[4].Family != "deepseek-v4-flash" {
+		t.Fatalf("fifth metric = %#v, want DeepSeek V4 Flash max", overview.Metrics[4])
 	}
 	if overview.Metrics[0].Passed != 77 || overview.Metrics[0].Tasks != 112 {
 		t.Fatalf("decimal counts were not preserved as integers: %#v", overview.Metrics[0])
@@ -131,6 +148,7 @@ func TestBuildCodexRadarOverviewIncludesCompletePublishedCatalog(t *testing.T) {
 		{model: "gpt-5.6-terra", efforts: []string{"low", "medium", "high", "xhigh", "max", "ultra"}},
 		{model: "gpt-5.6-luna", efforts: []string{"low", "medium", "high", "xhigh", "max"}},
 		{model: "gpt-5.5", efforts: []string{"high", "xhigh"}},
+		{model: "deepseek-v4-pro", efforts: []string{"low", "high", "max"}},
 		{model: "deepseek-v4-flash", efforts: []string{"high", "max"}},
 	}
 	for _, family := range catalog {
@@ -149,14 +167,15 @@ func TestBuildCodexRadarOverviewIncludesCompletePublishedCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildCodexRadarOverview() error = %v", err)
 	}
-	if len(overview.Metrics) != 21 {
-		t.Fatalf("metrics count = %d, want 21", len(overview.Metrics))
+	if len(overview.Metrics) != 24 {
+		t.Fatalf("metrics count = %d, want 24", len(overview.Metrics))
 	}
 	wantKeys := []string{
 		"gpt_56_sol_ultra", "gpt_56_sol_max", "gpt_56_sol_xhigh", "gpt_56_sol_high", "gpt_56_sol_medium", "gpt_56_sol_low",
 		"gpt_56_terra_ultra", "gpt_56_terra_max", "gpt_56_terra_xhigh", "gpt_56_terra_high", "gpt_56_terra_medium", "gpt_56_terra_low",
 		"gpt_56_luna_max", "gpt_56_luna_xhigh", "gpt_56_luna_high", "gpt_56_luna_medium", "gpt_56_luna_low",
 		"gpt_55_xhigh", "gpt_55_high",
+		"deepseek_v4_pro_max", "deepseek_v4_pro_high", "deepseek_v4_pro_low",
 		"deepseek_v4_flash_max", "deepseek_v4_flash_high",
 	}
 	for index, want := range wantKeys {

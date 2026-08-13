@@ -58,6 +58,12 @@ const METRIC_GROUPS: MetricGroup[] = [
     firstCardClassName: 'xl:col-start-3',
   },
   {
+    family: 'deepseek-v4-pro',
+    label: 'DeepSeek V4 Pro',
+    efforts: ['max', 'high', 'low'],
+    firstCardClassName: 'xl:col-start-2',
+  },
+  {
     family: 'deepseek-v4-flash',
     label: 'DeepSeek V4 Flash',
     efforts: ['max', 'high'],
@@ -98,6 +104,12 @@ const FAMILY_STYLES: Record<
     border: 'border-violet-500/40',
     surface: 'bg-violet-500/5',
     value: 'text-violet-600 dark:text-violet-400',
+  },
+  'deepseek-v4-pro': {
+    accent: 'bg-fuchsia-500',
+    border: 'border-fuchsia-500/40',
+    surface: 'bg-fuchsia-500/5',
+    value: 'text-fuchsia-600 dark:text-fuchsia-400',
   },
 }
 

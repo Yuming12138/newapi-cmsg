@@ -2,13 +2,11 @@ package deepseek
 
 import (
 	"encoding/json"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,27 +30,28 @@ func TestGetRequestURLUsesNativeResponsesEndpoint(t *testing.T) {
 	require.Equal(t, "https://api.deepseek.com/responses", url)
 }
 
-func TestProResponsesKeepsCompatibilityFallback(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+func TestProResponsesUsesNativeEndpoint(t *testing.T) {
 	info := testRelayInfo("deepseek-v4-pro")
 	info.RelayMode = relayconstant.RelayModeResponses
+	stream := true
 	request := dto.OpenAIResponsesRequest{
-		Model: "deepseek-v4-pro",
-		Input: json.RawMessage(`"keep existing clients working"`),
+		Model:  "deepseek-v4-pro",
+		Input:  json.RawMessage(`"use the new pro model"`),
+		Stream: &stream,
 	}
 
-	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(ctx, info, request)
+	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, request)
 
 	require.NoError(t, err)
-	payload, ok := converted.(map[string]any)
+	payload, ok := converted.(dto.OpenAIResponsesRequest)
 	require.True(t, ok)
-	require.Equal(t, "deepseek-v4-pro", payload["model"])
-	require.Equal(t, "openai", string(info.GetFinalRequestRelayFormat()))
+	require.Equal(t, "deepseek-v4-pro", payload.Model)
+	require.JSONEq(t, string(request.Input), string(payload.Input))
+	require.Equal(t, request.Stream, payload.Stream)
 
 	url, err := (&Adaptor{}).GetRequestURL(info)
 	require.NoError(t, err)
-	require.Equal(t, "https://api.deepseek.com/v1/chat/completions", url)
+	require.Equal(t, "https://api.deepseek.com/responses", url)
 }
 
 func TestConvertOpenAIResponsesRequestPreservesNativePayload(t *testing.T) {

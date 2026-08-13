@@ -49,8 +49,8 @@ func TestDeepSeekV4OfficialPricingRatios(t *testing.T) {
 		completionRatio float64
 		cacheRatio      float64
 	}{
-		{model: "deepseek-v4-flash", modelRatio: 0.14 / 2, completionRatio: 0.28 / 0.14, cacheRatio: 0.0028 / 0.14},
-		{model: "deepseek-v4-pro", modelRatio: 0.435 / 2, completionRatio: 0.87 / 0.435, cacheRatio: 0.003625 / 0.435},
+		{model: "deepseek-v4-flash", modelRatio: 1.0 / 1000 * RMB, completionRatio: 2, cacheRatio: 0.02 / 1.0},
+		{model: "deepseek-v4-pro", modelRatio: 3.0 / 1000 * RMB, completionRatio: 2, cacheRatio: 0.025 / 3.0},
 	}
 
 	for _, tt := range tests {
