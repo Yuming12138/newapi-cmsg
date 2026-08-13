@@ -48,6 +48,7 @@ DEFAULT_CONFIG = {
     "min_remaining_percent_5h": 15.0,
     "min_remaining_percent_7d": 15.0,
     "fail_closed_after_consecutive_failures": 3,
+    "management_auth_failure_backoff_sec": 30 * 60,
     "balance_units_per_percent": 1.0,
     "dynamic_daily_budget_enabled": False,
     "manual_force_unlock": {},
@@ -81,6 +82,11 @@ DEFAULT_CONFIG = {
     "quota_feature_plan_keywords": [],
     "quota_feature_min_remaining_percent": 0.0,
 }
+
+
+class ManagementAuthError(RuntimeError):
+    """Management credentials were rejected by CPA/Home."""
+
 
 OPTION_CONFIG_MAP = {
     "cliproxy_cpa_quota_guard.enabled": ("enabled", "bool"),
@@ -291,12 +297,17 @@ def request_json(url: str, headers: dict[str, str], timeout: int, data: Any | No
         req_headers["Content-Type"] = "application/json"
         method = "POST"
     req = urllib.request.Request(url, data=body, headers=req_headers, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read(1024 * 1024)
-        payload = json.loads(raw.decode("utf-8"))
-        if not isinstance(payload, dict):
-            raise RuntimeError("payload_not_object")
-        return payload
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read(1024 * 1024)
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise RuntimeError("payload_not_object")
+            return payload
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise ManagementAuthError(f"management_auth_http_{exc.code}") from exc
+        raise
 
 
 def parse_jwt_payload(value: Any) -> dict[str, Any]:
@@ -938,6 +949,8 @@ def call_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[str, 
     if bool_value(config.get("prefer_cpa_quota_health_endpoint"), True):
         try:
             return call_cpa_quota_health(config, env)
+        except ManagementAuthError:
+            raise
         except Exception as exc:
             endpoint_errors.append("cpa=" + str(exc)[:180])
 
@@ -947,6 +960,8 @@ def call_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[str, 
             if endpoint_errors:
                 result["cpa_quota_health_endpoint_error"] = endpoint_errors[0]
             return result
+        except ManagementAuthError:
+            raise
         except Exception as exc:
             endpoint_errors.append("home=" + str(exc)[:180])
 
@@ -2482,6 +2497,51 @@ def build_quota_source(result: dict[str, Any], balance: float, spendable: bool, 
     return source
 
 
+def management_auth_backoff_result(state: dict[str, Any], now: int) -> dict[str, Any] | None:
+    retry_at = int(state.get("management_auth_backoff_until") or 0)
+    if retry_at <= now:
+        return None
+    return {
+        "ok": False,
+        "within_share": False,
+        "reason": "quota_probe_failed",
+        "error": "management_auth_backoff",
+        "fail_closed": True,
+        "management_auth_failure": True,
+        "retry_at": retry_at,
+        "retry_after_seconds": retry_at - now,
+    }
+
+
+def record_probe_failure(
+    config: dict[str, Any],
+    state: dict[str, Any],
+    exc: Exception,
+    now: int,
+) -> dict[str, Any]:
+    failure_count = int(state.get("failure_count") or 0) + 1
+    state["failure_count"] = failure_count
+    state["last_error"] = str(exc)[:180]
+    state["last_failure_at"] = now
+    management_auth_failure = isinstance(exc, ManagementAuthError)
+    retry_at = 0
+    if management_auth_failure:
+        backoff = max(60, int(config.get("management_auth_failure_backoff_sec") or 30 * 60))
+        retry_at = now + backoff
+        state["management_auth_backoff_until"] = retry_at
+    return {
+        "ok": False,
+        "within_share": False,
+        "reason": "quota_probe_failed",
+        "error": str(exc)[:180],
+        "fail_closed": management_auth_failure
+        or failure_count >= int(config.get("fail_closed_after_consecutive_failures") or 3),
+        "management_auth_failure": management_auth_failure,
+        "retry_at": retry_at or None,
+        "retry_after_seconds": retry_at - now if retry_at else None,
+    }
+
+
 def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state: dict[str, Any]) -> str:
     now = int(time.time())
     cid = int(channel["id"])
@@ -2514,16 +2574,23 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
             abilities_enabled = True
             if current_status != STATUS_ENABLED:
                 status = STATUS_ENABLED
-    elif ok or fail_closed:
+    elif ok:
         balance_update = 0.0
         if not manually_disabled:
             abilities_enabled = False
             if current_status != STATUS_AUTO_DISABLED:
                 status = STATUS_AUTO_DISABLED
+    elif fail_closed and not manually_disabled:
+        abilities_enabled = False
+        if current_status != STATUS_AUTO_DISABLED:
+            status = STATUS_AUTO_DISABLED
 
     quota_source_balance = balance_update
     if quota_source_balance is None:
-        quota_source_balance = float(first_non_empty(result.get("usable_balance_units"), result.get("balance_units")) or 0)
+        if ok:
+            quota_source_balance = float(first_non_empty(result.get("usable_balance_units"), result.get("balance_units")) or 0)
+        else:
+            quota_source_balance = float(channel.get("balance") or 0)
     other_info["quota_source"] = build_quota_source(result, quota_source_balance, desired_enabled, now)
 
     statements = ["begin;"]
@@ -2548,7 +2615,7 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
     if ok:
         return f"{name}: auto-disabled {result.get('reason')}"
     if fail_closed:
-        return f"{name}: auto-disabled quota_probe_failed_closed"
+        return f"{name}: auto-disabled quota_probe_failed_closed balance_preserved"
     return f"{name}: unchanged quota_probe_failed"
 
 
@@ -2565,36 +2632,30 @@ def main() -> int:
         config["auto_reconcile_runtime_quota"] = False
         config["reset_credit_grace_enabled"] = False
 
-    try:
-        result = call_quota_health(config, env)
-        reconcile_summary = auto_reconcile_runtime_quota(config, env, result, state)
-        if reconcile_summary["reset_count"] > 0:
+    now = int(time.time())
+    result = management_auth_backoff_result(state, now)
+    if result is None:
+        try:
             result = call_quota_health(config, env)
-        if any(reconcile_summary.values()):
-            result["auto_reconcile"] = reconcile_summary
-        result = apply_reset_credit_grace(
-            config,
-            env,
-            result,
-            state,
-            allow_consume=bool_value(result.get("reset_credit_consume_supported"), False),
-        )
-        result = apply_dynamic_daily_budget(config, result, state)
-        state["failure_count"] = 0
-        state["last_success_at"] = int(time.time())
-        state["last_error"] = None
-    except (urllib.error.URLError, urllib.error.HTTPError, socket.timeout, TimeoutError, RuntimeError, json.JSONDecodeError) as exc:
-        failure_count = int(state.get("failure_count") or 0) + 1
-        state["failure_count"] = failure_count
-        state["last_error"] = str(exc)[:180]
-        state["last_failure_at"] = int(time.time())
-        result = {
-            "ok": False,
-            "within_share": False,
-            "reason": "quota_probe_failed",
-            "error": str(exc)[:180],
-            "fail_closed": failure_count >= int(config.get("fail_closed_after_consecutive_failures") or 3),
-        }
+            reconcile_summary = auto_reconcile_runtime_quota(config, env, result, state)
+            if reconcile_summary["reset_count"] > 0:
+                result = call_quota_health(config, env)
+            if any(reconcile_summary.values()):
+                result["auto_reconcile"] = reconcile_summary
+            result = apply_reset_credit_grace(
+                config,
+                env,
+                result,
+                state,
+                allow_consume=bool_value(result.get("reset_credit_consume_supported"), False),
+            )
+            result = apply_dynamic_daily_budget(config, result, state)
+            state["failure_count"] = 0
+            state["last_success_at"] = now
+            state["last_error"] = None
+            state.pop("management_auth_backoff_until", None)
+        except (urllib.error.URLError, urllib.error.HTTPError, socket.timeout, TimeoutError, RuntimeError, json.JSONDecodeError) as exc:
+            result = record_probe_failure(config, state, exc, now)
 
     channel = fetch_channel(db, int(config.get("channel_id") or 12))
     message = apply_result(db, channel, result, state)
