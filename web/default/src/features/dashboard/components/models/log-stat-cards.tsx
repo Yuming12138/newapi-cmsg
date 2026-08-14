@@ -21,9 +21,7 @@ import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
 import { formatCompactNumber, formatNumber, formatQuota } from '@/lib/format'
 import { computeTimeRange } from '@/lib/time'
-import { useStatus } from '@/hooks/use-status'
 import { Skeleton } from '@/components/ui/skeleton'
-import type { EstimatedQuotaPoolStatus } from '@/features/auth/types'
 import { getUserQuotaDates } from '@/features/dashboard/api'
 import { useModelStatCardsConfig } from '@/features/dashboard/hooks/use-dashboard-config'
 import {
@@ -56,23 +54,10 @@ function formatStatNumber(value: number, locale: Intl.LocalesArgument) {
   }
 }
 
-function formatQuotaPoolBreakdown(pool?: EstimatedQuotaPoolStatus): string {
-  return (pool?.group_breakdown ?? [])
-    .map((item) => {
-      const quota = Number(item.remaining_quota ?? 0)
-      if (!Number.isFinite(quota)) return ''
-      const group = item.group?.trim() || 'default'
-      return `${group}: ${item.estimated ? '≈ ' : ''}${formatQuota(quota)}`
-    })
-    .filter(Boolean)
-    .join(' · ')
-}
-
 export function LogStatCards(props: LogStatCardsProps) {
   const { i18n } = useTranslation()
   const statCardsConfig = useModelStatCardsConfig()
   const user = useAuthStore((state) => state.auth.user)
-  const { status } = useStatus()
   const isAdmin = !!(user?.role && user.role >= 10)
   const [stats, setStats] = useState<{
     totalQuota: number
@@ -126,20 +111,9 @@ export function LogStatCards(props: LogStatCardsProps) {
     }
   }, [filters, isAdmin, onDataUpdate])
 
-  const estimatedPoolQuota = Number(
-    status?.estimated_quota_pool?.remaining_quota ?? 0
-  )
-  const hasEstimatedPoolQuota =
-    status?.estimated_quota_pool != null && Number.isFinite(estimatedPoolQuota)
-  const quotaPoolBreakdown = formatQuotaPoolBreakdown(
-    status?.estimated_quota_pool
-  )
-
   const adaptedStats = {
     rpm: stats?.totalCount ?? 0,
-    quota: hasEstimatedPoolQuota
-      ? estimatedPoolQuota
-      : Number(user?.quota ?? stats?.totalQuota ?? 0),
+    quota: Number(user?.quota ?? stats?.totalQuota ?? 0),
     tpm: stats?.totalTokens ?? 0,
   }
 
@@ -156,18 +130,9 @@ export function LogStatCards(props: LogStatCardsProps) {
 
     return {
       title: config.title,
-      value:
-        config.key === 'quota' && hasEstimatedPoolQuota
-          ? `≈ ${formatted.displayValue}`
-          : formatted.displayValue,
-      fullValue:
-        config.key === 'quota' && hasEstimatedPoolQuota
-          ? `≈ ${formatted.fullValue}${quotaPoolBreakdown ? ` · ${quotaPoolBreakdown}` : ''}`
-          : formatted.fullValue,
-      desc:
-        config.key === 'quota' && quotaPoolBreakdown
-          ? quotaPoolBreakdown
-          : config.description,
+      value: formatted.displayValue,
+      fullValue: formatted.fullValue,
+      desc: config.description,
       icon: config.icon,
     }
   })

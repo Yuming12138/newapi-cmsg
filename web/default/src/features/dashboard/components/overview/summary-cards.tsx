@@ -117,24 +117,20 @@ export function SummaryCards() {
   const liveUser =
     selfQuery.data?.success && selfQuery.data?.data ? selfQuery.data.data : user
 
-  const estimatedPoolQuota = Number(
-    status?.estimated_quota_pool?.remaining_quota ?? 0
-  )
-  const hasEstimatedPoolQuota =
-    status?.estimated_quota_pool != null && Number.isFinite(estimatedPoolQuota)
-  const displayedRemainQuota = hasEstimatedPoolQuota
-    ? estimatedPoolQuota
-    : Number(liveUser?.quota ?? 0)
+  const displayedRemainQuota = Number(liveUser?.quota ?? 0)
+  const dailyPoolQuota = Number(status?.daily_quota_pool?.remaining_quota ?? 0)
+  const hasDailyPoolQuota =
+    status?.daily_quota_pool != null && Number.isFinite(dailyPoolQuota)
   const quotaPoolBreakdown = useMemo(
     () =>
-      (status?.estimated_quota_pool?.group_breakdown ?? [])
+      (status?.daily_quota_pool?.group_breakdown ?? [])
         .map((item) => ({
           group: displayPoolGroupName(item.group),
           quota: Number(item.remaining_quota ?? 0),
           estimated: Boolean(item.estimated),
         }))
         .filter((item) => Number.isFinite(item.quota)),
-    [status?.estimated_quota_pool?.group_breakdown]
+    [status?.daily_quota_pool?.group_breakdown]
   )
 
   const usageTrendQuery = useQuery({
@@ -159,13 +155,14 @@ export function SummaryCards() {
     const requestCount = Number(liveUser?.request_count ?? 0)
 
     return {
-      remainDisplay: hasEstimatedPoolQuota
-        ? `≈ ${formatQuota(displayedRemainQuota)}`
-        : formatQuota(displayedRemainQuota),
+      remainDisplay: formatQuota(displayedRemainQuota),
+      dailyPoolDisplay: hasDailyPoolQuota
+        ? `${status?.daily_quota_pool?.estimated ? '≈ ' : ''}${formatQuota(dailyPoolQuota)}`
+        : '--',
       usedDisplay: formatQuota(usedQuota),
       requestCountDisplay: formatNumber(requestCount),
     }
-  }, [displayedRemainQuota, hasEstimatedPoolQuota, liveUser])
+  }, [dailyPoolQuota, displayedRemainQuota, hasDailyPoolQuota, liveUser, status?.daily_quota_pool?.estimated])
 
   const currencyEnabledFromStore = isCurrencyDisplayEnabled()
   const statusCurrencyFlag =
@@ -226,7 +223,9 @@ export function SummaryCards() {
                 {t('Usage at a glance')}
               </h3>
               <p className='text-muted-foreground text-sm'>
-                {t('Monitor balance, usage, and request volume')}
+                {t(
+                  "Monitor today's personal quota, total pool, usage, and requests"
+                )}
               </p>
             </div>
           </div>
@@ -253,11 +252,11 @@ export function SummaryCards() {
         <div className='bg-warning/10 flex flex-col justify-between gap-5 border-t p-4 sm:p-5 xl:border-t-0 xl:border-l'>
           <div className='flex flex-col gap-2'>
             <div className='text-muted-foreground text-sm'>
-              {t('Credit remaining')}
+              {t("Today's total pool remaining")}
             </div>
             <div className='flex items-center gap-2'>
               <span className='font-mono text-2xl font-semibold tracking-tight'>
-                {summaryValues.remainDisplay}
+                {summaryValues.dailyPoolDisplay}
               </span>
               <CreditCard
                 className='text-muted-foreground size-4'
@@ -269,10 +268,10 @@ export function SummaryCards() {
                 ? `${t('Displayed in')} ${currencyLabel}`
                 : t('Balance is shown in quota units')}
             </p>
-            {quotaPoolBreakdown.length > 1 && (
+            {quotaPoolBreakdown.length > 0 && (
               <div className='mt-1 flex flex-col gap-1.5'>
                 <div className='text-muted-foreground/70 text-xs font-medium tracking-wide uppercase'>
-                  {t('Quota pools')}
+                  {t('Daily quota pools')}
                 </div>
                 {quotaPoolBreakdown.map((item) => (
                   <div

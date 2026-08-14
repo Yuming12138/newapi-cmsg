@@ -139,6 +139,9 @@ func GetStatus(c *gin.Context) {
 	if pool, handled, err := service.GetEstimatedQuotaPoolSnapshot(context.Background()); handled && err == nil {
 		data["estimated_quota_pool"] = pool
 	}
+	if pool, handled, err := service.GetDailyQuotaPoolSnapshot(context.Background()); handled && err == nil {
+		data["daily_quota_pool"] = pool
+	}
 
 	// Add enabled custom OAuth providers
 	customProviders := oauth.GetEnabledCustomProviders()

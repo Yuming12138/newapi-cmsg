@@ -133,6 +133,39 @@ export interface EstimatedQuotaPoolGroupStatus {
   partial?: boolean
 }
 
+export interface DailyQuotaPoolStatus {
+  source?: string
+  group?: string
+  channel_count?: number
+  available_channel_count?: number
+  failed_channel_count?: number
+  total_usd?: number
+  used_usd?: number
+  remaining_usd?: number
+  total_quota?: number
+  used_quota?: number
+  remaining_quota?: number
+  quota_per_usd?: number
+  updated_at?: number
+  estimated?: boolean
+  partial?: boolean
+  group_breakdown?: DailyQuotaPoolGroupStatus[]
+}
+
+export interface DailyQuotaPoolGroupStatus {
+  source?: string
+  group?: string
+  channel_count?: number
+  total_usd?: number
+  used_usd?: number
+  remaining_usd?: number
+  remaining_quota?: number
+  updated_at?: number
+  available?: boolean
+  estimated?: boolean
+  partial?: boolean
+}
+
 export interface SystemStatus {
   success?: boolean
   message?: string
@@ -169,6 +202,7 @@ export interface SystemStatus {
     quota_display_type?: string
     asxs_quota_pool?: AsxsQuotaPoolStatus
     estimated_quota_pool?: EstimatedQuotaPoolStatus
+    daily_quota_pool?: DailyQuotaPoolStatus
     usd_exchange_rate?: number
     custom_currency_symbol?: string
     custom_currency_exchange_rate?: number
@@ -214,6 +248,7 @@ export interface SystemStatus {
   quota_display_type?: string
   asxs_quota_pool?: AsxsQuotaPoolStatus
   estimated_quota_pool?: EstimatedQuotaPoolStatus
+  daily_quota_pool?: DailyQuotaPoolStatus
   usd_exchange_rate?: number
   custom_currency_symbol?: string
   custom_currency_exchange_rate?: number

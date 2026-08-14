@@ -167,6 +167,13 @@ def approvals_for(config: dict[str, Any], approvals: dict[str, Any], date_key: s
     return extra
 
 
+def base_usd_for(config: dict[str, Any], default_usd: float, user_id: int) -> float:
+    users_cfg = config.get("users", {})
+    user_map = users_cfg.get("per_user_base_usd", {})
+    value = user_map.get(str(user_id), user_map.get(user_id, default_usd))
+    return max(0.0, float(value))
+
+
 def update_user(
     db: DB,
     user_id: int,
@@ -246,12 +253,13 @@ def run_guard(config_path: Path, state_path: Path, approvals_path: Path, dry_run
         applied_grant = int(user_state.get("applied_restricted_grant_quota", 0) or 0)
 
         if phase == "restricted":
+            user_base_usd = base_usd_for(config, base_usd, uid)
             extra_usd = approvals_for(config, approvals, date_key, uid)
-            target_usd = base_usd + extra_usd
+            target_usd = max(0.0, user_base_usd + extra_usd)
             target_quota = quota_from_usd(target_usd, quota_per_usd)
             should_enter = last_phase != "restricted" or last_date != date_key
             if should_enter:
-                remark = f"白天额度 ${target_usd:g}，含追加 ${extra_usd:g}；18:00 后解锁"
+                remark = f"个人限额时段额度 ${target_usd:g}（基础 ${user_base_usd:g}，追加 ${extra_usd:g}）；{restricted_end.strftime('%H:%M')} 后解锁"
                 update_user(db, uid, target_quota, remark, dry_run)
                 user_state.update(
                     {
@@ -268,7 +276,7 @@ def run_guard(config_path: Path, state_path: Path, approvals_path: Path, dry_run
             if target_quota != applied_grant:
                 delta = target_quota - applied_grant
                 new_quota = max(current_quota + delta, 0)
-                remark = f"白天额度 ${target_usd:g}，含追加 ${extra_usd:g}；18:00 后解锁"
+                remark = f"个人限额时段额度 ${target_usd:g}（基础 ${user_base_usd:g}，追加 ${extra_usd:g}）；{restricted_end.strftime('%H:%M')} 后解锁"
                 update_user(db, uid, new_quota, remark, dry_run)
                 user_state["applied_restricted_grant_quota"] = target_quota
                 user_state["applied_extra_usd"] = extra_usd
@@ -283,7 +291,7 @@ def run_guard(config_path: Path, state_path: Path, approvals_path: Path, dry_run
         target_quota = quota_from_usd(unlocked_usd, quota_per_usd)
         should_unlock = last_phase != "unlocked" or last_date != date_key
         if should_unlock:
-            remark = f"非白天限额时段已解锁；总额度由 asxs 渠道池控制"
+            remark = f"非个人限额时段已解锁；总额度由渠道池控制"
             update_user(db, uid, target_quota, remark, dry_run)
             user_state.update(
                 {

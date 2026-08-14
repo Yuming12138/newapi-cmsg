@@ -94,7 +94,7 @@ export function useSummaryCardsConfig(totals: {
   return [
     {
       key: 'balance',
-      title: t('Current Balance'),
+      title: t("Today's personal remaining"),
       value: totals.remainDisplay,
       description: totals.currencyEnabled
         ? `${t('Remaining quota')} (${totals.currencyLabel})`
