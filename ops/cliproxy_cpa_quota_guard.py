@@ -15,6 +15,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import re
 import socket
 import subprocess
 import sys
@@ -48,6 +49,7 @@ DEFAULT_CONFIG = {
     "min_remaining_percent_5h": 15.0,
     "min_remaining_percent_7d": 15.0,
     "fail_closed_after_consecutive_failures": 3,
+    "probe_failure_grace_sec": 10 * 60,
     "management_auth_failure_backoff_sec": 30 * 60,
     "balance_units_per_percent": 1.0,
     "dynamic_daily_budget_enabled": False,
@@ -2541,6 +2543,59 @@ def build_quota_source(result: dict[str, Any], balance: float, spendable: bool, 
     return source
 
 
+def sanitize_probe_error(value: Any) -> str:
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    text = re.sub(
+        r"(?i)\b(authorization|bearer|token|api[_-]?key|secret|password)\b(?:[=: ]+)[^,;\s]+",
+        r"\1=[REDACTED]",
+        text,
+    )
+    text = re.sub(
+        r"(?i)([?&](?:authorization|bearer|token|api[_-]?key|secret|password)=)[^&\s]+",
+        r"\1[REDACTED]",
+        text,
+    )
+    return text[:180]
+
+
+def probe_error_category(exc: Exception) -> str:
+    if isinstance(exc, ManagementAuthError):
+        return "management_auth"
+    if isinstance(exc, urllib.error.HTTPError):
+        code = int(exc.code or 0)
+        if code == 429:
+            return "http_429"
+        if 500 <= code <= 599:
+            return "http_5xx"
+        if 400 <= code <= 499:
+            return "http_4xx"
+        return "http"
+    if isinstance(exc, (socket.timeout, TimeoutError)):
+        return "timeout"
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+        if isinstance(reason, (socket.timeout, TimeoutError)):
+            return "timeout"
+        return "network"
+    if isinstance(exc, json.JSONDecodeError):
+        return "invalid_json"
+    message = str(exc).lower()
+    if "timeout" in message or "timed out" in message:
+        return "timeout"
+    if any(marker in message for marker in ("connection", "network", "eof", "unreachable")):
+        return "network"
+    return "probe"
+
+
+def probe_failure_grace_remaining(config: dict[str, Any], state: dict[str, Any], now: int) -> int:
+    grace_sec = max(0, int(config.get("probe_failure_grace_sec") or 0))
+    last_success_at = int(state.get("last_success_at") or 0)
+    if grace_sec <= 0 or last_success_at <= 0:
+        return 0
+    age = max(0, now - last_success_at)
+    return max(0, grace_sec - age)
+
+
 def management_auth_backoff_result(state: dict[str, Any], now: int) -> dict[str, Any] | None:
     retry_at = int(state.get("management_auth_backoff_until") or 0)
     if retry_at <= now:
@@ -2564,9 +2619,19 @@ def record_probe_failure(
     now: int,
 ) -> dict[str, Any]:
     failure_count = int(state.get("failure_count") or 0) + 1
+    category = probe_error_category(exc)
+    error = sanitize_probe_error(exc)
+    grace_remaining = probe_failure_grace_remaining(config, state, now)
+    stale_grace = category != "management_auth" and grace_remaining > 0
     state["failure_count"] = failure_count
-    state["last_error"] = str(exc)[:180]
+    state["last_error"] = error
     state["last_failure_at"] = now
+    state["last_probe_failure"] = {
+        "at": now,
+        "category": category,
+        "error": error,
+        "failure_count": failure_count,
+    }
     management_auth_failure = isinstance(exc, ManagementAuthError)
     retry_at = 0
     if management_auth_failure:
@@ -2576,10 +2641,13 @@ def record_probe_failure(
     return {
         "ok": False,
         "within_share": False,
-        "reason": "quota_probe_failed",
-        "error": str(exc)[:180],
+        "reason": "quota_probe_failed_stale_grace" if stale_grace else "quota_probe_failed",
+        "error": error,
+        "probe_error_category": category,
+        "stale_grace": stale_grace,
+        "stale_grace_remaining_sec": grace_remaining or None,
         "fail_closed": management_auth_failure
-        or failure_count >= int(config.get("fail_closed_after_consecutive_failures") or 3),
+        or (failure_count >= int(config.get("fail_closed_after_consecutive_failures") or 3) and not stale_grace),
         "management_auth_failure": management_auth_failure,
         "retry_at": retry_at or None,
         "retry_after_seconds": retry_at - now if retry_at else None,
@@ -2675,6 +2743,9 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
         return f"{name}: auto-disabled {result.get('reason')}"
     if fail_closed:
         return f"{name}: auto-disabled quota_probe_failed_closed balance_preserved"
+    if result.get("stale_grace"):
+        remaining = int(result.get("stale_grace_remaining_sec") or 0)
+        return f"{name}: unchanged quota_probe_failed_stale_grace remaining={remaining}s"
     return f"{name}: unchanged quota_probe_failed"
 
 
@@ -2713,6 +2784,13 @@ def main() -> int:
             state["last_success_at"] = now
             state["last_error"] = None
             state.pop("management_auth_backoff_until", None)
+            last_failure = state.get("last_probe_failure")
+            if isinstance(last_failure, dict) and int(last_failure.get("at") or 0) > 0:
+                state["last_probe_recovery_at"] = now
+                state["last_probe_recovery_after_sec"] = max(
+                    0,
+                    now - int(last_failure.get("at") or now),
+                )
         except (urllib.error.URLError, urllib.error.HTTPError, socket.timeout, TimeoutError, RuntimeError, json.JSONDecodeError) as exc:
             result = record_probe_failure(config, state, exc, now)
 
