@@ -88,3 +88,78 @@ func TestGetChannelQuotaProtectionBlockRejectsNonAutoDisabledChannel(t *testing.
 
 	require.Nil(t, GetChannelQuotaProtectionBlock(channel))
 }
+
+func TestEnabledChannelQuotaProtectionAllowsOnlyReservedModel(t *testing.T) {
+	retryAt := time.Now().Add(90 * time.Minute).Unix()
+	channel := &model.Channel{
+		Id:     12,
+		Status: common.ChannelStatusEnabled,
+		OtherInfo: fmt.Sprintf(`{
+  "quota_source": {
+    "spendable": true,
+    "block": {
+      "http_status": 429,
+      "code": "channel_daily_protected_budget_exhausted",
+      "reason": "dynamic_daily_budget_exhausted",
+      "retry_at": %d,
+      "allowed_models": ["gpt-5.6-luna"]
+    }
+  }
+}`, retryAt),
+	}
+
+	require.Nil(t, GetChannelQuotaProtectionBlockForModel(channel, "gpt-5.6-luna"))
+	block := GetChannelQuotaProtectionBlockForModel(channel, "gpt-5.6-sol")
+	require.NotNil(t, block)
+	require.Equal(t, []string{"gpt-5.6-luna"}, block.AllowedModels)
+	require.Equal(t, retryAt, block.RetryAt)
+}
+
+func TestFindChannelQuotaProtectionBlockForExcludedModelOnEnabledChannel(t *testing.T) {
+	originalDB := model.DB
+	db, err := gorm.Open(sqlite.Open("file:channel-quota-model-reserve?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}))
+	model.DB = db
+	t.Cleanup(func() { model.DB = originalDB })
+
+	retryAt := time.Now().Add(90 * time.Minute).Unix()
+	priority := int64(10)
+	channel := model.Channel{
+		Id:       12,
+		Name:     "cliproxy-codex-pool",
+		Group:    "cliproxy-codex",
+		Models:   "gpt-5.6-luna,gpt-5.6-sol",
+		Status:   common.ChannelStatusEnabled,
+		Key:      "test",
+		Priority: &priority,
+		OtherInfo: fmt.Sprintf(`{
+  "quota_source": {
+    "spendable": true,
+    "block": {
+      "http_status": 429,
+      "code": "channel_daily_protected_budget_exhausted",
+      "reason": "dynamic_daily_budget_exhausted",
+      "retry_at": %d,
+      "allowed_models": ["gpt-5.6-luna"]
+    }
+  }
+}`, retryAt),
+	}
+	require.NoError(t, db.Create(&channel).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group: "cliproxy-codex", Model: "gpt-5.6-luna", ChannelId: 12, Enabled: true, Priority: &priority,
+	}).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group: "cliproxy-codex", Model: "gpt-5.6-sol", ChannelId: 12, Enabled: false, Priority: &priority,
+	}).Error)
+
+	allowed, err := FindChannelQuotaProtectionBlock(context.Background(), []string{"cliproxy-codex"}, "gpt-5.6-luna", "/v1/responses")
+	require.NoError(t, err)
+	require.Nil(t, allowed)
+
+	blocked, err := FindChannelQuotaProtectionBlock(context.Background(), []string{"cliproxy-codex"}, "gpt-5.6-sol", "/v1/responses")
+	require.NoError(t, err)
+	require.NotNil(t, blocked)
+	require.Equal(t, 12, blocked.ChannelID)
+}

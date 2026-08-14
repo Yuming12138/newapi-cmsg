@@ -47,11 +47,11 @@ func Distribute() func(c *gin.Context) {
 				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidChannelId))
 				return
 			}
+			if block := service.GetChannelQuotaProtectionBlockForModel(channel, modelRequest.Model); block != nil {
+				abortWithChannelQuotaProtection(c, block)
+				return
+			}
 			if channel.Status != common.ChannelStatusEnabled {
-				if block := service.GetChannelQuotaProtectionBlock(channel); block != nil {
-					abortWithChannelQuotaProtection(c, block)
-					return
-				}
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
 				return
 			}

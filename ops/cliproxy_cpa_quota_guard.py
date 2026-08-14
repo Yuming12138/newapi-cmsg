@@ -51,6 +51,8 @@ DEFAULT_CONFIG = {
     "management_auth_failure_backoff_sec": 30 * 60,
     "balance_units_per_percent": 1.0,
     "dynamic_daily_budget_enabled": False,
+    "daily_budget_model_reserve_percent": 0.0,
+    "daily_budget_model_reserve_models": [],
     "manual_force_unlock": {},
     "timezone": "Asia/Shanghai",
     "quota_reset_increase_threshold_percent": 10.0,
@@ -93,6 +95,8 @@ OPTION_CONFIG_MAP = {
     "cliproxy_cpa_quota_guard.min_remaining_percent_5h": ("min_remaining_percent_5h", "float"),
     "cliproxy_cpa_quota_guard.min_remaining_percent_7d": ("min_remaining_percent_7d", "float"),
     "cliproxy_cpa_quota_guard.dynamic_daily_budget_enabled": ("dynamic_daily_budget_enabled", "bool"),
+    "cliproxy_cpa_quota_guard.daily_budget_model_reserve_percent": ("daily_budget_model_reserve_percent", "float"),
+    "cliproxy_cpa_quota_guard.daily_budget_model_reserve_models": ("daily_budget_model_reserve_models", "json_list"),
     "cliproxy_cpa_quota_guard.force_unlock": ("manual_force_unlock", "json"),
     "cliproxy_cpa_quota_guard.quota_reset_increase_threshold_percent": ("quota_reset_increase_threshold_percent", "float"),
     "cliproxy_cpa_quota_guard.quota_reset_increase_floor_percent": ("quota_reset_increase_floor_percent", "float"),
@@ -234,6 +238,13 @@ where key in ({keys});
                 continue
             if isinstance(parsed, dict):
                 overrides[config_key] = parsed
+        elif value_type == "json_list":
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, list):
+                overrides[config_key] = [str(item).strip() for item in parsed if str(item).strip()]
     return overrides
 
 
@@ -2271,6 +2282,15 @@ def apply_dynamic_daily_budget(
     original_quota_ok = bool(result.get("quota_ok", result.get("within_share")))
     original_usable_balance = max(0.0, float(number(result.get("usable_balance_units")) or 0.0))
     original_remaining_share = max(0.0, float(number(result.get("remaining_share_percent")) or 0.0))
+    model_reserve_percent = clamp_percent(config.get("daily_budget_model_reserve_percent"), 0.0)
+    configured_reserve_models = config.get("daily_budget_model_reserve_models")
+    if not isinstance(configured_reserve_models, list):
+        configured_reserve_models = []
+    model_reserve_models = list(dict.fromkeys(
+        str(model).strip() for model in configured_reserve_models if str(model).strip()
+    ))
+    model_reserve_consumed = max(0.0, consumed_today - daily_limit)
+    model_reserve_remaining = max(0.0, model_reserve_percent - model_reserve_consumed)
     current_cycle_signature = str(snapshot.get("planning_signature") or "").strip()
     force_unlock_active = (
         force_unlock_requested
@@ -2279,8 +2299,16 @@ def apply_dynamic_daily_budget(
         and bool(current_cycle_signature)
         and force_unlock_cycle_signature == current_cycle_signature
     )
+    model_reserve_active = (
+        not force_unlock_active
+        and original_quota_ok
+        and hard_reserve_available
+        and daily_exhausted
+        and bool(model_reserve_models)
+        and model_reserve_remaining > 0.000001
+    )
     quota_ok = original_quota_ok and (
-        force_unlock_active or (hard_reserve_available and daily_budget_available)
+        force_unlock_active or (hard_reserve_available and (daily_budget_available or model_reserve_active))
     )
 
     budget_state.update({
@@ -2307,6 +2335,11 @@ def apply_dynamic_daily_budget(
         "next_daily_budget_reset_at": next_daily_reset_at,
         "daily_exhausted": daily_exhausted,
         "quota_ok": quota_ok,
+        "model_reserve_percent": round(model_reserve_percent, 6),
+        "model_reserve_consumed_percent": round(model_reserve_consumed, 6),
+        "model_reserve_remaining_percent": round(model_reserve_remaining, 6),
+        "model_reserve_active": model_reserve_active,
+        "model_reserve_models": model_reserve_models,
         "manual_force_unlock_active": force_unlock_active,
         "manual_force_unlock_until": force_unlock_until if force_unlock_until > 0 else None,
         "manual_force_unlock_cycle_signature": force_unlock_cycle_signature or None,
@@ -2314,7 +2347,8 @@ def apply_dynamic_daily_budget(
     state["dynamic_daily_budget"] = budget_state
 
     units_per_percent = max(0.0, float(number(config.get("balance_units_per_percent")) or 1.0))
-    visible_balance = remaining_today * units_per_percent if quota_ok else 0.0
+    visible_percent = model_reserve_remaining if model_reserve_active else remaining_today
+    visible_balance = visible_percent * units_per_percent if quota_ok else 0.0
     if force_unlock_active and original_quota_ok:
         visible_balance = original_usable_balance
     elif original_usable_balance > 0:
@@ -2325,9 +2359,13 @@ def apply_dynamic_daily_budget(
     result["within_share"] = quota_ok
     result["usable_balance_units"] = round(visible_balance, 6)
     result["remaining_share_percent"] = round(
-        original_remaining_share if force_unlock_active and original_quota_ok else remaining_today if quota_ok else 0.0,
+        original_remaining_share if force_unlock_active and original_quota_ok else visible_percent if quota_ok else 0.0,
         6,
     )
+    if model_reserve_active:
+        result["quota_model_allowlist"] = model_reserve_models
+    else:
+        result.pop("quota_model_allowlist", None)
     result["dynamic_daily_budget"] = {"enabled": True, "applied": True, **budget_state}
     result["manual_force_unlock"] = {
         "active": force_unlock_active,
@@ -2355,16 +2393,22 @@ def apply_dynamic_daily_budget(
             "timezone": str(config.get("timezone") or "Asia/Shanghai"),
         }
     elif not daily_budget_available:
-        result["reason"] = "dynamic_daily_budget_exhausted"
+        result["reason"] = (
+            "dynamic_daily_budget_model_reserve_active"
+            if model_reserve_active
+            else "dynamic_daily_budget_exhausted"
+        )
         result["quota_block"] = {
             "kind": "daily_protected_budget",
             "code": "channel_daily_protected_budget_exhausted",
-            "reason": result["reason"],
+            "reason": "dynamic_daily_budget_exhausted",
             "http_status": 429,
             "retry_at": next_daily_reset_at,
             "retry_after_seconds": max(1, next_daily_reset_at - now),
             "timezone": str(config.get("timezone") or "Asia/Shanghai"),
         }
+        if model_reserve_active:
+            result["quota_block"]["allowed_models"] = model_reserve_models
     else:
         result["reason"] = "dynamic_daily_budget_available"
     return result
@@ -2566,12 +2610,19 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
 
     status: int | None = None
     abilities_enabled: bool | None = None
+    ability_allowlist: list[str] | None = None
     balance_update: float | None = None
 
     if desired_enabled:
         balance_update = float(first_non_empty(result.get("usable_balance_units"), result.get("balance_units")) or 0)
         if not manually_disabled:
-            abilities_enabled = True
+            configured_allowlist = result.get("quota_model_allowlist")
+            if isinstance(configured_allowlist, list):
+                ability_allowlist = list(dict.fromkeys(
+                    str(model).strip() for model in configured_allowlist if str(model).strip()
+                )) or None
+            if ability_allowlist is None:
+                abilities_enabled = True
             if current_status != STATUS_ENABLED:
                 status = STATUS_ENABLED
     elif ok:
@@ -2601,16 +2652,24 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
     if status is not None:
         sets.append(f"status = {int(status)}")
     statements.append(f"update channels set {', '.join(sets)} where id = {cid};")
-    if abilities_enabled is not None:
+    if ability_allowlist is not None:
+        allowed_models = ", ".join(sql_literal(model) for model in ability_allowlist)
+        statements.append(
+            "update abilities set enabled = case "
+            f"when model in ({allowed_models}) then true else false end where channel_id = {cid};"
+        )
+    elif abilities_enabled is not None:
         statements.append(f"update abilities set enabled = {'true' if abilities_enabled else 'false'} where channel_id = {cid};")
     statements.append("commit;")
     db.psql("\n".join(statements))
 
     name = channel.get("name") or f"channel-{cid}"
     if desired_enabled:
+        restriction = f" models={','.join(ability_allowlist)}" if ability_allowlist else ""
         return (
             f"{name}: enabled usable={float(result.get('usable_balance_units') or 0):.6f} "
             f"total={float(result.get('total_balance_units') or result.get('balance_units') or 0):.6f}"
+            f"{restriction}"
         )
     if ok:
         return f"{name}: auto-disabled {result.get('reason')}"
