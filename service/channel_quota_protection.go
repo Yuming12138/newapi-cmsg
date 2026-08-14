@@ -25,6 +25,7 @@ type ChannelQuotaProtectionBlock struct {
 	RetryAfterSeconds int64
 	Timezone          string
 	UpdatedAt         int64
+	AllowedModels     []string
 }
 
 func (block *ChannelQuotaProtectionBlock) RecoveryTime() string {
@@ -41,7 +42,11 @@ func (block *ChannelQuotaProtectionBlock) RecoveryTime() string {
 }
 
 func GetChannelQuotaProtectionBlock(channel *model.Channel) *ChannelQuotaProtectionBlock {
-	if channel == nil || channel.Status != common.ChannelStatusAutoDisabled {
+	return GetChannelQuotaProtectionBlockForModel(channel, "")
+}
+
+func GetChannelQuotaProtectionBlockForModel(channel *model.Channel, modelName string) *ChannelQuotaProtectionBlock {
+	if channel == nil || (channel.Status != common.ChannelStatusAutoDisabled && channel.Status != common.ChannelStatusEnabled) {
 		return nil
 	}
 	otherInfo := parseGuardObject(channel.OtherInfo)
@@ -49,11 +54,18 @@ func GetChannelQuotaProtectionBlock(channel *model.Channel) *ChannelQuotaProtect
 	if !ok {
 		return nil
 	}
-	if spendable, exists := guardObjectBool(quotaSource, "spendable"); exists && spendable {
-		return nil
-	}
 	blockInfo, ok := quotaSource["block"].(map[string]interface{})
 	if !ok {
+		return nil
+	}
+	allowedModels := quotaProtectionStringList(blockInfo, "allowed_models")
+	if channel.Status == common.ChannelStatusEnabled && len(allowedModels) == 0 {
+		return nil
+	}
+	if quotaProtectionModelAllowed(modelName, allowedModels) {
+		return nil
+	}
+	if spendable, exists := guardObjectBool(quotaSource, "spendable"); exists && spendable && len(allowedModels) == 0 {
 		return nil
 	}
 	httpStatus, ok := guardObjectInt64(blockInfo, "http_status")
@@ -82,6 +94,7 @@ func GetChannelQuotaProtectionBlock(channel *model.Channel) *ChannelQuotaProtect
 		RetryAfterSeconds: retryAfter,
 		Timezone:          quotaProtectionString(blockInfo, "timezone"),
 		UpdatedAt:         updatedAt,
+		AllowedModels:     allowedModels,
 	}
 }
 
@@ -136,7 +149,7 @@ func FindChannelQuotaProtectionBlock(ctx context.Context, groups []string, model
 		if !quotaProtectionChannelSupportsRequestPath(channel, requestPath) {
 			continue
 		}
-		block := GetChannelQuotaProtectionBlock(channel)
+		block := GetChannelQuotaProtectionBlockForModel(channel, modelName)
 		if block == nil {
 			continue
 		}
@@ -169,4 +182,39 @@ func quotaProtectionChannelSupportsRequestPath(channel *model.Channel, requestPa
 func quotaProtectionString(values map[string]interface{}, key string) string {
 	value, _ := values[key].(string)
 	return strings.TrimSpace(value)
+}
+
+func quotaProtectionStringList(values map[string]interface{}, key string) []string {
+	raw, ok := values[key].([]interface{})
+	if !ok {
+		return nil
+	}
+	result := make([]string, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	for _, item := range raw {
+		value, ok := item.(string)
+		value = strings.TrimSpace(value)
+		if !ok || value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func quotaProtectionModelAllowed(modelName string, allowedModels []string) bool {
+	if strings.TrimSpace(modelName) == "" || len(allowedModels) == 0 {
+		return false
+	}
+	normalizedModel := ratio_setting.FormatMatchingModelName(modelName)
+	for _, allowed := range allowedModels {
+		if modelName == allowed || normalizedModel == allowed {
+			return true
+		}
+	}
+	return false
 }

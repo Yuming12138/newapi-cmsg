@@ -185,6 +185,21 @@ class ManagementHeadersTest(unittest.TestCase):
         self.assertTrue(usage["_guard_auth"]["account_id_hash"])
 
 
+class OptionOverrideTest(unittest.TestCase):
+    class StaticDB:
+        def psql(self, sql: str, capture: bool = False) -> str:
+            return "\n".join([
+                "cliproxy_cpa_quota_guard.daily_budget_model_reserve_percent\t5",
+                'cliproxy_cpa_quota_guard.daily_budget_model_reserve_models\t["gpt-5.6-luna", ""]',
+            ])
+
+    def test_loads_model_reserve_percent_and_json_list(self) -> None:
+        overrides = guard.load_option_overrides(self.StaticDB())
+
+        self.assertEqual(5.0, overrides["daily_budget_model_reserve_percent"])
+        self.assertEqual(["gpt-5.6-luna"], overrides["daily_budget_model_reserve_models"])
+
+
 class ApplyResultAbilityReconciliationTest(unittest.TestCase):
     class RecordingDB:
         def __init__(self) -> None:
@@ -210,6 +225,28 @@ class ApplyResultAbilityReconciliationTest(unittest.TestCase):
         self.assertEqual(1, len(db.statements))
         self.assertIn("update abilities set enabled = true where channel_id = 12;", db.statements[0])
         self.assertNotIn("status = 1", db.statements[0])
+
+    def test_model_reserve_enables_only_allowlisted_ability(self) -> None:
+        db = self.RecordingDB()
+        channel = {"id": 12, "name": "test-cpa", "status": guard.STATUS_AUTO_DISABLED, "other_info": "{}"}
+        result = {
+            "ok": True,
+            "quota_ok": True,
+            "usable_balance_units": 4.25,
+            "total_balance_units": 50.0,
+            "reason": "dynamic_daily_budget_model_reserve_active",
+            "quota_model_allowlist": ["gpt-5.6-luna"],
+        }
+
+        message = guard.apply_result(db, channel, result, {})
+
+        self.assertEqual(1, len(db.statements))
+        self.assertIn("status = 1", db.statements[0])
+        self.assertIn(
+            "update abilities set enabled = case when model in ('gpt-5.6-luna') then true else false end where channel_id = 12;",
+            db.statements[0],
+        )
+        self.assertIn("models=gpt-5.6-luna", message)
 
     def test_auto_disabled_channel_keeps_abilities_disabled(self) -> None:
         db = self.RecordingDB()
@@ -861,6 +898,66 @@ class DynamicDailyBudgetTest(unittest.TestCase):
         self.assertFalse(result["quota_ok"])
         self.assertEqual("dynamic_daily_budget_exhausted", result["reason"])
         self.assertEqual(0.0, result["usable_balance_units"])
+
+    def test_daily_budget_exhaustion_activates_luna_only_reserve(self) -> None:
+        self.config.update({
+            "daily_budget_model_reserve_percent": 5.0,
+            "daily_budget_model_reserve_models": ["gpt-5.6-luna"],
+        })
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+        result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(87.0), state, self.now + 60)
+
+        self.assertTrue(result["quota_ok"])
+        self.assertEqual("dynamic_daily_budget_model_reserve_active", result["reason"])
+        self.assertEqual(["gpt-5.6-luna"], result["quota_model_allowlist"])
+        self.assertEqual(["gpt-5.6-luna"], result["quota_block"]["allowed_models"])
+        self.assertAlmostEqual(4.142857, result["usable_balance_units"], places=6)
+        self.assertTrue(result["dynamic_daily_budget"]["model_reserve_active"])
+
+    def test_luna_only_reserve_exhaustion_disables_channel(self) -> None:
+        self.config.update({
+            "daily_budget_model_reserve_percent": 5.0,
+            "daily_budget_model_reserve_models": ["gpt-5.6-luna"],
+        })
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+        result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(82.0), state, self.now + 60)
+
+        self.assertFalse(result["quota_ok"])
+        self.assertEqual("dynamic_daily_budget_exhausted", result["reason"])
+        self.assertNotIn("quota_model_allowlist", result)
+        self.assertFalse(result["dynamic_daily_budget"]["model_reserve_active"])
+        self.assertEqual(0.0, result["usable_balance_units"])
+
+    def test_hard_reserve_overrides_luna_only_reserve(self) -> None:
+        self.config.update({
+            "daily_budget_model_reserve_percent": 5.0,
+            "daily_budget_model_reserve_models": ["gpt-5.6-luna"],
+        })
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+        result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(15.0), state, self.now + 60)
+
+        self.assertFalse(result["quota_ok"])
+        self.assertEqual("protected_reserve_reached", result["reason"])
+        self.assertNotIn("quota_model_allowlist", result)
+
+    def test_new_guard_day_restores_all_models_after_luna_only_reserve(self) -> None:
+        self.config.update({
+            "daily_budget_model_reserve_percent": 5.0,
+            "daily_budget_model_reserve_models": ["gpt-5.6-luna"],
+        })
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+        exhausted = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(87.0), state, self.now + 60)
+        restored = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(86.0), state, self.now + 86_400)
+
+        self.assertTrue(exhausted["dynamic_daily_budget"]["model_reserve_active"])
+        self.assertTrue(restored["quota_ok"])
+        self.assertFalse(restored["dynamic_daily_budget"]["model_reserve_active"])
+        self.assertNotIn("quota_model_allowlist", restored)
+        self.assertNotIn("quota_block", restored)
 
     def test_hard_reserve_stops_at_fifteen_percent(self) -> None:
         state: dict = {}
