@@ -65,6 +65,23 @@ func TestIsQuotaChargedForUser_InvalidActionsFailClosed(t *testing.T) {
 	require.True(t, IsQuotaChargedForUser("", "cliproxy-codex"))
 }
 
+func TestIsQuotaChargedForUser_DefaultChargedWithoutExceptions(t *testing.T) {
+	withQuotaPolicySetting(t, "*", "charged", nil)
+
+	for _, usingGroup := range []string{
+		"asxs",
+		"asxs-gpt56",
+		"cliproxy-codex",
+		"deepseek",
+		"asxs-grok",
+		"cliproxy-claude",
+		"asxs-gpt56-direct",
+	} {
+		require.True(t, IsQuotaChargedForUser("asxs", usingGroup), usingGroup)
+		require.True(t, IsQuotaChargedForUser("cmsg", usingGroup), usingGroup)
+	}
+}
+
 func TestIsQuotaChargedForUser_Wildcards(t *testing.T) {
 	withQuotaPolicySetting(t, "all", "charged", []QuotaPolicyRule{
 		{UserGroups: []string{"all"}, UsingGroups: []string{"*"}, Action: "metered_only"},

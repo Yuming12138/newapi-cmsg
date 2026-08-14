@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
@@ -9,6 +10,8 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 )
 
 func TestParseASXSUsageSelectsDailyUSD(t *testing.T) {
@@ -121,6 +124,65 @@ func TestSummarizeEstimatedQuotaPoolSkipsModelQuotaPercent(t *testing.T) {
 	}
 }
 
+func TestSummarizeDailyQuotaPoolUsesCPADailyBudgetNotWeeklyBalance(t *testing.T) {
+	asxs := ChannelBudgetPoolSummary{
+		Group:                 "asxs",
+		ChannelCount:          1,
+		AvailableChannelCount: 1,
+		TotalUSD:              300,
+		UsedUSD:               2,
+		RemainingUSD:          298,
+		QuotaPerUSD:           500000,
+		UpdatedAt:             100,
+	}
+	channels := []*model.Channel{
+		{
+			Id:                 12,
+			Name:               "cliproxy-codex-pool",
+			Group:              "cliproxy-codex",
+			Status:             common.ChannelStatusEnabled,
+			Balance:            1.285714,
+			BalanceUpdatedTime: 200,
+			OtherInfo: `{
+				"cliproxy_cpa_quota_guard": {
+					"updated_at": 201,
+					"health": {
+						"ok": true,
+						"raw_remaining_percent": 78,
+						"dynamic_daily_budget": {
+							"applied": true,
+							"daily_limit_percent": 10.285714,
+							"consumed_today_percent": 9,
+							"remaining_today_percent": 1.285714,
+							"reserve_percent": 15,
+							"baseline_account_plans": [
+								{"plan_type":"Pro 20x","remaining_percent":87,"days_remaining":7}
+							]
+						}
+					}
+				}
+			}`,
+		},
+	}
+
+	got := summarizeDailyQuotaPool(asxs, true, channels, 500000)
+	wantCPATotal := 10.285714 * cliproxyCPAProUSDPerPercent
+	wantCPARemaining := 1.285714 * cliproxyCPAProUSDPerPercent
+	if math.Abs(got.TotalUSD-(300+wantCPATotal)) > 0.000001 {
+		t.Fatalf("daily total = %v, want %v", got.TotalUSD, 300+wantCPATotal)
+	}
+	if math.Abs(got.RemainingUSD-(298+wantCPARemaining)) > 0.000001 {
+		t.Fatalf("daily remaining = %v, want %v", got.RemainingUSD, 298+wantCPARemaining)
+	}
+	if got.RemainingUSD >= 1000 || !got.Estimated || got.Partial || len(got.GroupBreakdown) != 2 {
+		t.Fatalf("summarizeDailyQuotaPool() = %+v", got)
+	}
+	cpa := got.GroupBreakdown[1]
+	if cpa.Source != "cliproxy_cpa_dynamic_daily_budget" || !cpa.Estimated || cpa.UpdatedAt != 201 {
+		t.Fatalf("CPA daily group = %+v", cpa)
+	}
+}
+
 func TestInGuardMinuteWindow(t *testing.T) {
 	start, err := parseGuardHHMM("09:00")
 	if err != nil {
@@ -135,6 +197,23 @@ func TestInGuardMinuteWindow(t *testing.T) {
 	}
 	if inGuardMinuteWindow(18*60, start, end) || inGuardMinuteWindow(8*60+59, start, end) {
 		t.Fatalf("expected outside values to be unlocked")
+	}
+}
+
+func TestInGuardMinuteWindowMidnightToSeventeen(t *testing.T) {
+	start, err := parseGuardHHMM("00:00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	end, err := parseGuardHHMM("17:00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inGuardMinuteWindow(0, start, end) || !inGuardMinuteWindow(16*60+59, start, end) {
+		t.Fatalf("expected 00:00-16:59 to be restricted")
+	}
+	if inGuardMinuteWindow(17*60, start, end) || inGuardMinuteWindow(23*60+59, start, end) {
+		t.Fatalf("expected 17:00-23:59 to be unlocked")
 	}
 }
 
@@ -170,11 +249,81 @@ func TestInitialUserQuotaGuardStateRestricted(t *testing.T) {
 	}
 }
 
+func TestInitialUserQuotaGuardStateRestrictedUsesPerUserBase(t *testing.T) {
+	cfg := &operation_setting.UserQuotaGuardSetting{
+		DaytimeBaseUSD:  40,
+		PerUserBaseUSD:  map[string]float64{"2": 10},
+		PerUserExtraUSD: map[string]float64{"2": 5},
+	}
+	state := initialUserQuotaGuardState(cfg, userQuotaPhase{DateKey: "2026-08-14", Phase: "restricted"}, 2, 500000, 0, "static")
+	if state.AppliedRestrictedGrantQuota != 7500000 || state.AppliedExtraUSD != 5 {
+		t.Fatalf("initialUserQuotaGuardState() = %+v", state)
+	}
+
+	general := initialUserQuotaGuardState(cfg, userQuotaPhase{DateKey: "2026-08-14", Phase: "restricted"}, 3, 500000, 0, "static")
+	if general.AppliedRestrictedGrantQuota != 20000000 {
+		t.Fatalf("general initialUserQuotaGuardState() = %+v", general)
+	}
+}
+
 func TestInitialUserQuotaGuardStateUnlockedUsesResolvedPoolQuota(t *testing.T) {
 	cfg := &operation_setting.UserQuotaGuardSetting{}
 	state := initialUserQuotaGuardState(cfg, userQuotaPhase{DateKey: "2026-05-14", Phase: "unlocked"}, 2, 500000, 123.45, "asxs_channel_pool")
 	if state.Phase != "unlocked" || state.Date != "2026-05-14" || state.AppliedUnlockedQuota != 61725000 || state.AppliedUnlockedUSD != 123.45 || state.UnlockedQuotaSource != "asxs_channel_pool" {
 		t.Fatalf("initialUserQuotaGuardState() = %+v", state)
+	}
+}
+
+func TestResolveUserQuotaGuardUnlockedQuotaUsesDailyPool(t *testing.T) {
+	originalDB := model.DB
+	db, err := gorm.Open(sqlite.Open("file:user-quota-daily-pool?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.DB = db
+	t.Cleanup(func() { model.DB = originalDB })
+	if err := db.AutoMigrate(&model.Channel{}); err != nil {
+		t.Fatal(err)
+	}
+
+	channel := &model.Channel{
+		Id:      12,
+		Name:    "cliproxy-codex-pool",
+		Group:   "cliproxy-codex",
+		Status:  common.ChannelStatusEnabled,
+		Balance: 1,
+		OtherInfo: `{
+			"cliproxy_cpa_quota_guard": {
+				"health": {
+					"ok": true,
+					"dynamic_daily_budget": {
+						"applied": true,
+						"daily_limit_percent": 10,
+						"consumed_today_percent": 8,
+						"remaining_today_percent": 2,
+						"reserve_percent": 15,
+						"baseline_account_plans": [
+							{"plan_type":"Pro 20x","remaining_percent":87,"days_remaining":7}
+						]
+					}
+				}
+			}
+		}`,
+	}
+	if err := db.Create(channel).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	gotUSD, gotSource, err := resolveUserQuotaGuardUnlockedQuota(context.Background(), &operation_setting.UserQuotaGuardSetting{
+		UnlockedQuotaUSD:    405,
+		UnlockedQuotaSource: "daily_quota_pool",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantUSD := 2 * cliproxyCPAProUSDPerPercent
+	if math.Abs(gotUSD-wantUSD) > 0.000001 || gotSource != "daily_quota_pool" {
+		t.Fatalf("resolveUserQuotaGuardUnlockedQuota() = (%v, %q), want (%v, %q)", gotUSD, gotSource, wantUSD, "daily_quota_pool")
 	}
 }
 

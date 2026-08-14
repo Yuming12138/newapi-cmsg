@@ -26,6 +26,7 @@ type UserQuotaGuardSetting struct {
 	IncludeGroups       []string                                     `json:"include_groups"`
 	IncludeUserIDs      []int                                        `json:"include_user_ids"`
 	ExcludeUserIDs      []int                                        `json:"exclude_user_ids"`
+	PerUserBaseUSD      map[string]float64                           `json:"per_user_base_usd"`
 	PerUserExtraUSD     map[string]float64                           `json:"per_user_extra_usd"`
 	DailyApprovals      map[string]map[string]UserQuotaGuardApproval `json:"daily_approvals"`
 }
@@ -45,6 +46,7 @@ var userQuotaGuardSetting = UserQuotaGuardSetting{
 	IncludeGroups:       []string{"asxs"},
 	IncludeUserIDs:      []int{},
 	ExcludeUserIDs:      []int{1},
+	PerUserBaseUSD:      map[string]float64{},
 	PerUserExtraUSD:     map[string]float64{},
 	DailyApprovals:      map[string]map[string]UserQuotaGuardApproval{},
 }

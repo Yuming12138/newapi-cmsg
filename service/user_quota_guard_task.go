@@ -223,11 +223,10 @@ func currentUserQuotaPhase(cfg *operation_setting.UserQuotaGuardSetting) (userQu
 
 func applyUserQuotaGuardPolicy(cfg *operation_setting.UserQuotaGuardSetting, user *model.User, state userQuotaGuardUserState, exists bool, phase userQuotaPhase, quotaPerUSD int, unlockedQuotaUSD float64, unlockedQuotaSource string) (userQuotaGuardUserState, bool, error) {
 	if phase.Phase == "restricted" {
-		extraUSD := userQuotaExtraUSD(cfg, phase.DateKey, user.Id)
-		targetUSD := cfg.DaytimeBaseUSD + extraUSD
+		baseUSD, extraUSD, targetUSD := userQuotaRestrictedUSD(cfg, phase.DateKey, user.Id)
 		targetQuota := quotaFromUSD(targetUSD, quotaPerUSD)
 		shouldEnter := !exists || state.Phase != "restricted" || state.Date != phase.DateKey
-		remark := fmt.Sprintf("白天额度 $%g，含追加 $%g；18:00 后解锁", targetUSD, extraUSD)
+		remark := fmt.Sprintf("个人限额时段额度 $%g（基础 $%g，追加 $%g）；%s 后解锁", targetUSD, baseUSD, extraUSD, defaultString(cfg.RestrictedEnd, "18:00"))
 		if shouldEnter {
 			if err := updateGuardedUserQuota(user, targetQuota, remark); err != nil {
 				return state, false, err
@@ -254,9 +253,12 @@ func applyUserQuotaGuardPolicy(cfg *operation_setting.UserQuotaGuardSetting, use
 	shouldUnlock := !exists || state.Phase != "unlocked" || state.Date != phase.DateKey
 	shouldSync := shouldUnlock || user.Quota != targetQuota || state.AppliedUnlockedQuota != targetQuota || state.UnlockedQuotaSource != unlockedQuotaSource
 	if shouldSync {
-		remark := fmt.Sprintf("非白天限额时段已解锁；当前 asxs 渠道池可用 $%g", unlockedQuotaUSD)
+		remark := fmt.Sprintf("非个人限额时段已解锁；当前渠道池可用 $%g", unlockedQuotaUSD)
+		if unlockedQuotaSource == "daily_quota_pool" {
+			remark = fmt.Sprintf("非个人限额时段已解锁；当前今日总额度池可用 $%g", unlockedQuotaUSD)
+		}
 		if unlockedQuotaSource == "static" {
-			remark = "非白天限额时段已解锁；总额度由 asxs 渠道池控制"
+			remark = "非个人限额时段已解锁；总额度由渠道池控制"
 		}
 		if err := updateGuardedUserQuota(user, targetQuota, remark); err != nil {
 			return state, false, err
@@ -280,6 +282,15 @@ func resolveUserQuotaGuardUnlockedQuota(ctx context.Context, cfg *operation_sett
 		return cfg.UnlockedQuotaUSD, "static", nil
 	}
 	switch source {
+	case "daily_quota_pool", "daily_pool":
+		summary, handled, err := GetDailyQuotaPoolSnapshot(ctx)
+		if err != nil {
+			return cfg.UnlockedQuotaUSD, "static", err
+		}
+		if !handled || summary.ChannelCount == 0 {
+			return cfg.UnlockedQuotaUSD, "static", nil
+		}
+		return summary.RemainingUSD, "daily_quota_pool", nil
 	case "asxs_channel_pool", "asxs_pool", "channel_pool", "quota_source_pool", "unified_quota_source_pool":
 		summary, handled, err := RefreshASXSChannelBudgetPoolSummary(ctx)
 		if err != nil {
@@ -299,11 +310,11 @@ func resolveUserQuotaGuardUnlockedQuota(ctx context.Context, cfg *operation_sett
 
 func initialUserQuotaGuardState(cfg *operation_setting.UserQuotaGuardSetting, phase userQuotaPhase, userID int, quotaPerUSD int, unlockedQuotaUSD float64, unlockedQuotaSource string) userQuotaGuardUserState {
 	if phase.Phase == "restricted" {
-		extraUSD := userQuotaExtraUSD(cfg, phase.DateKey, userID)
+		_, extraUSD, targetUSD := userQuotaRestrictedUSD(cfg, phase.DateKey, userID)
 		return userQuotaGuardUserState{
 			Date:                        phase.DateKey,
 			Phase:                       "restricted",
-			AppliedRestrictedGrantQuota: quotaFromUSD(cfg.DaytimeBaseUSD+extraUSD, quotaPerUSD),
+			AppliedRestrictedGrantQuota: quotaFromUSD(targetUSD, quotaPerUSD),
 			AppliedExtraUSD:             extraUSD,
 		}
 	}
@@ -343,6 +354,21 @@ func userQuotaExtraUSD(cfg *operation_setting.UserQuotaGuardSetting, dateKey str
 		}
 	}
 	return extra
+}
+
+func userQuotaRestrictedUSD(cfg *operation_setting.UserQuotaGuardSetting, dateKey string, userID int) (baseUSD float64, extraUSD float64, targetUSD float64) {
+	if cfg == nil {
+		return 0, 0, 0
+	}
+	baseUSD = math.Max(0, cfg.DaytimeBaseUSD)
+	if cfg.PerUserBaseUSD != nil {
+		if override, ok := cfg.PerUserBaseUSD[strconv.Itoa(userID)]; ok {
+			baseUSD = math.Max(0, override)
+		}
+	}
+	extraUSD = userQuotaExtraUSD(cfg, dateKey, userID)
+	targetUSD = math.Max(0, baseUSD+extraUSD)
+	return baseUSD, extraUSD, targetUSD
 }
 
 func loadUserQuotaGuardState() (userQuotaGuardState, bool) {

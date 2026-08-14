@@ -78,6 +78,232 @@ type QuotaPoolGroup struct {
 	Partial               bool    `json:"partial"`
 }
 
+// DailyQuotaPoolSummary exposes only quota that can be spent during the
+// current Asia/Shanghai guard day. Unlike EstimatedQuotaPoolSummary, it does
+// not treat a CPA rolling-week balance as today's available balance.
+type DailyQuotaPoolSummary struct {
+	Source                string                `json:"source"`
+	Group                 string                `json:"group"`
+	ChannelCount          int                   `json:"channel_count"`
+	AvailableChannelCount int                   `json:"available_channel_count"`
+	FailedChannelCount    int                   `json:"failed_channel_count"`
+	TotalUSD              float64               `json:"total_usd"`
+	UsedUSD               float64               `json:"used_usd"`
+	RemainingUSD          float64               `json:"remaining_usd"`
+	TotalQuota            int64                 `json:"total_quota"`
+	UsedQuota             int64                 `json:"used_quota"`
+	RemainingQuota        int64                 `json:"remaining_quota"`
+	QuotaPerUSD           float64               `json:"quota_per_usd"`
+	UpdatedAt             int64                 `json:"updated_at"`
+	Estimated             bool                  `json:"estimated"`
+	Partial               bool                  `json:"partial"`
+	GroupBreakdown        []DailyQuotaPoolGroup `json:"group_breakdown,omitempty"`
+}
+
+type DailyQuotaPoolGroup struct {
+	Source         string  `json:"source"`
+	Group          string  `json:"group"`
+	ChannelCount   int     `json:"channel_count"`
+	TotalUSD       float64 `json:"total_usd"`
+	UsedUSD        float64 `json:"used_usd"`
+	RemainingUSD   float64 `json:"remaining_usd"`
+	RemainingQuota int64   `json:"remaining_quota"`
+	UpdatedAt      int64   `json:"updated_at"`
+	Available      bool    `json:"available"`
+	Estimated      bool    `json:"estimated"`
+	Partial        bool    `json:"partial"`
+}
+
+func GetDailyQuotaPoolSnapshot(ctx context.Context) (DailyQuotaPoolSummary, bool, error) {
+	if model.DB == nil {
+		return DailyQuotaPoolSummary{}, false, nil
+	}
+	asxs, asxsHandled, err := GetASXSChannelBudgetPoolSnapshot(ctx)
+	if err != nil {
+		return DailyQuotaPoolSummary{}, asxsHandled, err
+	}
+	var channels []*model.Channel
+	if err := model.DB.WithContext(ctx).
+		Select("id", "name", "status", "balance", "balance_updated_time", "other_info", "group").
+		Order("id asc").
+		Find(&channels).Error; err != nil {
+		return DailyQuotaPoolSummary{}, true, err
+	}
+	quotaPerUSD := common.QuotaPerUnit
+	if asxs.QuotaPerUSD > 0 {
+		quotaPerUSD = asxs.QuotaPerUSD
+	}
+	summary := summarizeDailyQuotaPool(asxs, asxsHandled, channels, quotaPerUSD)
+	return summary, summary.ChannelCount > 0, nil
+}
+
+func summarizeDailyQuotaPool(asxs ChannelBudgetPoolSummary, asxsHandled bool, channels []*model.Channel, quotaPerUSD float64) DailyQuotaPoolSummary {
+	if quotaPerUSD <= 0 {
+		quotaPerUSD = common.QuotaPerUnit
+	}
+	summary := DailyQuotaPoolSummary{
+		Source:      "daily_spendable_quota_pool",
+		QuotaPerUSD: quotaPerUSD,
+	}
+	groups := map[string]struct{}{}
+	if asxsHandled && asxs.ChannelCount > 0 {
+		group := DailyQuotaPoolGroup{
+			Source:       "asxs_daily_subscription",
+			Group:        defaultString(asxs.Group, "asxs"),
+			ChannelCount: asxs.ChannelCount,
+			TotalUSD:     asxs.TotalUSD,
+			UsedUSD:      asxs.UsedUSD,
+			RemainingUSD: asxs.RemainingUSD,
+			UpdatedAt:    asxs.UpdatedAt,
+			Available:    asxs.AvailableChannelCount > 0 && asxs.RemainingUSD > 0,
+			Partial:      asxs.Partial || asxs.FailedChannelCount > 0,
+		}
+		appendDailyQuotaPoolGroup(&summary, &group, quotaPerUSD)
+		groups[group.Group] = struct{}{}
+		summary.AvailableChannelCount += asxs.AvailableChannelCount
+		summary.FailedChannelCount += asxs.FailedChannelCount
+	}
+	for _, channel := range channels {
+		group, ok := cliproxyCPADailyQuotaPoolGroup(channel)
+		if !ok {
+			continue
+		}
+		appendDailyQuotaPoolGroup(&summary, &group, quotaPerUSD)
+		groups[group.Group] = struct{}{}
+		if group.Available {
+			summary.AvailableChannelCount++
+		}
+		if group.Partial {
+			summary.FailedChannelCount++
+		}
+	}
+	summary.Group = joinQuotaPoolGroups(groups)
+	summary.TotalUSD = roundFloat(summary.TotalUSD, 6)
+	summary.UsedUSD = roundFloat(summary.UsedUSD, 6)
+	summary.RemainingUSD = roundFloat(summary.RemainingUSD, 6)
+	summary.TotalQuota = int64(math.Round(summary.TotalUSD * quotaPerUSD))
+	summary.UsedQuota = int64(math.Round(summary.UsedUSD * quotaPerUSD))
+	summary.RemainingQuota = int64(math.Round(summary.RemainingUSD * quotaPerUSD))
+	summary.Partial = summary.FailedChannelCount > 0
+	return summary
+}
+
+func appendDailyQuotaPoolGroup(summary *DailyQuotaPoolSummary, group *DailyQuotaPoolGroup, quotaPerUSD float64) {
+	if summary == nil || group == nil {
+		return
+	}
+	group.TotalUSD = roundFloat(math.Max(group.TotalUSD, 0), 6)
+	group.UsedUSD = roundFloat(math.Max(group.UsedUSD, 0), 6)
+	group.RemainingUSD = roundFloat(math.Max(group.RemainingUSD, 0), 6)
+	group.RemainingQuota = int64(math.Round(group.RemainingUSD * quotaPerUSD))
+	summary.ChannelCount += group.ChannelCount
+	summary.TotalUSD += group.TotalUSD
+	summary.UsedUSD += group.UsedUSD
+	summary.RemainingUSD += group.RemainingUSD
+	if group.UpdatedAt > summary.UpdatedAt {
+		summary.UpdatedAt = group.UpdatedAt
+	}
+	summary.Estimated = summary.Estimated || group.Estimated
+	summary.GroupBreakdown = append(summary.GroupBreakdown, *group)
+}
+
+func cliproxyCPADailyQuotaPoolGroup(channel *model.Channel) (DailyQuotaPoolGroup, bool) {
+	if channel == nil || cliproxyCPAChannelIsModelQuota(channel) {
+		return DailyQuotaPoolGroup{}, false
+	}
+	otherInfo := parseGuardObject(channel.OtherInfo)
+	guardInfo, ok := otherInfo["cliproxy_cpa_quota_guard"].(map[string]interface{})
+	if !ok {
+		return DailyQuotaPoolGroup{}, false
+	}
+	health, ok := guardInfo["health"].(map[string]interface{})
+	if !ok {
+		return DailyQuotaPoolGroup{}, false
+	}
+	daily, ok := health["dynamic_daily_budget"].(map[string]interface{})
+	if !ok {
+		return DailyQuotaPoolGroup{}, false
+	}
+	if applied, exists := guardObjectBool(daily, "applied"); exists && !applied {
+		return DailyQuotaPoolGroup{}, false
+	}
+	limitPercent, okLimit := guardObjectFloat(daily, "daily_limit_percent")
+	remainingPercent, okRemaining := guardObjectFloat(daily, "remaining_today_percent")
+	if !okLimit || !okRemaining {
+		return DailyQuotaPoolGroup{}, false
+	}
+	consumedPercent, okConsumed := guardObjectFloat(daily, "consumed_today_percent")
+	if !okConsumed {
+		consumedPercent = math.Max(limitPercent-remainingPercent, 0)
+	}
+	rate, okRate := cliproxyCPADailyUSDPerPercent(daily)
+	if !okRate {
+		return DailyQuotaPoolGroup{}, false
+	}
+	failed := false
+	if healthy, exists := guardObjectBool(health, "ok"); exists && !healthy {
+		failed = true
+	}
+	groupName := strings.TrimSpace(channel.Group)
+	if groupName == "" {
+		groupName = "cliproxy-codex"
+	}
+	updatedAt := channel.BalanceUpdatedTime
+	if value, ok := guardObjectInt64(guardInfo, "updated_at"); ok && value > updatedAt {
+		updatedAt = value
+	}
+	remainingPercent = math.Min(math.Max(remainingPercent, 0), math.Max(limitPercent, 0))
+	consumedPercent = math.Min(math.Max(consumedPercent, 0), math.Max(limitPercent, 0))
+	return DailyQuotaPoolGroup{
+		Source:       "cliproxy_cpa_dynamic_daily_budget",
+		Group:        groupName,
+		ChannelCount: 1,
+		TotalUSD:     math.Max(limitPercent, 0) * rate,
+		UsedUSD:      consumedPercent * rate,
+		RemainingUSD: remainingPercent * rate,
+		UpdatedAt:    updatedAt,
+		Available:    channel.Status == common.ChannelStatusEnabled && !failed && remainingPercent > 0,
+		Estimated:    true,
+		Partial:      failed,
+	}, true
+}
+
+func cliproxyCPADailyUSDPerPercent(daily map[string]interface{}) (float64, bool) {
+	plans, _ := daily["baseline_account_plans"].([]interface{})
+	if len(plans) == 0 {
+		plans, _ = daily["account_plans"].([]interface{})
+	}
+	if len(plans) == 0 {
+		return 0, false
+	}
+	weightedRate := 0.0
+	weightTotal := 0.0
+	reserveTotal, _ := guardObjectFloat(daily, "reserve_percent")
+	reservePerAccount := math.Max(reserveTotal, 0) / float64(len(plans))
+	for _, raw := range plans {
+		plan, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		planType, _ := plan["plan_type"].(string)
+		remaining, okRemaining := guardObjectFloat(plan, "remaining_percent")
+		days, okDays := guardObjectFloat(plan, "days_remaining")
+		if !okRemaining || !okDays || days <= 0 {
+			continue
+		}
+		weight := math.Max(remaining-reservePerAccount, 0) / days
+		if weight <= 0 {
+			continue
+		}
+		weightedRate += weight * cliproxyCPAUSDPerPercent(planType)
+		weightTotal += weight
+	}
+	if weightTotal <= 0 {
+		return 0, false
+	}
+	return weightedRate / weightTotal, true
+}
+
 func GetEstimatedQuotaPoolSnapshot(ctx context.Context) (EstimatedQuotaPoolSummary, bool, error) {
 	if model.DB == nil {
 		return EstimatedQuotaPoolSummary{}, false, nil
