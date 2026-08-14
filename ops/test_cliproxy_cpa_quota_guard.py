@@ -311,6 +311,37 @@ class ApplyResultAbilityReconciliationTest(unittest.TestCase):
 
 
 class ManagementAuthBackoffTest(unittest.TestCase):
+    def test_transient_probe_failure_uses_recent_success_grace(self) -> None:
+        now = 1_800_000_000
+        state = {"last_success_at": now - 60}
+
+        result = guard.record_probe_failure(
+            {**guard.DEFAULT_CONFIG, "probe_failure_grace_sec": 600},
+            state,
+            RuntimeError("timed out while reading authorization=do-not-store"),
+            now,
+        )
+
+        self.assertFalse(result["fail_closed"])
+        self.assertTrue(result["stale_grace"])
+        self.assertEqual("timeout", result["probe_error_category"])
+        self.assertIn("authorization=[REDACTED]", state["last_probe_failure"]["error"])
+        self.assertNotIn("do-not-store", state["last_probe_failure"]["error"])
+        self.assertEqual("quota_probe_failed_stale_grace", result["reason"])
+
+    def test_probe_failure_closes_after_success_grace_expires(self) -> None:
+        now = 1_800_000_000
+        state = {"last_success_at": now - 601}
+        config = {**guard.DEFAULT_CONFIG, "probe_failure_grace_sec": 600}
+
+        guard.record_probe_failure(config, state, RuntimeError("temporary network failure"), now)
+        guard.record_probe_failure(config, state, RuntimeError("temporary network failure"), now + 60)
+        result = guard.record_probe_failure(config, state, RuntimeError("temporary network failure"), now + 120)
+
+        self.assertTrue(result["fail_closed"])
+        self.assertFalse(result["stale_grace"])
+        self.assertEqual(3, state["failure_count"])
+
     def test_request_json_classifies_management_403_without_response_body(self) -> None:
         error = guard.urllib.error.HTTPError(
             "http://home.internal/v0/management/quota-health",

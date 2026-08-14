@@ -183,6 +183,62 @@ func TestSummarizeDailyQuotaPoolUsesCPADailyBudgetNotWeeklyBalance(t *testing.T)
 	}
 }
 
+func TestSummarizeDailyQuotaPoolIncludesActiveLunaReserve(t *testing.T) {
+	asxs := ChannelBudgetPoolSummary{
+		Group:                 "asxs",
+		ChannelCount:          1,
+		AvailableChannelCount: 1,
+		TotalUSD:              300,
+		UsedUSD:               298.23,
+		RemainingUSD:          1.77,
+		QuotaPerUSD:           500000,
+		UpdatedAt:             100,
+	}
+	channels := []*model.Channel{
+		{
+			Id:                 12,
+			Name:               "cliproxy-codex-pool",
+			Group:              "cliproxy-codex",
+			Status:             common.ChannelStatusEnabled,
+			Balance:            4.285714,
+			BalanceUpdatedTime: 200,
+			OtherInfo: `{
+				"cliproxy_cpa_quota_guard": {
+					"updated_at": 201,
+					"health": {
+						"ok": true,
+						"usable_balance_units": 4.285714,
+						"dynamic_daily_budget": {
+							"applied": true,
+							"daily_limit_percent": 10.285714,
+							"consumed_today_percent": 11,
+							"remaining_today_percent": 0,
+							"model_reserve_active": true,
+							"model_reserve_remaining_percent": 4.285714,
+							"baseline_account_plans": [
+								{"plan_type":"Pro 20x","remaining_percent":76,"days_remaining":6}
+							]
+						}
+					}
+				}
+			}`,
+		},
+	}
+
+	got := summarizeDailyQuotaPool(asxs, true, channels, 500000)
+	wantReserveUSD := 4.285714 * cliproxyCPAProUSDPerPercent
+	if math.Abs(got.RemainingUSD-(1.77+wantReserveUSD)) > 0.000001 {
+		t.Fatalf("daily remaining with Luna reserve = %v, want %v", got.RemainingUSD, 1.77+wantReserveUSD)
+	}
+	if len(got.GroupBreakdown) != 2 {
+		t.Fatalf("daily group breakdown = %+v", got.GroupBreakdown)
+	}
+	cpa := got.GroupBreakdown[1]
+	if !cpa.ReserveActive || math.Abs(cpa.ReserveRemainingUSD-wantReserveUSD) > 0.000001 || !cpa.Available {
+		t.Fatalf("CPA Luna reserve group = %+v", cpa)
+	}
+}
+
 func TestInGuardMinuteWindow(t *testing.T) {
 	start, err := parseGuardHHMM("09:00")
 	if err != nil {
