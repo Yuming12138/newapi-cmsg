@@ -309,6 +309,34 @@ class ApplyResultAbilityReconciliationTest(unittest.TestCase):
         self.assertIn('"status": "unknown"', statement)
         self.assertIn("balance_preserved", message)
 
+    def test_stale_quota_with_active_runtime_reenables_channel_without_changing_balance(self) -> None:
+        db = self.RecordingDB()
+        channel = {
+            "id": 12,
+            "name": "test-cpa",
+            "status": guard.STATUS_AUTO_DISABLED,
+            "balance": 9.166667,
+            "other_info": "{}",
+        }
+        result = {
+            "ok": True,
+            "quota_ok": True,
+            "usable_balance_units": 9.166667,
+            "reason": "quota_probe_stale_runtime_auth_available",
+            "quota_observation_stale": True,
+        }
+
+        message = guard.apply_result(db, channel, result, {"failure_count": 12})
+
+        statement = db.statements[0]
+        self.assertIn("status = 1", statement)
+        self.assertIn("update abilities set enabled = true where channel_id = 12;", statement)
+        self.assertNotIn("balance = ", statement)
+        self.assertNotIn("balance_updated_time = ", statement)
+        self.assertIn('"spendable": false', statement)
+        self.assertIn('"status": "unknown"', statement)
+        self.assertIn("quota_probe_stale_runtime_auth_available", message)
+
 
 class ManagementAuthBackoffTest(unittest.TestCase):
     def test_transient_probe_failure_uses_recent_success_grace(self) -> None:
@@ -393,6 +421,71 @@ class ManagementAuthBackoffTest(unittest.TestCase):
 
         home.assert_not_called()
         fallback.assert_not_called()
+
+    def test_failed_quota_probe_preserves_routability_when_runtime_auth_is_active(self) -> None:
+        state = {
+            "last_success_at": 1_800_000_000,
+            "dynamic_daily_budget": {
+                "quota_ok": True,
+                "remaining_today_percent": 9.166667,
+                "model_reserve_active": False,
+            },
+        }
+        config = {
+            **guard.DEFAULT_CONFIG,
+            "preserve_routability_on_quota_probe_failure": True,
+        }
+        failed = {
+            "ok": False,
+            "reason": "quota_probe_failed",
+            "error": "wham_usage_http_403",
+            "fail_closed": True,
+        }
+        runtime = {
+            "available": True,
+            "considered_count": 3,
+            "active_count": 1,
+            "disabled_count": 2,
+            "unavailable_count": 0,
+        }
+
+        with mock.patch.object(guard, "probe_runtime_auth_state", return_value=runtime):
+            result = guard.preserve_routability_after_probe_failure(config, {}, state, failed)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["quota_ok"])
+        self.assertTrue(result["quota_observation_stale"])
+        self.assertFalse(result["fail_closed"])
+        self.assertAlmostEqual(9.166667, result["usable_balance_units"])
+        self.assertTrue(result["dynamic_daily_budget"]["applied"])
+
+    def test_failed_quota_probe_stays_closed_when_all_runtime_auths_are_unavailable(self) -> None:
+        state = {
+            "last_success_at": 1_800_000_000,
+            "dynamic_daily_budget": {
+                "quota_ok": True,
+                "remaining_today_percent": 9.166667,
+                "model_reserve_active": False,
+            },
+        }
+        config = {
+            **guard.DEFAULT_CONFIG,
+            "preserve_routability_on_quota_probe_failure": True,
+        }
+        failed = {"ok": False, "reason": "quota_probe_failed", "fail_closed": True}
+        runtime = {
+            "available": False,
+            "considered_count": 3,
+            "active_count": 0,
+            "disabled_count": 2,
+            "unavailable_count": 1,
+        }
+
+        with mock.patch.object(guard, "probe_runtime_auth_state", return_value=runtime):
+            result = guard.preserve_routability_after_probe_failure(config, {}, state, failed)
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["fail_closed"])
 
 
 def combined_dynamic_budget_result(*results: dict) -> dict:
