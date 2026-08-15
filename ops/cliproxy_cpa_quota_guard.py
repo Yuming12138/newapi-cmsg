@@ -50,6 +50,7 @@ DEFAULT_CONFIG = {
     "min_remaining_percent_7d": 15.0,
     "fail_closed_after_consecutive_failures": 3,
     "probe_failure_grace_sec": 10 * 60,
+    "preserve_routability_on_quota_probe_failure": False,
     "management_auth_failure_backoff_sec": 30 * 60,
     "balance_units_per_percent": 1.0,
     "dynamic_daily_budget_enabled": False,
@@ -94,6 +95,10 @@ class ManagementAuthError(RuntimeError):
 
 OPTION_CONFIG_MAP = {
     "cliproxy_cpa_quota_guard.enabled": ("enabled", "bool"),
+    "cliproxy_cpa_quota_guard.preserve_routability_on_quota_probe_failure": (
+        "preserve_routability_on_quota_probe_failure",
+        "bool",
+    ),
     "cliproxy_cpa_quota_guard.min_remaining_percent_5h": ("min_remaining_percent_5h", "float"),
     "cliproxy_cpa_quota_guard.min_remaining_percent_7d": ("min_remaining_percent_7d", "float"),
     "cliproxy_cpa_quota_guard.dynamic_daily_budget_enabled": ("dynamic_daily_budget_enabled", "bool"),
@@ -629,6 +634,50 @@ def call_wham_usages(config: dict[str, Any], env: dict[str, str]) -> list[dict[s
         errors = [str(item.get("error") or item.get("reason") or "unknown") for item in accounts]
         raise RuntimeError("wham_usage_all_accounts_failed: " + "; ".join(errors[:3]))
     return accounts
+
+
+def probe_runtime_auth_state(config: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
+    """Check CPA schedulability without depending on the upstream quota page."""
+    timeout = int(config.get("timeout_sec") or 30)
+    base_url = str(config.get("cpa_base_url") or "").rstrip("/")
+    if not base_url:
+        raise RuntimeError("empty_cpa_base_url")
+    headers = management_headers(env, base_url)
+    if not headers.get("Authorization") and not headers.get("X-Management-Key"):
+        raise RuntimeError("missing_cpa_management_credentials")
+
+    payload = request_json(base_url + "/v0/management/auth-files", headers, timeout)
+    entries = codex_auth_entries(payload)
+    considered = 0
+    active = 0
+    disabled = 0
+    unavailable = 0
+    quota_feature_mode = bool(str(config.get("quota_feature") or "").strip())
+    for entry in entries:
+        plan_type = plan_type_from_entry(entry)
+        if (
+            quota_feature_mode
+            and quota_feature_plan_is_known(plan_type)
+            and not quota_feature_plan_selected(config, plan_type)
+        ):
+            continue
+        considered += 1
+        status = str(entry.get("status") or "").strip().lower()
+        is_disabled = bool(entry.get("disabled")) or status == "disabled"
+        is_unavailable = bool(entry.get("unavailable")) or status in {"cooldown", "unavailable"}
+        if is_disabled:
+            disabled += 1
+        elif is_unavailable:
+            unavailable += 1
+        else:
+            active += 1
+    return {
+        "available": active > 0,
+        "considered_count": considered,
+        "active_count": active,
+        "disabled_count": disabled,
+        "unavailable_count": unavailable,
+    }
 
 
 def cpa_quota_health_query(config: dict[str, Any]) -> str:
@@ -2499,7 +2548,10 @@ def quota_source_window_remaining(result: dict[str, Any], name: str) -> float | 
 def build_quota_source(result: dict[str, Any], balance: float, spendable: bool, now: int) -> dict[str, Any]:
     remaining_7d = quota_source_window_remaining(result, "7d")
     remaining_5h = quota_source_window_remaining(result, "5h")
-    if not result.get("ok"):
+    if result.get("quota_observation_stale"):
+        status = "unknown"
+        reason = "quota_probe_stale_runtime_auth_available"
+    elif not result.get("ok"):
         status = "unknown"
         reason = str(result.get("reason") or result.get("error") or "quota_probe_failed")
     elif remaining_7d is not None and remaining_7d <= 0.000001:
@@ -2654,6 +2706,109 @@ def record_probe_failure(
     }
 
 
+def remember_last_success_policy(
+    state: dict[str, Any],
+    result: dict[str, Any],
+    now: int,
+) -> None:
+    allowlist = result.get("quota_model_allowlist")
+    state["last_success_policy"] = {
+        "at": now,
+        "quota_ok": bool(result.get("quota_ok", result.get("within_share"))),
+        "usable_balance_units": max(
+            0.0,
+            float(first_non_empty(result.get("usable_balance_units"), result.get("balance_units")) or 0.0),
+        ),
+        "quota_model_allowlist": (
+            [str(model).strip() for model in allowlist if str(model).strip()]
+            if isinstance(allowlist, list)
+            else []
+        ),
+    }
+
+
+def last_success_routability_policy(
+    config: dict[str, Any],
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    policy = state.get("last_success_policy")
+    if isinstance(policy, dict):
+        quota_ok = bool_value(policy.get("quota_ok"), False)
+        usable = max(0.0, float(number(policy.get("usable_balance_units")) or 0.0))
+        if quota_ok and usable > 0.000001:
+            return dict(policy)
+
+    daily = state.get("dynamic_daily_budget")
+    if not isinstance(daily, dict) or not bool_value(daily.get("quota_ok"), False):
+        return None
+    reserve_active = bool_value(daily.get("model_reserve_active"), False)
+    visible_percent = number(
+        daily.get("model_reserve_remaining_percent")
+        if reserve_active
+        else daily.get("remaining_today_percent")
+    )
+    units_per_percent = max(0.0, float(number(config.get("balance_units_per_percent")) or 1.0))
+    usable = max(0.0, float(visible_percent or 0.0) * units_per_percent)
+    if usable <= 0.000001:
+        return None
+    allowlist = daily.get("model_reserve_models") if reserve_active else []
+    return {
+        "at": int(state.get("last_success_at") or 0),
+        "quota_ok": True,
+        "usable_balance_units": usable,
+        "quota_model_allowlist": (
+            [str(model).strip() for model in allowlist if str(model).strip()]
+            if isinstance(allowlist, list)
+            else []
+        ),
+    }
+
+
+def preserve_routability_after_probe_failure(
+    config: dict[str, Any],
+    env: dict[str, str],
+    state: dict[str, Any],
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    if not bool_value(config.get("preserve_routability_on_quota_probe_failure"), False):
+        return result
+    if bool(result.get("management_auth_failure")):
+        return result
+    policy = last_success_routability_policy(config, state)
+    if policy is None:
+        return result
+    try:
+        runtime_auth = probe_runtime_auth_state(config, env)
+    except Exception as exc:
+        result["runtime_auth_probe_error"] = sanitize_probe_error(exc)
+        return result
+    result["runtime_auth_state"] = runtime_auth
+    if not bool(runtime_auth.get("available")):
+        return result
+
+    preserved = dict(result)
+    preserved.update({
+        "ok": True,
+        "quota_ok": True,
+        "within_share": True,
+        "reason": "quota_probe_stale_runtime_auth_available",
+        "fail_closed": False,
+        "quota_observation_stale": True,
+        "quota_health_source": "last_success_runtime_auth_fallback",
+        "usable_balance_units": float(policy["usable_balance_units"]),
+        "balance_units": float(policy["usable_balance_units"]),
+        "last_quota_success_at": int(state.get("last_success_at") or 0),
+        "runtime_auth_state": runtime_auth,
+    })
+    allowlist = policy.get("quota_model_allowlist")
+    if isinstance(allowlist, list) and allowlist:
+        preserved["quota_model_allowlist"] = list(allowlist)
+    daily = state.get("dynamic_daily_budget")
+    if isinstance(daily, dict):
+        preserved["dynamic_daily_budget"] = {"enabled": True, "applied": True, **daily}
+    return preserved
+
+
 def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state: dict[str, Any]) -> str:
     now = int(time.time())
     cid = int(channel["id"])
@@ -2664,6 +2819,7 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
     ok = bool(result.get("ok"))
     quota_ok = bool(result.get("quota_ok", result.get("within_share"))) if ok else False
     fail_closed = bool(result.get("fail_closed"))
+    quota_observation_stale = bool(result.get("quota_observation_stale"))
     desired_enabled = ok and quota_ok
 
     guard_info = {
@@ -2672,6 +2828,7 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
         "desired_enabled": desired_enabled,
         "manual_status_preserved": manually_disabled,
         "failure_count": int(state.get("failure_count") or 0),
+        "quota_observation_stale": quota_observation_stale,
         "health": result,
     }
     other_info["cliproxy_cpa_quota_guard"] = guard_info
@@ -2682,7 +2839,8 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
     balance_update: float | None = None
 
     if desired_enabled:
-        balance_update = float(first_non_empty(result.get("usable_balance_units"), result.get("balance_units")) or 0)
+        if not quota_observation_stale:
+            balance_update = float(first_non_empty(result.get("usable_balance_units"), result.get("balance_units")) or 0)
         if not manually_disabled:
             configured_allowlist = result.get("quota_model_allowlist")
             if isinstance(configured_allowlist, list):
@@ -2706,7 +2864,7 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
 
     quota_source_balance = balance_update
     if quota_source_balance is None:
-        if ok:
+        if ok and not quota_observation_stale:
             quota_source_balance = float(first_non_empty(result.get("usable_balance_units"), result.get("balance_units")) or 0)
         else:
             quota_source_balance = float(channel.get("balance") or 0)
@@ -2734,6 +2892,8 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
     name = channel.get("name") or f"channel-{cid}"
     if desired_enabled:
         restriction = f" models={','.join(ability_allowlist)}" if ability_allowlist else ""
+        if quota_observation_stale:
+            return f"{name}: enabled quota_probe_stale_runtime_auth_available balance_preserved{restriction}"
         return (
             f"{name}: enabled usable={float(result.get('usable_balance_units') or 0):.6f} "
             f"total={float(result.get('total_balance_units') or result.get('balance_units') or 0):.6f}"
@@ -2780,6 +2940,7 @@ def main() -> int:
                 allow_consume=bool_value(result.get("reset_credit_consume_supported"), False),
             )
             result = apply_dynamic_daily_budget(config, result, state)
+            remember_last_success_policy(state, result, now)
             state["failure_count"] = 0
             state["last_success_at"] = now
             state["last_error"] = None
@@ -2793,6 +2954,7 @@ def main() -> int:
                 )
         except (urllib.error.URLError, urllib.error.HTTPError, socket.timeout, TimeoutError, RuntimeError, json.JSONDecodeError) as exc:
             result = record_probe_failure(config, state, exc, now)
+            result = preserve_routability_after_probe_failure(config, env, state, result)
 
     channel = fetch_channel(db, int(config.get("channel_id") or 12))
     message = apply_result(db, channel, result, state)
