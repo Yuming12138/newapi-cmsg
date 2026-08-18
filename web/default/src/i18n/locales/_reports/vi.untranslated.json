@@ -1,6 +1,12 @@
 {
   "Failed to delete users": "Failed to delete users",
+  "Failed to update quota protection": "Failed to update quota protection",
+  "This temporarily bypasses only the New API daily budget and protected reserve for channel 12. It does not consume a reset credit or bypass actual CPA quota exhaustion or account unavailability.": "This temporarily bypasses only the New API daily budget and protected reserve for channel 12. It does not consume a reset credit or bypass actual CPA quota exhaustion or account unavailability.",
+  "The override expires automatically at the detected reset boundary: {{time}}.": "The override expires automatically at the detected reset boundary: {{time}}.",
+  "The automatic daily budget and protected reserve checks will resume on the next guard run (within about one minute).": "The automatic daily budget and protected reserve checks will resume on the next guard run (within about one minute).",
+  "Monitor today's personal quota, total pool, usage, and requests": "Monitor today's personal quota, total pool, usage, and requests",
   "One code per line. Users need one of these codes to create an account.": "One code per line. Users need one of these codes to create an account.",
+  "After the normal daily bucket and the base Luna reserve are exhausted, add a separate Luna-only bucket for today. Saving creates a new grant; it expires automatically at the Asia/Shanghai day boundary.": "After the normal daily bucket and the base Luna reserve are exhausted, add a separate Luna-only bucket for today. Saving creates a new grant; it expires automatically at the Asia/Shanghai day boundary.",
   "Use the final mapped upstream model for pricing while keeping the requested model in logs": "Use the final mapped upstream model for pricing while keeping the requested model in logs",
   "You are about to permanently delete {{count}} user(s).": "You are about to permanently delete {{count}} user(s).",
   "Please enter the registration code": "Please enter the registration code"
