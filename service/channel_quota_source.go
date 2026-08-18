@@ -110,8 +110,8 @@ type DailyQuotaPoolGroup struct {
 	RemainingQuota              int64   `json:"remaining_quota"`
 	NormalTotalUSD              float64 `json:"normal_total_usd,omitempty"`
 	NormalUsedUSD               float64 `json:"normal_used_usd,omitempty"`
-	NormalRemainingUSD          float64 `json:"normal_remaining_usd,omitempty"`
-	NormalRemainingQuota        int64   `json:"normal_remaining_quota,omitempty"`
+	NormalRemainingUSD          float64 `json:"normal_remaining_usd"`
+	NormalRemainingQuota        int64   `json:"normal_remaining_quota"`
 	UpdatedAt                   int64   `json:"updated_at"`
 	Available                   bool    `json:"available"`
 	Estimated                   bool    `json:"estimated"`

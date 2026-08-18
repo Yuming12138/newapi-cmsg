@@ -167,6 +167,8 @@ type CliproxyCPAQuotaAccount = {
 type CliproxyCPAQuotaMeta = {
   sourceType: string | null
   unit: string | null
+  blockKind: string | null
+  blockAllowedModels: string[]
   quotaFeature: string | null
   quotaFeatureLimitName: string | null
   guardMode: string | null
@@ -209,6 +211,14 @@ function booleanValue(value: unknown): boolean | null {
     if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false
   }
   return null
+}
+
+function stringListValue(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean)
 }
 
 function timestampValue(value: unknown): number | null {
@@ -447,6 +457,7 @@ function parseCliproxyCPAQuotaMeta(
     const parsed = asObject(JSON.parse(otherInfo))
     const quotaSource = asObject(parsed?.quota_source)
     const quotaRawSource = asObject(quotaSource?.raw_source)
+    const quotaBlock = asObject(quotaSource?.block)
     const quotaSourceWindows = quotaSourceWindowsByName(quotaSource?.windows)
     const guard = asObject(parsed?.cliproxy_cpa_quota_guard)
     const health = asObject(guard?.health)
@@ -487,6 +498,8 @@ function parseCliproxyCPAQuotaMeta(
           ? quotaSource.source_type
           : null,
       unit: typeof quotaSource?.unit === 'string' ? quotaSource.unit : null,
+      blockKind: typeof quotaBlock?.kind === 'string' ? quotaBlock.kind : null,
+      blockAllowedModels: stringListValue(quotaBlock?.allowed_models),
       quotaFeature:
         typeof health.quota_feature === 'string'
           ? health.quota_feature
@@ -569,6 +582,17 @@ function isCliproxyCPAModelQuota(meta: CliproxyCPAQuotaMeta): boolean {
     meta.sourceType === 'model_quota_percent' ||
     meta.guardMode === 'model_quota' ||
     Boolean(meta.quotaFeature)
+  )
+}
+
+function isCliproxyCPALunaReserve(meta: CliproxyCPAQuotaMeta): boolean {
+  const allowedModels = meta.blockAllowedModels.map((model) =>
+    model.toLowerCase()
+  )
+  return (
+    meta.blockKind === 'daily_protected_budget' &&
+    allowedModels.length === 1 &&
+    allowedModels[0] === 'gpt-5.6-luna'
   )
 }
 
@@ -770,6 +794,7 @@ function formatCliproxyCPASummary(meta: CliproxyCPAQuotaMeta): string {
     meta.guardMode
   )
   const parts = [
+    ...(isCliproxyCPALunaReserve(meta) ? ['Luna 专属'] : []),
     `可用 ${formatCliproxyCPAUnits(meta.usableBalanceUnits)}`,
     `5h ${formatPercent(fiveHourPercent)}`,
     `7d ${formatPercent(weeklyPercent)}`,
@@ -1327,13 +1352,31 @@ function CliproxyCPAQuotaDetails({
   const unavailableAccounts = meta.accounts.filter(
     (account) => !isCliproxyCPAAccountAvailable(account)
   )
+  const lunaReserve = isCliproxyCPALunaReserve(meta)
 
   return (
     <div className='text-foreground w-[360px] max-w-[calc(100vw-2rem)] space-y-2'>
       <div className='grid grid-cols-2 gap-2'>
-        <div className='bg-background border-border rounded-md border p-2 shadow-sm'>
-          <p className='text-foreground/70 text-[11px]'>可用额度</p>
-          <p className='text-sm font-semibold tabular-nums'>
+        <div
+          className={cn(
+            'bg-background border-border rounded-md border p-2 shadow-sm',
+            lunaReserve && 'border-chart-4/40 bg-chart-4/5'
+          )}
+        >
+          <p
+            className={cn(
+              'text-foreground/70 text-[11px]',
+              lunaReserve && textColorMap.purple
+            )}
+          >
+            {lunaReserve ? 'Luna 专属可用额度' : '可用额度'}
+          </p>
+          <p
+            className={cn(
+              'text-sm font-semibold tabular-nums',
+              lunaReserve && textColorMap.purple
+            )}
+          >
             {formatCliproxyCPAUnits(meta.usableBalanceUnits)}
           </p>
         </div>
@@ -1613,6 +1656,8 @@ function BalanceCell({ channel }: { channel: Channel }) {
   const cliproxyCPAQuota = parseCliproxyCPAQuotaMeta(channel.other_info)
   const cliproxyCPAModelQuota =
     cliproxyCPAQuota != null && isCliproxyCPAModelQuota(cliproxyCPAQuota)
+  const cliproxyCPALunaReserve =
+    cliproxyCPAQuota != null && isCliproxyCPALunaReserve(cliproxyCPAQuota)
   const remainingDisplay = cliproxyCPAModelQuota
     ? formatPercent(getCliproxyCPAModelQuotaPercent(cliproxyCPAQuota))
     : storedRemainingDisplay
@@ -1699,7 +1744,9 @@ function BalanceCell({ channel }: { channel: Channel }) {
                     'cursor-pointer transition-opacity hover:opacity-70',
                     channel.type === 57
                       ? 'text-primary'
-                      : textColorMap[isUpdating ? 'neutral' : variant]
+                      : cliproxyCPALunaReserve
+                        ? textColorMap.purple
+                        : textColorMap[isUpdating ? 'neutral' : variant]
                   )}
                   onClick={handleClickUpdate}
                 />
@@ -1744,7 +1791,12 @@ function BalanceCell({ channel }: { channel: Channel }) {
           <Tooltip>
             <TooltipTrigger
               render={
-                <span className='text-muted-foreground max-w-[230px] cursor-help truncate text-[11px] leading-none font-normal' />
+                <span
+                  className={cn(
+                    'text-muted-foreground max-w-[230px] cursor-help truncate text-[11px] leading-none font-normal',
+                    cliproxyCPALunaReserve && textColorMap.purple
+                  )}
+                />
               }
             >
               {formatCliproxyCPASummary(cliproxyCPAQuota)}
