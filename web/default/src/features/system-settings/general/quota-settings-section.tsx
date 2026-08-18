@@ -45,6 +45,8 @@ const quotaSchema = z.object({
   QuotaForInviter: z.coerce.number().min(0),
   QuotaForInvitee: z.coerce.number().min(0),
   TopUpLink: z.string(),
+  lunaReserveTopupEnabled: z.boolean(),
+  lunaReserveTopupPercent: z.coerce.number().min(0).max(100),
   general_setting: z.object({
     docs_link: z.string(),
   }),
@@ -80,8 +82,35 @@ export function QuotaSettingsSection({
         QuotaFormValues
       >,
       defaultValues,
-      onSubmit: async (_data, changedFields) => {
-        for (const [key, value] of Object.entries(changedFields)) {
+      onSubmit: async (data, changedFields) => {
+        const updates = { ...changedFields }
+        const topupChanged =
+          'lunaReserveTopupEnabled' in updates ||
+          'lunaReserveTopupPercent' in updates
+        if (topupChanged) {
+          const percent = Math.max(
+            0,
+            Math.min(100, Number(data.lunaReserveTopupPercent) || 0)
+          )
+          const enabled = Boolean(data.lunaReserveTopupEnabled) && percent > 0
+          updates['cliproxy_cpa_quota_guard.model_reserve_topup'] = enabled
+            ? JSON.stringify({
+                percent,
+                day: new Intl.DateTimeFormat('en-CA', {
+                  timeZone: 'Asia/Shanghai',
+                  year: 'numeric',
+                  month: '2-digit',
+                  day: '2-digit',
+                }).format(new Date()),
+                grant_id: `ui-luna-topup-${Date.now()}`,
+                requested_at: Math.floor(Date.now() / 1000),
+              })
+            : '{}'
+          delete updates.lunaReserveTopupEnabled
+          delete updates.lunaReserveTopupPercent
+        }
+
+        for (const [key, value] of Object.entries(updates)) {
           await updateOption.mutateAsync({
             key,
             value: value as string | number | boolean,
@@ -123,6 +152,60 @@ export function QuotaSettingsSection({
               </FormItem>
             )}
           />
+
+          <FormItem className='rounded-lg border p-4'>
+            <div className='space-y-1'>
+              <FormLabel className='text-base'>
+                {t("Today's Luna Reserve Top-Up")}
+              </FormLabel>
+              <FormDescription>
+                {t(
+                  'After the normal daily bucket and the base Luna reserve are exhausted, add a separate Luna-only bucket for today. Saving creates a new grant; it expires automatically at the Asia/Shanghai day boundary.'
+                )}
+              </FormDescription>
+            </div>
+            <div className='mt-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,10rem)] sm:items-end'>
+              <FormField
+                control={form.control}
+                name='lunaReserveTopupPercent'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Top-Up Percent')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={0}
+                        max={100}
+                        step='0.1'
+                        value={field.value ?? ''}
+                        onChange={handleNumberChange(field.onChange)}
+                        name={field.name}
+                        onBlur={field.onBlur}
+                        ref={field.ref}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name='lunaReserveTopupEnabled'
+                render={({ field }) => (
+                  <FormItem className='flex flex-row items-center justify-between rounded-lg border p-3'>
+                    <FormLabel>{t('Enable for Today')}</FormLabel>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                        disabled={updateOption.isPending}
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+            </div>
+          </FormItem>
 
           <FormField
             control={form.control}

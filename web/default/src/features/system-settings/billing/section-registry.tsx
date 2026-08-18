@@ -50,6 +50,35 @@ const getGroupDefaults = (settings: BillingSettings) => ({
     settings['group_ratio_setting.group_special_usable_group'],
 })
 
+function currentGuardDay() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date())
+}
+
+function getLunaTopupDefaults(raw: string) {
+  try {
+    const parsed = JSON.parse(raw) as {
+      percent?: number
+      day?: string
+    }
+    const percent =
+      typeof parsed.percent === 'number' && Number.isFinite(parsed.percent)
+        ? Math.max(0, Math.min(100, parsed.percent))
+        : 0
+    const enabled = percent > 0 && parsed.day === currentGuardDay()
+    return {
+      lunaReserveTopupEnabled: enabled,
+      lunaReserveTopupPercent: enabled ? percent : 0,
+    }
+  } catch {
+    return { lunaReserveTopupEnabled: false, lunaReserveTopupPercent: 0 }
+  }
+}
+
 const BILLING_SECTIONS = [
   {
     id: 'quota',
@@ -70,6 +99,9 @@ const BILLING_SECTIONS = [
             enable_free_model_pre_consume:
               settings['quota_setting.enable_free_model_pre_consume'],
           },
+          ...getLunaTopupDefaults(
+            settings['cliproxy_cpa_quota_guard.model_reserve_topup']
+          ),
         }}
       />
     ),

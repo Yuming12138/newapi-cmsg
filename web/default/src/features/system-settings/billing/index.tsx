@@ -31,6 +31,7 @@ const defaultBillingSettings: BillingSettings = {
   TopUpLink: '',
   'general_setting.docs_link': '',
   'quota_setting.enable_free_model_pre_consume': true,
+  'cliproxy_cpa_quota_guard.model_reserve_topup': '{}',
   QuotaPerUnit: 500000,
   USDExchangeRate: 7,
   'general_setting.quota_display_type': 'USD',
