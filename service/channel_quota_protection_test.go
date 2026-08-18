@@ -64,6 +64,7 @@ func TestFindChannelQuotaProtectionBlock(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, block)
 	require.Equal(t, 12, block.ChannelID)
+	require.Equal(t, "cliproxy-codex", block.Group)
 	require.Equal(t, "channel_daily_protected_budget_exhausted", block.Code)
 	require.Equal(t, retryAt, block.RetryAt)
 	require.Equal(t, "Asia/Shanghai", block.Timezone)
@@ -87,6 +88,19 @@ func TestGetChannelQuotaProtectionBlockRejectsNonAutoDisabledChannel(t *testing.
 	}
 
 	require.Nil(t, GetChannelQuotaProtectionBlock(channel))
+}
+
+func TestQuotaProtectionBlockFallbackModelUsesAllowlistOrder(t *testing.T) {
+	block := &ChannelQuotaProtectionBlock{
+		ChannelID: 12,
+		Group:     "cliproxy-codex",
+		AllowedModels: []string{
+			"gpt-5.6-luna",
+		},
+	}
+
+	require.Equal(t, "gpt-5.6-luna", block.FallbackModel())
+	require.Equal(t, "cliproxy-codex", block.Group)
 }
 
 func TestEnabledChannelQuotaProtectionAllowsOnlyReservedModel(t *testing.T) {

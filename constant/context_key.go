@@ -37,6 +37,12 @@ const (
 	ContextKeyChannelIsMultiKey        ContextKey = "channel_is_multi_key"
 	ContextKeyChannelMultiKeyIndex     ContextKey = "channel_multi_key_index"
 	ContextKeyChannelKey               ContextKey = "channel_key"
+	// ContextKeyQuotaProtectionFallbackModel stores the model selected for a
+	// channel's model-only reserve after the normal daily bucket is exhausted.
+	ContextKeyQuotaProtectionFallbackModel ContextKey = "quota_protection_fallback_model"
+	// ContextKeyQuotaProtectionFallbackGroup keeps retries on the reserve
+	// channel's group instead of falling back to an unrelated model group.
+	ContextKeyQuotaProtectionFallbackGroup ContextKey = "quota_protection_fallback_group"
 
 	ContextKeyAutoGroup           ContextKey = "auto_group"
 	ContextKeyAutoGroupIndex      ContextKey = "auto_group_index"

@@ -56,6 +56,10 @@ DEFAULT_CONFIG = {
     "dynamic_daily_budget_enabled": False,
     "daily_budget_model_reserve_percent": 0.0,
     "daily_budget_model_reserve_models": [],
+    # A top-up grant is intentionally day- and grant-id-scoped. It adds a
+    # fresh model-only bucket without pretending that earlier consumption did
+    # not happen; the grant starts counting from the moment it is observed.
+    "model_reserve_topup": {},
     "manual_force_unlock": {},
     "timezone": "Asia/Shanghai",
     "quota_reset_increase_threshold_percent": 10.0,
@@ -104,6 +108,7 @@ OPTION_CONFIG_MAP = {
     "cliproxy_cpa_quota_guard.dynamic_daily_budget_enabled": ("dynamic_daily_budget_enabled", "bool"),
     "cliproxy_cpa_quota_guard.daily_budget_model_reserve_percent": ("daily_budget_model_reserve_percent", "float"),
     "cliproxy_cpa_quota_guard.daily_budget_model_reserve_models": ("daily_budget_model_reserve_models", "json_list"),
+    "cliproxy_cpa_quota_guard.model_reserve_topup": ("model_reserve_topup", "json"),
     "cliproxy_cpa_quota_guard.force_unlock": ("manual_force_unlock", "json"),
     "cliproxy_cpa_quota_guard.quota_reset_increase_threshold_percent": ("quota_reset_increase_threshold_percent", "float"),
     "cliproxy_cpa_quota_guard.quota_reset_increase_floor_percent": ("quota_reset_increase_floor_percent", "float"),
@@ -214,6 +219,36 @@ def clamp_percent(value: Any, default: float) -> float:
     if parsed is None:
         parsed = default
     return max(0.0, min(100.0, float(parsed)))
+
+
+def model_reserve_topup_config(
+    config: dict[str, Any],
+    day_key: str,
+    now: int,
+) -> tuple[float, str]:
+    """Return the one-time model reserve top-up for the current guard day.
+
+    A top-up must carry an explicit day (or requested_at) and grant id. This
+    prevents a stale administrative option from silently granting extra quota
+    on every future day while still allowing a fresh grant after a prior one
+    was consumed.
+    """
+    raw = config.get("model_reserve_topup")
+    if not isinstance(raw, dict):
+        return 0.0, ""
+    percent = clamp_percent(raw.get("percent"), 0.0)
+    if percent <= 0.000001:
+        return 0.0, ""
+    topup_day = str(raw.get("day") or "").strip()
+    requested_at = int(number(raw.get("requested_at")) or 0)
+    if not topup_day and requested_at > 0:
+        topup_day = dt.datetime.fromtimestamp(requested_at, guard_timezone(config)).date().isoformat()
+    if topup_day != day_key:
+        return 0.0, ""
+    grant_id = str(raw.get("grant_id") or raw.get("id") or requested_at or topup_day).strip()
+    if not grant_id:
+        return 0.0, ""
+    return percent, f"{topup_day}:{grant_id}"
 
 
 def load_option_overrides(db: DB) -> dict[str, Any]:
@@ -2340,11 +2375,28 @@ def apply_dynamic_daily_budget(
     model_reserve_models = list(dict.fromkeys(
         str(model).strip() for model in configured_reserve_models if str(model).strip()
     ))
-    model_reserve_configured = model_reserve_percent > 0.000001 and bool(model_reserve_models)
     model_reserve_consumed = max(0.0, consumed_today - daily_limit)
     model_reserve_remaining = max(0.0, model_reserve_percent - model_reserve_consumed)
-    daily_budget_total = max(0.0, daily_limit) + model_reserve_percent
-    daily_budget_remaining_total = max(0.0, remaining_today) + model_reserve_remaining
+
+    topup_percent, topup_grant_key = model_reserve_topup_config(config, day_key, now)
+    topup_baseline_consumed = number(budget_state.get("model_reserve_topup_baseline_consumed_percent"))
+    previous_topup_grant_key = str(budget_state.get("model_reserve_topup_grant_key") or "")
+    if topup_percent > 0.000001:
+        if previous_topup_grant_key != topup_grant_key or topup_baseline_consumed is None:
+            topup_baseline_consumed = consumed_today
+            budget_state["model_reserve_topup_grant_key"] = topup_grant_key
+            budget_state["model_reserve_topup_baseline_consumed_percent"] = round(consumed_today, 6)
+        topup_consumed = max(0.0, consumed_today - float(topup_baseline_consumed))
+        topup_consumed = min(topup_consumed, topup_percent)
+        topup_remaining = max(0.0, topup_percent - topup_consumed)
+    else:
+        topup_consumed = 0.0
+        topup_remaining = 0.0
+        topup_grant_key = ""
+    model_reserve_configured = (model_reserve_percent + topup_percent) > 0.000001 and bool(model_reserve_models)
+    model_reserve_remaining_total = model_reserve_remaining + topup_remaining
+    daily_budget_total = max(0.0, daily_limit) + model_reserve_percent + topup_percent
+    daily_budget_remaining_total = max(0.0, remaining_today) + model_reserve_remaining_total
     current_cycle_signature = str(snapshot.get("planning_signature") or "").strip()
     force_unlock_active = (
         force_unlock_requested
@@ -2359,7 +2411,7 @@ def apply_dynamic_daily_budget(
         and hard_reserve_available
         and daily_exhausted
         and model_reserve_configured
-        and model_reserve_remaining > 0.000001
+        and model_reserve_remaining_total > 0.000001
     )
     quota_ok = original_quota_ok and (
         force_unlock_active or (hard_reserve_available and (daily_budget_available or model_reserve_active))
@@ -2397,7 +2449,15 @@ def apply_dynamic_daily_budget(
         "normal_daily_budget_remaining_percent": round(remaining_today, 6),
         "model_reserve_percent": round(model_reserve_percent, 6),
         "model_reserve_consumed_percent": round(model_reserve_consumed, 6),
-        "model_reserve_remaining_percent": round(model_reserve_remaining, 6),
+        "model_reserve_remaining_percent": round(model_reserve_remaining_total, 6),
+        "model_reserve_base_remaining_percent": round(model_reserve_remaining, 6),
+        "model_reserve_topup_percent": round(topup_percent, 6),
+        "model_reserve_topup_consumed_percent": round(topup_consumed, 6),
+        "model_reserve_topup_remaining_percent": round(topup_remaining, 6),
+        "model_reserve_topup_grant_key": topup_grant_key or None,
+        "model_reserve_topup_baseline_consumed_percent": (
+            round(float(topup_baseline_consumed), 6) if topup_percent > 0.000001 and topup_baseline_consumed is not None else None
+        ),
         "model_reserve_configured": model_reserve_configured,
         "model_reserve_active": model_reserve_active,
         "model_reserve_models": model_reserve_models,
@@ -2408,7 +2468,7 @@ def apply_dynamic_daily_budget(
     state["dynamic_daily_budget"] = budget_state
 
     units_per_percent = max(0.0, float(number(config.get("balance_units_per_percent")) or 1.0))
-    visible_percent = model_reserve_remaining if model_reserve_active else remaining_today
+    visible_percent = model_reserve_remaining_total if model_reserve_active else remaining_today
     visible_balance = visible_percent * units_per_percent if quota_ok else 0.0
     if force_unlock_active and original_quota_ok:
         visible_balance = original_usable_balance

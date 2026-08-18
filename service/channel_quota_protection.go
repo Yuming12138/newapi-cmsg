@@ -18,6 +18,7 @@ const (
 
 type ChannelQuotaProtectionBlock struct {
 	ChannelID         int
+	Group             string
 	Code              string
 	Reason            string
 	Kind              string
@@ -87,6 +88,7 @@ func GetChannelQuotaProtectionBlockForModel(channel *model.Channel, modelName st
 	}
 	return &ChannelQuotaProtectionBlock{
 		ChannelID:         channel.Id,
+		Group:             strings.TrimSpace(channel.Group),
 		Code:              code,
 		Reason:            quotaProtectionString(blockInfo, "reason"),
 		Kind:              quotaProtectionString(blockInfo, "kind"),
@@ -96,6 +98,21 @@ func GetChannelQuotaProtectionBlockForModel(channel *model.Channel, modelName st
 		UpdatedAt:         updatedAt,
 		AllowedModels:     allowedModels,
 	}
+}
+
+// FallbackModel returns the first model explicitly allowed by a model-only
+// quota reserve. The guard writes the allowlist in priority order; keeping the
+// choice here avoids middleware guessing at a model name or hard-coding Luna.
+func (block *ChannelQuotaProtectionBlock) FallbackModel() string {
+	if block == nil {
+		return ""
+	}
+	for _, modelName := range block.AllowedModels {
+		if normalized := strings.TrimSpace(modelName); normalized != "" {
+			return normalized
+		}
+	}
+	return ""
 }
 
 func FindChannelQuotaProtectionBlock(ctx context.Context, groups []string, modelName string, requestPath string) (*ChannelQuotaProtectionBlock, error) {
@@ -138,7 +155,7 @@ func FindChannelQuotaProtectionBlock(ctx context.Context, groups []string, model
 
 	var channels []*model.Channel
 	if err := model.DB.WithContext(ctx).
-		Select("id", "type", "status", "other_info", "settings").
+		Select("id", "group", "type", "status", "other_info", "settings").
 		Where("id IN ?", channelIDs).
 		Find(&channels).Error; err != nil {
 		return nil, err

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import importlib.util
+import datetime as dt
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -191,6 +192,7 @@ class OptionOverrideTest(unittest.TestCase):
             return "\n".join([
                 "cliproxy_cpa_quota_guard.daily_budget_model_reserve_percent\t5",
                 'cliproxy_cpa_quota_guard.daily_budget_model_reserve_models\t["gpt-5.6-luna", ""]',
+                'cliproxy_cpa_quota_guard.model_reserve_topup\t{"percent":5,"day":"2026-08-18","grant_id":"test-grant"}',
             ])
 
     def test_loads_model_reserve_percent_and_json_list(self) -> None:
@@ -198,6 +200,10 @@ class OptionOverrideTest(unittest.TestCase):
 
         self.assertEqual(5.0, overrides["daily_budget_model_reserve_percent"])
         self.assertEqual(["gpt-5.6-luna"], overrides["daily_budget_model_reserve_models"])
+        self.assertEqual(
+            {"percent": 5, "day": "2026-08-18", "grant_id": "test-grant"},
+            overrides["model_reserve_topup"],
+        )
 
 
 class ApplyResultAbilityReconciliationTest(unittest.TestCase):
@@ -1065,6 +1071,53 @@ class DynamicDailyBudgetTest(unittest.TestCase):
         self.assertNotIn("quota_model_allowlist", result)
         self.assertFalse(result["dynamic_daily_budget"]["model_reserve_active"])
         self.assertEqual(0.0, result["usable_balance_units"])
+
+    def test_topup_grants_fresh_luna_bucket_after_prior_consumption(self) -> None:
+        self.config.update({
+            "daily_budget_model_reserve_percent": 5.0,
+            "daily_budget_model_reserve_models": ["gpt-5.6-luna"],
+        })
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+        exhausted = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(82.0), state, self.now + 60)
+        self.assertFalse(exhausted["quota_ok"])
+
+        day = dt.datetime.fromtimestamp(self.now, guard.guard_timezone(self.config)).date().isoformat()
+        self.config["model_reserve_topup"] = {
+            "percent": 5.0,
+            "day": day,
+            "grant_id": "manual-grant-1",
+        }
+        topped_up = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(82.0), state, self.now + 120)
+
+        budget = topped_up["dynamic_daily_budget"]
+        self.assertTrue(topped_up["quota_ok"])
+        self.assertEqual("dynamic_daily_budget_model_reserve_active", topped_up["reason"])
+        self.assertEqual(["gpt-5.6-luna"], topped_up["quota_model_allowlist"])
+        self.assertAlmostEqual(5.0, budget["model_reserve_topup_remaining_percent"], places=6)
+        self.assertAlmostEqual(5.0, budget["model_reserve_remaining_percent"], places=6)
+        self.assertAlmostEqual(5.0, budget["daily_budget_remaining_total_percent"], places=6)
+
+        consumed = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(79.0), state, self.now + 180)
+        consumed_budget = consumed["dynamic_daily_budget"]
+        self.assertAlmostEqual(2.0, consumed_budget["model_reserve_topup_remaining_percent"], places=6)
+        self.assertAlmostEqual(2.0, consumed_budget["model_reserve_remaining_percent"], places=6)
+
+    def test_topup_is_scoped_to_its_guard_day(self) -> None:
+        self.config.update({
+            "daily_budget_model_reserve_percent": 5.0,
+            "daily_budget_model_reserve_models": ["gpt-5.6-luna"],
+        })
+        day = dt.datetime.fromtimestamp(self.now, guard.guard_timezone(self.config)).date().isoformat()
+        self.config["model_reserve_topup"] = {"percent": 5.0, "day": day, "grant_id": "manual-grant-1"}
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+        next_day = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now + 86_400)
+
+        budget = next_day["dynamic_daily_budget"]
+        self.assertEqual(0.0, budget["model_reserve_topup_percent"])
+        self.assertEqual(0.0, budget["model_reserve_topup_remaining_percent"])
+        self.assertFalse(budget["model_reserve_active"])
 
     def test_hard_reserve_overrides_luna_only_reserve(self) -> None:
         self.config.update({

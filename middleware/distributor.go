@@ -48,8 +48,10 @@ func Distribute() func(c *gin.Context) {
 				return
 			}
 			if block := service.GetChannelQuotaProtectionBlockForModel(channel, modelRequest.Model); block != nil {
-				abortWithChannelQuotaProtection(c, block)
-				return
+				if !applyQuotaProtectionFallback(c, modelRequest.Model, block) {
+					abortWithChannelQuotaProtection(c, block)
+					return
+				}
 			}
 			if channel.Status != common.ChannelStatusEnabled {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
@@ -107,12 +109,24 @@ func Distribute() func(c *gin.Context) {
 				userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 				affinityGroup := usingGroup
 				modelRoute, hasModelRoute := service.ResolveModelGroupRoute(userGroup, usingGroup, modelRequest.Model)
-				if hasModelRoute {
+				quotaProtectionGroups := distributorQuotaProtectionGroups(usingGroup, userGroup, modelRoute, hasModelRoute)
+				selectionModel := modelRequest.Model
+				selectionGroup := usingGroup
+				if block, blockErr := service.FindChannelQuotaProtectionBlock(c.Request.Context(), quotaProtectionGroups, modelRequest.Model, requestPath); blockErr == nil && block != nil {
+					if fallbackModel := block.FallbackModel(); fallbackModel != "" && applyQuotaProtectionFallback(c, modelRequest.Model, block) {
+						selectionModel = fallbackModel
+						if block.Group != "" {
+							selectionGroup = block.Group
+						}
+					}
+				}
+				if selectionGroup != usingGroup {
+					affinityGroup = selectionGroup
+				} else if hasModelRoute {
 					affinityGroup = modelRoute.PreferredGroup
 				}
-				quotaProtectionGroups := distributorQuotaProtectionGroups(usingGroup, userGroup, modelRoute, hasModelRoute)
 
-				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, affinityGroup); found {
+				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, selectionModel, affinityGroup); found {
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err != nil || preferred == nil {
 						service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer exists", preferredChannelID))
@@ -133,7 +147,7 @@ func Distribute() func(c *gin.Context) {
 							autoGroups := service.GetUserAutoGroup(userGroup)
 							matched := false
 							for _, g := range autoGroups {
-								if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) {
+								if model.IsChannelEnabledForGroupModel(g, selectionModel, preferred.Id) {
 									selectGroup = g
 									common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
 									channel = preferred
@@ -145,7 +159,7 @@ func Distribute() func(c *gin.Context) {
 							if !matched {
 								service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer satisfies auto group/model", preferred.Id))
 							}
-						} else if model.IsChannelEnabledForGroupModel(affinityGroup, modelRequest.Model, preferred.Id) {
+						} else if model.IsChannelEnabledForGroupModel(affinityGroup, selectionModel, preferred.Id) {
 							channel = preferred
 							selectGroup = affinityGroup
 							if hasModelRoute {
@@ -161,9 +175,9 @@ func Distribute() func(c *gin.Context) {
 				if channel == nil {
 					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
 						Ctx:         c,
-						ModelName:   modelRequest.Model,
+						ModelName:   selectionModel,
 						RequestPath: requestPath,
-						TokenGroup:  usingGroup,
+						TokenGroup:  selectionGroup,
 						Retry:       common.GetPointer(0),
 					})
 					if err != nil {
@@ -191,7 +205,7 @@ func Distribute() func(c *gin.Context) {
 						return
 					}
 					if hasModelRoute && selectGroup != affinityGroup {
-						_, _ = service.GetPreferredChannelByAffinity(c, modelRequest.Model, selectGroup)
+						_, _ = service.GetPreferredChannelByAffinity(c, selectionModel, selectGroup)
 					}
 				}
 			}
@@ -226,6 +240,21 @@ func distributorQuotaProtectionGroups(usingGroup string, userGroup string, route
 		return service.GetUserAutoGroup(userGroup)
 	}
 	return []string{usingGroup}
+}
+
+func applyQuotaProtectionFallback(c *gin.Context, requestedModel string, block *service.ChannelQuotaProtectionBlock) bool {
+	if c == nil || block == nil {
+		return false
+	}
+	fallbackModel := block.FallbackModel()
+	if fallbackModel == "" || strings.EqualFold(strings.TrimSpace(requestedModel), fallbackModel) {
+		return false
+	}
+	common.SetContextKey(c, constant.ContextKeyQuotaProtectionFallbackModel, fallbackModel)
+	if group := strings.TrimSpace(block.Group); group != "" {
+		common.SetContextKey(c, constant.ContextKeyQuotaProtectionFallbackGroup, group)
+	}
+	return true
 }
 
 func abortIfChannelQuotaProtection(c *gin.Context, groups []string, modelName string, requestPath string) bool {
@@ -484,7 +513,25 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 		common.SetContextKey(c, constant.ContextKeyChannelOrganization, *channel.OpenAIOrganization)
 	}
 	common.SetContextKey(c, constant.ContextKeyChannelAutoBan, channel.GetAutoBan())
-	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, channel.GetModelMapping())
+	modelMapping := channel.GetModelMapping()
+	if fallbackModel := common.GetContextKeyString(c, constant.ContextKeyQuotaProtectionFallbackModel); fallbackModel != "" && !strings.EqualFold(strings.TrimSpace(modelName), fallbackModel) {
+		mapping := map[string]string{}
+		if strings.TrimSpace(modelMapping) != "" && strings.TrimSpace(modelMapping) != "{}" {
+			if err := common.Unmarshal([]byte(modelMapping), &mapping); err != nil {
+				return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+			}
+		}
+		mappingSource := strings.TrimSuffix(strings.TrimSpace(modelName), ratio_setting.CompactModelSuffix)
+		if mappingSource != "" {
+			mapping[mappingSource] = fallbackModel
+		}
+		encoded, err := common.Marshal(mapping)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+		}
+		modelMapping = string(encoded)
+	}
+	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, modelMapping)
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
 
 	key, index, newAPIError := channel.GetNextEnabledKey()
