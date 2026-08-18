@@ -119,18 +119,62 @@ export function SummaryCards() {
 
   const displayedRemainQuota = Number(liveUser?.quota ?? 0)
   const dailyPoolQuota = Number(status?.daily_quota_pool?.remaining_quota ?? 0)
+  const dailyPoolQuotaPerUSD = Number(
+    status?.daily_quota_pool?.quota_per_usd ?? 0
+  )
   const hasDailyPoolQuota =
     status?.daily_quota_pool != null && Number.isFinite(dailyPoolQuota)
   const quotaPoolBreakdown = useMemo(
-    () =>
-      (status?.daily_quota_pool?.group_breakdown ?? [])
-        .map((item) => ({
-          group: displayPoolGroupName(item.group),
-          quota: Number(item.remaining_quota ?? 0),
-          estimated: Boolean(item.estimated),
-        }))
-        .filter((item) => Number.isFinite(item.quota)),
-    [status?.daily_quota_pool?.group_breakdown]
+    () => {
+      const breakdown = status?.daily_quota_pool?.group_breakdown ?? []
+      const toQuota = (usd: unknown) => {
+        const value = Number(usd)
+        return Number.isFinite(value) && dailyPoolQuotaPerUSD > 0
+          ? Math.max(0, Math.round(value * dailyPoolQuotaPerUSD))
+          : 0
+      }
+
+      return breakdown.flatMap((item) => {
+        const group = displayPoolGroupName(item.group)
+        const normalQuota = Number.isFinite(Number(item.normal_remaining_quota))
+          ? Number(item.normal_remaining_quota)
+          : Number.isFinite(Number(item.normal_remaining_usd))
+            ? toQuota(item.normal_remaining_usd)
+            : Number(item.remaining_quota ?? 0)
+        const reserveQuota = Number.isFinite(
+          Number(item.reserve_bucket_remaining_quota)
+        )
+          ? Number(item.reserve_bucket_remaining_quota)
+          : toQuota(item.reserve_bucket_remaining_usd)
+        const reserveConfigured =
+          item.reserve_configured !== false &&
+          (Boolean(item.reserve_configured) ||
+            Number(item.reserve_total_usd ?? 0) > 0 ||
+            Number(item.reserve_bucket_remaining_usd ?? 0) > 0)
+
+        return [
+          {
+            key: `${group}-normal`,
+            group: `${group} · ${t('Standard daily budget')}`,
+            quota: Math.max(0, normalQuota),
+            estimated: Boolean(item.estimated),
+            kind: 'normal' as const,
+          },
+          ...(reserveConfigured
+            ? [
+                {
+                  key: `${group}-luna-reserve`,
+                  group: `${group} · ${t('Luna reserve')}`,
+                  quota: Math.max(0, reserveQuota),
+                  estimated: Boolean(item.estimated),
+                  kind: 'luna' as const,
+                },
+              ]
+            : []),
+        ]
+      })
+    },
+    [dailyPoolQuotaPerUSD, status?.daily_quota_pool?.group_breakdown, t]
   )
 
   const usageTrendQuery = useQuery({
@@ -275,13 +319,17 @@ export function SummaryCards() {
                 </div>
                 {quotaPoolBreakdown.map((item) => (
                   <div
-                    key={item.group}
-                    className='bg-background/70 border-border/60 flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-xs'
+                    key={item.key}
+                    className={`flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-xs ${
+                      item.kind === 'luna'
+                        ? 'border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300'
+                        : 'bg-background/70 border-border/60'
+                    }`}
                   >
-                    <span className='text-muted-foreground truncate font-medium'>
+                    <span className='truncate font-medium'>
                       {item.group}
                     </span>
-                    <span className='text-foreground shrink-0 font-mono tabular-nums'>
+                    <span className='shrink-0 font-mono tabular-nums'>
                       {item.estimated ? '≈ ' : ''}
                       {formatQuota(item.quota)}
                     </span>

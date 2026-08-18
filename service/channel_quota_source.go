@@ -101,19 +101,30 @@ type DailyQuotaPoolSummary struct {
 }
 
 type DailyQuotaPoolGroup struct {
-	Source              string  `json:"source"`
-	Group               string  `json:"group"`
-	ChannelCount        int     `json:"channel_count"`
-	TotalUSD            float64 `json:"total_usd"`
-	UsedUSD             float64 `json:"used_usd"`
-	RemainingUSD        float64 `json:"remaining_usd"`
-	RemainingQuota      int64   `json:"remaining_quota"`
-	UpdatedAt           int64   `json:"updated_at"`
-	Available           bool    `json:"available"`
-	Estimated           bool    `json:"estimated"`
-	Partial             bool    `json:"partial"`
-	ReserveActive       bool    `json:"reserve_active,omitempty"`
-	ReserveRemainingUSD float64 `json:"reserve_remaining_usd,omitempty"`
+	Source                      string  `json:"source"`
+	Group                       string  `json:"group"`
+	ChannelCount                int     `json:"channel_count"`
+	TotalUSD                    float64 `json:"total_usd"`
+	UsedUSD                     float64 `json:"used_usd"`
+	RemainingUSD                float64 `json:"remaining_usd"`
+	RemainingQuota              int64   `json:"remaining_quota"`
+	NormalTotalUSD              float64 `json:"normal_total_usd,omitempty"`
+	NormalUsedUSD               float64 `json:"normal_used_usd,omitempty"`
+	NormalRemainingUSD          float64 `json:"normal_remaining_usd,omitempty"`
+	NormalRemainingQuota        int64   `json:"normal_remaining_quota,omitempty"`
+	UpdatedAt                   int64   `json:"updated_at"`
+	Available                   bool    `json:"available"`
+	Estimated                   bool    `json:"estimated"`
+	Partial                     bool    `json:"partial"`
+	ReserveConfigured           bool    `json:"reserve_configured,omitempty"`
+	ReserveActive               bool    `json:"reserve_active,omitempty"`
+	ReserveRemainingUSD         float64 `json:"reserve_remaining_usd,omitempty"`
+	ReservePercent              float64 `json:"reserve_percent,omitempty"`
+	ReserveRemainingPercent     float64 `json:"reserve_remaining_percent,omitempty"`
+	ReserveTotalUSD             float64 `json:"reserve_total_usd,omitempty"`
+	ReserveBucketRemainingUSD   float64 `json:"reserve_bucket_remaining_usd,omitempty"`
+	ReserveTotalQuota           int64   `json:"reserve_total_quota,omitempty"`
+	ReserveBucketRemainingQuota int64   `json:"reserve_bucket_remaining_quota,omitempty"`
 }
 
 func GetDailyQuotaPoolSnapshot(ctx context.Context) (DailyQuotaPoolSummary, bool, error) {
@@ -197,7 +208,18 @@ func appendDailyQuotaPoolGroup(summary *DailyQuotaPoolSummary, group *DailyQuota
 	group.TotalUSD = roundFloat(math.Max(group.TotalUSD, 0), 6)
 	group.UsedUSD = roundFloat(math.Max(group.UsedUSD, 0), 6)
 	group.RemainingUSD = roundFloat(math.Max(group.RemainingUSD, 0), 6)
+	if group.NormalTotalUSD == 0 && group.NormalUsedUSD == 0 && group.NormalRemainingUSD == 0 {
+		group.NormalTotalUSD = group.TotalUSD
+		group.NormalUsedUSD = group.UsedUSD
+		group.NormalRemainingUSD = group.RemainingUSD
+	}
+	group.NormalTotalUSD = roundFloat(math.Max(group.NormalTotalUSD, 0), 6)
+	group.NormalUsedUSD = roundFloat(math.Max(group.NormalUsedUSD, 0), 6)
+	group.NormalRemainingUSD = roundFloat(math.Max(group.NormalRemainingUSD, 0), 6)
 	group.RemainingQuota = int64(math.Round(group.RemainingUSD * quotaPerUSD))
+	group.NormalRemainingQuota = int64(math.Round(group.NormalRemainingUSD * quotaPerUSD))
+	group.ReserveTotalQuota = int64(math.Round(math.Max(group.ReserveTotalUSD, 0) * quotaPerUSD))
+	group.ReserveBucketRemainingQuota = int64(math.Round(math.Max(group.ReserveBucketRemainingUSD, 0) * quotaPerUSD))
 	summary.ChannelCount += group.ChannelCount
 	summary.TotalUSD += group.TotalUSD
 	summary.UsedUSD += group.UsedUSD
@@ -257,6 +279,28 @@ func cliproxyCPADailyQuotaPoolGroup(channel *model.Channel) (DailyQuotaPoolGroup
 	remainingPercent = math.Min(math.Max(remainingPercent, 0), math.Max(limitPercent, 0))
 	consumedPercent = math.Min(math.Max(consumedPercent, 0), math.Max(limitPercent, 0))
 	reserveActive, _ := guardObjectBool(daily, "model_reserve_active")
+	modelReservePercent, _ := guardObjectFloat(daily, "model_reserve_percent")
+	modelReserveRemainingPercent, _ := guardObjectFloat(daily, "model_reserve_remaining_percent")
+	modelReservePercent = math.Max(modelReservePercent, 0)
+	modelReserveRemainingPercent = math.Min(math.Max(modelReserveRemainingPercent, 0), modelReservePercent)
+	// New guard output carries an explicit configured flag so a non-zero
+	// percentage without a model allowlist is not shown as spendable reserve.
+	// Older guard output has no flag; retain the percentage-based fallback for
+	// compatibility with already stored channel metadata.
+	reserveConfigured, hasReserveConfigured := guardObjectBool(daily, "model_reserve_configured")
+	if !hasReserveConfigured {
+		reserveConfigured = modelReservePercent > 0.000001
+	}
+	if !reserveConfigured {
+		modelReservePercent = 0
+		modelReserveRemainingPercent = 0
+		reserveActive = false
+	}
+	normalTotalUSD := math.Max(limitPercent, 0) * rate
+	normalUsedUSD := consumedPercent * rate
+	normalRemainingUSD := remainingPercent * rate
+	reserveTotalUSD := modelReservePercent * rate
+	reserveBucketRemainingUSD := modelReserveRemainingPercent * rate
 	reserveRemainingUSD := 0.0
 	if reserveActive && channel.Status == common.ChannelStatusEnabled && !failed {
 		reserveRemainingUnits, ok := guardObjectFloat(daily, "model_reserve_remaining_percent")
@@ -269,18 +313,28 @@ func cliproxyCPADailyQuotaPoolGroup(channel *model.Channel) (DailyQuotaPoolGroup
 		reserveRemainingUSD = math.Max(reserveRemainingUnits, 0) * rate
 	}
 	return DailyQuotaPoolGroup{
-		Source:              "cliproxy_cpa_dynamic_daily_budget",
-		Group:               groupName,
-		ChannelCount:        1,
-		TotalUSD:            math.Max(limitPercent, 0) * rate,
-		UsedUSD:             consumedPercent * rate,
-		RemainingUSD:        remainingPercent*rate + reserveRemainingUSD,
-		UpdatedAt:           updatedAt,
-		Available:           channel.Status == common.ChannelStatusEnabled && !failed && (remainingPercent > 0 || reserveRemainingUSD > 0),
-		Estimated:           true,
-		Partial:             failed,
-		ReserveActive:       reserveActive && reserveRemainingUSD > 0,
-		ReserveRemainingUSD: reserveRemainingUSD,
+		Source:                      "cliproxy_cpa_dynamic_daily_budget",
+		Group:                       groupName,
+		ChannelCount:                1,
+		TotalUSD:                    normalTotalUSD,
+		UsedUSD:                     normalUsedUSD,
+		RemainingUSD:                normalRemainingUSD + reserveRemainingUSD,
+		NormalTotalUSD:              normalTotalUSD,
+		NormalUsedUSD:               normalUsedUSD,
+		NormalRemainingUSD:          normalRemainingUSD,
+		UpdatedAt:                   updatedAt,
+		Available:                   channel.Status == common.ChannelStatusEnabled && !failed && (remainingPercent > 0 || reserveRemainingUSD > 0 || reserveBucketRemainingUSD > 0),
+		Estimated:                   true,
+		Partial:                     failed,
+		ReserveConfigured:           reserveConfigured,
+		ReserveActive:               reserveActive && reserveRemainingUSD > 0,
+		ReserveRemainingUSD:         reserveRemainingUSD,
+		ReservePercent:              modelReservePercent,
+		ReserveRemainingPercent:     modelReserveRemainingPercent,
+		ReserveTotalUSD:             reserveTotalUSD,
+		ReserveBucketRemainingUSD:   reserveBucketRemainingUSD,
+		ReserveTotalQuota:           int64(math.Round(reserveTotalUSD * common.QuotaPerUnit)),
+		ReserveBucketRemainingQuota: int64(math.Round(reserveBucketRemainingUSD * common.QuotaPerUnit)),
 	}, true
 }
 

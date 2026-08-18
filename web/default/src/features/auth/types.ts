@@ -160,10 +160,23 @@ export interface DailyQuotaPoolGroupStatus {
   used_usd?: number
   remaining_usd?: number
   remaining_quota?: number
+  normal_total_usd?: number
+  normal_used_usd?: number
+  normal_remaining_usd?: number
+  normal_remaining_quota?: number
   updated_at?: number
   available?: boolean
   estimated?: boolean
   partial?: boolean
+  reserve_configured?: boolean
+  reserve_active?: boolean
+  reserve_remaining_usd?: number
+  reserve_percent?: number
+  reserve_remaining_percent?: number
+  reserve_total_usd?: number
+  reserve_bucket_remaining_usd?: number
+  reserve_total_quota?: number
+  reserve_bucket_remaining_quota?: number
 }
 
 export interface SystemStatus {

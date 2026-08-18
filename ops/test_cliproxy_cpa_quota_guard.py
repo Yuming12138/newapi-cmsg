@@ -1038,6 +1038,18 @@ class DynamicDailyBudgetTest(unittest.TestCase):
         self.assertEqual(["gpt-5.6-luna"], result["quota_block"]["allowed_models"])
         self.assertAlmostEqual(4.142857, result["usable_balance_units"], places=6)
         self.assertTrue(result["dynamic_daily_budget"]["model_reserve_active"])
+        budget = result["dynamic_daily_budget"]
+        self.assertAlmostEqual(
+            budget["daily_limit_percent"] + 5.0,
+            budget["daily_budget_total_percent"],
+            places=6,
+        )
+        self.assertAlmostEqual(
+            budget["model_reserve_remaining_percent"],
+            budget["daily_budget_remaining_total_percent"],
+            places=6,
+        )
+        self.assertEqual(0.0, budget["normal_daily_budget_remaining_percent"])
 
     def test_luna_only_reserve_exhaustion_disables_channel(self) -> None:
         self.config.update({

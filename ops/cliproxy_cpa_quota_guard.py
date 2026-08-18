@@ -2340,8 +2340,11 @@ def apply_dynamic_daily_budget(
     model_reserve_models = list(dict.fromkeys(
         str(model).strip() for model in configured_reserve_models if str(model).strip()
     ))
+    model_reserve_configured = model_reserve_percent > 0.000001 and bool(model_reserve_models)
     model_reserve_consumed = max(0.0, consumed_today - daily_limit)
     model_reserve_remaining = max(0.0, model_reserve_percent - model_reserve_consumed)
+    daily_budget_total = max(0.0, daily_limit) + model_reserve_percent
+    daily_budget_remaining_total = max(0.0, remaining_today) + model_reserve_remaining
     current_cycle_signature = str(snapshot.get("planning_signature") or "").strip()
     force_unlock_active = (
         force_unlock_requested
@@ -2355,7 +2358,7 @@ def apply_dynamic_daily_budget(
         and original_quota_ok
         and hard_reserve_available
         and daily_exhausted
-        and bool(model_reserve_models)
+        and model_reserve_configured
         and model_reserve_remaining > 0.000001
     )
     quota_ok = original_quota_ok and (
@@ -2386,9 +2389,16 @@ def apply_dynamic_daily_budget(
         "next_daily_budget_reset_at": next_daily_reset_at,
         "daily_exhausted": daily_exhausted,
         "quota_ok": quota_ok,
+        # The normal daily bucket and the model-only bucket are deliberately
+        # tracked separately. The latter is additive: it is not part of the
+        # normal bucket and must remain available when that bucket reaches 0.
+        "daily_budget_total_percent": round(daily_budget_total, 6),
+        "daily_budget_remaining_total_percent": round(daily_budget_remaining_total, 6),
+        "normal_daily_budget_remaining_percent": round(remaining_today, 6),
         "model_reserve_percent": round(model_reserve_percent, 6),
         "model_reserve_consumed_percent": round(model_reserve_consumed, 6),
         "model_reserve_remaining_percent": round(model_reserve_remaining, 6),
+        "model_reserve_configured": model_reserve_configured,
         "model_reserve_active": model_reserve_active,
         "model_reserve_models": model_reserve_models,
         "manual_force_unlock_active": force_unlock_active,

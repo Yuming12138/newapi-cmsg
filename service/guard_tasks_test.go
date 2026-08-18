@@ -151,10 +151,12 @@ func TestSummarizeDailyQuotaPoolUsesCPADailyBudgetNotWeeklyBalance(t *testing.T)
 						"raw_remaining_percent": 78,
 						"dynamic_daily_budget": {
 							"applied": true,
-							"daily_limit_percent": 10.285714,
-							"consumed_today_percent": 9,
-							"remaining_today_percent": 1.285714,
-							"reserve_percent": 15,
+						"daily_limit_percent": 10.285714,
+						"consumed_today_percent": 9,
+						"remaining_today_percent": 1.285714,
+						"model_reserve_percent": 5,
+						"model_reserve_remaining_percent": 5,
+						"reserve_percent": 15,
 							"baseline_account_plans": [
 								{"plan_type":"Pro 20x","remaining_percent":87,"days_remaining":7}
 							]
@@ -180,6 +182,15 @@ func TestSummarizeDailyQuotaPoolUsesCPADailyBudgetNotWeeklyBalance(t *testing.T)
 	cpa := got.GroupBreakdown[1]
 	if cpa.Source != "cliproxy_cpa_dynamic_daily_budget" || !cpa.Estimated || cpa.UpdatedAt != 201 {
 		t.Fatalf("CPA daily group = %+v", cpa)
+	}
+	wantReserveTotalUSD := 5 * cliproxyCPAProUSDPerPercent
+	if math.Abs(cpa.ReservePercent-5) > 0.000001 ||
+		math.Abs(cpa.ReserveRemainingPercent-5) > 0.000001 ||
+		math.Abs(cpa.ReserveTotalUSD-wantReserveTotalUSD) > 0.000001 ||
+		math.Abs(cpa.ReserveBucketRemainingUSD-wantReserveTotalUSD) > 0.000001 ||
+		math.Abs(cpa.NormalRemainingUSD-wantCPARemaining) > 0.000001 ||
+		cpa.ReserveActive {
+		t.Fatalf("CPA inactive Luna reserve = %+v", cpa)
 	}
 }
 
@@ -210,10 +221,12 @@ func TestSummarizeDailyQuotaPoolIncludesActiveLunaReserve(t *testing.T) {
 						"usable_balance_units": 4.285714,
 						"dynamic_daily_budget": {
 							"applied": true,
-							"daily_limit_percent": 10.285714,
-							"consumed_today_percent": 11,
-							"remaining_today_percent": 0,
-							"model_reserve_active": true,
+						"daily_limit_percent": 10.285714,
+						"consumed_today_percent": 11,
+						"remaining_today_percent": 0,
+						"model_reserve_percent": 5,
+						"model_reserve_remaining_percent": 4.285714,
+						"model_reserve_active": true,
 							"model_reserve_remaining_percent": 4.285714,
 							"baseline_account_plans": [
 								{"plan_type":"Pro 20x","remaining_percent":76,"days_remaining":6}
@@ -234,8 +247,49 @@ func TestSummarizeDailyQuotaPoolIncludesActiveLunaReserve(t *testing.T) {
 		t.Fatalf("daily group breakdown = %+v", got.GroupBreakdown)
 	}
 	cpa := got.GroupBreakdown[1]
-	if !cpa.ReserveActive || math.Abs(cpa.ReserveRemainingUSD-wantReserveUSD) > 0.000001 || !cpa.Available {
+	if !cpa.ReserveActive || math.Abs(cpa.ReserveRemainingUSD-wantReserveUSD) > 0.000001 ||
+		math.Abs(cpa.ReserveRemainingPercent-4.285714) > 0.000001 ||
+		math.Abs(cpa.ReserveBucketRemainingUSD-wantReserveUSD) > 0.000001 ||
+		math.Abs(cpa.NormalRemainingUSD) > 0.000001 ||
+		!cpa.Available {
 		t.Fatalf("CPA Luna reserve group = %+v", cpa)
+	}
+}
+
+func TestCliproxyDailyQuotaPoolIgnoresExplicitlyUnconfiguredReserve(t *testing.T) {
+	channel := &model.Channel{
+		Id:     12,
+		Group:  "cliproxy-codex",
+		Status: common.ChannelStatusEnabled,
+		OtherInfo: `{
+  "cliproxy_cpa_quota_guard": {
+    "updated_at": 201,
+    "health": {
+      "ok": true,
+      "dynamic_daily_budget": {
+        "applied": true,
+        "daily_limit_percent": 10,
+        "consumed_today_percent": 10,
+        "remaining_today_percent": 0,
+        "model_reserve_configured": false,
+        "model_reserve_percent": 5,
+        "model_reserve_remaining_percent": 5,
+        "model_reserve_active": true,
+        "baseline_account_plans": [
+          {"plan_type":"Pro 20x","remaining_percent":87,"days_remaining":7}
+        ]
+      }
+    }
+  }
+}`,
+	}
+
+	group, ok := cliproxyCPADailyQuotaPoolGroup(channel)
+	if !ok {
+		t.Fatal("expected a daily quota group")
+	}
+	if group.ReserveConfigured || group.ReserveActive || group.ReserveTotalUSD != 0 || group.ReserveBucketRemainingUSD != 0 || group.Available {
+		t.Fatalf("explicitly unconfigured reserve must not be spendable: %+v", group)
 	}
 }
 
