@@ -794,8 +794,9 @@ function formatCliproxyCPASummary(meta: CliproxyCPAQuotaMeta): string {
     meta.guardMode
   )
   const parts = [
-    ...(isCliproxyCPALunaReserve(meta) ? ['Luna 专属'] : []),
-    `可用 ${formatCliproxyCPAUnits(meta.usableBalanceUnits)}`,
+    ...(isCliproxyCPALunaReserve(meta)
+      ? []
+      : [`可用 ${formatCliproxyCPAUnits(meta.usableBalanceUnits)}`]),
     `5h ${formatPercent(fiveHourPercent)}`,
     `7d ${formatPercent(weeklyPercent)}`,
   ]
@@ -1772,7 +1773,9 @@ function BalanceCell({ channel }: { channel: Channel }) {
                     : cliproxyCPAQuota
                       ? cliproxyCPAModelQuota
                         ? `${getCliproxyCPAModelQuotaLabel(cliproxyCPAQuota)}: ${remainingDisplay}`
-                        : `CPA 可用额度: ${remainingDisplay}`
+                        : cliproxyCPALunaReserve
+                          ? `Luna 专属可用额度: ${remainingDisplay}`
+                          : `CPA 可用额度: ${remainingDisplay}`
                       : `${t('Remaining:')} ${remainingDisplay}`
                   : maskedRemainingLabel}
               </p>
@@ -1786,6 +1789,19 @@ function BalanceCell({ channel }: { channel: Channel }) {
               {channel.type !== 57 && <p>{t('Click to update balance')}</p>}
             </TooltipContent>
           </Tooltip>
+          {cliproxyCPALunaReserve && (
+            <>
+              <span className='text-muted-foreground/30'>·</span>
+              <span
+                className={cn(
+                  'shrink-0 text-[11px] font-semibold',
+                  textColorMap.purple
+                )}
+              >
+                Luna 专属
+              </span>
+            </>
+          )}
         </div>
         {cliproxyCPAQuota && (
           <Tooltip>
