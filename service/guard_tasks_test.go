@@ -254,6 +254,20 @@ func TestSummarizeDailyQuotaPoolIncludesActiveLunaReserve(t *testing.T) {
 		!cpa.Available {
 		t.Fatalf("CPA Luna reserve group = %+v", cpa)
 	}
+	payload, err := common.Marshal(cpa)
+	if err != nil {
+		t.Fatalf("marshal CPA Luna reserve group: %v", err)
+	}
+	var fields map[string]interface{}
+	if err := common.Unmarshal(payload, &fields); err != nil {
+		t.Fatalf("unmarshal CPA Luna reserve group: %v", err)
+	}
+	if _, ok := fields["normal_remaining_usd"]; !ok {
+		t.Fatal("normal_remaining_usd must preserve explicit zero")
+	}
+	if _, ok := fields["normal_remaining_quota"]; !ok {
+		t.Fatal("normal_remaining_quota must preserve explicit zero")
+	}
 }
 
 func TestCliproxyDailyQuotaPoolIgnoresExplicitlyUnconfiguredReserve(t *testing.T) {
