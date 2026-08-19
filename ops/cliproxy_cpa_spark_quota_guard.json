@@ -4,9 +4,9 @@
     "container": "new-api-postgres"
   },
   "channel_id": 28,
-  "env_path": "/opt/new-api/ops/cliproxy_cpa_quota_guard.env",
+  "env_path": "/opt/new-api/ops/cliproxy_home_quota_guard.env",
   "state_path": "/opt/new-api/ops/cliproxy_cpa_spark_quota_guard_state.json",
-  "cpa_base_url": "http://127.0.0.1:8317",
+  "cpa_base_url": "http://172.17.0.1:8327",
   "wham_usage_url": "https://chatgpt.com/backend-api/wham/usage",
   "timeout_sec": 30,
   "enabled": true,
