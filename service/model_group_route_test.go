@@ -2,6 +2,7 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -12,6 +13,62 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func TestGetSharedFallbackQuotaState(t *testing.T) {
+	cfg := operation_setting.GetModelGroupRouteSetting()
+	originalCfg := *cfg
+	cfg.FallbackQuotaSourceChannelID = 1
+	cfg.FallbackQuotaSourceMaxAgeSeconds = 300
+	t.Cleanup(func() { *cfg = originalCfg })
+
+	originalDB := model.DB
+	originalMemoryCacheEnabled := common.MemoryCacheEnabled
+	db, err := gorm.Open(sqlite.Open("file:shared-fallback-quota?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Channel{}))
+	model.DB = db
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() {
+		model.DB = originalDB
+		common.MemoryCacheEnabled = originalMemoryCacheEnabled
+		if originalDB != nil {
+			model.InitChannelCache()
+		}
+	})
+
+	now := time.Unix(1_800_000_000, 0)
+	quotaSource := func(status string, spendable bool, balance float64, updatedAt int64) string {
+		raw, marshalErr := common.Marshal(map[string]interface{}{
+			"quota_source": map[string]interface{}{
+				"status": status, "spendable": spendable, "balance": balance, "updated_at": updatedAt,
+			},
+		})
+		require.NoError(t, marshalErr)
+		return string(raw)
+	}
+
+	tests := []struct {
+		name      string
+		otherInfo string
+		want      SharedFallbackQuotaState
+	}{
+		{name: "fresh spendable balance", otherInfo: quotaSource("available", true, 12.5, now.Unix()), want: SharedFallbackQuotaSpendable},
+		{name: "fresh exhausted balance", otherInfo: quotaSource("quota_exhausted", false, 0, now.Unix()), want: SharedFallbackQuotaExhausted},
+		{name: "failed probe is unknown", otherInfo: quotaSource("unknown", false, 0, now.Unix()), want: SharedFallbackQuotaUnknown},
+		{name: "stale exhaustion is unknown", otherInfo: quotaSource("quota_exhausted", false, 0, now.Add(-301*time.Second).Unix()), want: SharedFallbackQuotaUnknown},
+		{name: "missing quota source is unknown", otherInfo: "{}", want: SharedFallbackQuotaUnknown},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.NoError(t, db.Exec("DELETE FROM channels").Error)
+			channel := model.Channel{Id: 1, Name: "asxs-shared-quota", Status: common.ChannelStatusEnabled, OtherInfo: test.otherInfo}
+			require.NoError(t, db.Create(&channel).Error)
+			model.InitChannelCache()
+			require.Equal(t, test.want, GetSharedFallbackQuotaState(now))
+		})
+	}
+}
 
 func TestResolveModelGroupRoute(t *testing.T) {
 	cfg := operation_setting.GetModelGroupRouteSetting()

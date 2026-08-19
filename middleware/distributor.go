@@ -119,11 +119,9 @@ func Distribute() func(c *gin.Context) {
 				selectionGroup := usingGroup
 				if block, blockErr := service.FindChannelQuotaProtectionBlock(c.Request.Context(), quotaProtectionGroups, modelRequest.Model, requestPath); blockErr == nil && block != nil {
 					if hasModelRoute && isSolTerraModel(modelRequest.Model) && strings.EqualFold(strings.TrimSpace(block.Group), strings.TrimSpace(modelRoute.PreferredGroup)) && block.FallbackModel() != "" {
-						// Try the route fallback with the original model first. The
-						// fallback channel can share a balance pool with another
-						// channel, so no separate quota is created here.
-						setPendingQuotaProtectionFallback(c, modelRequest.Model, modelRoute.FallbackGroup, block.FallbackModel(), modelRoute.PreferredGroup)
-						selectionGroup = modelRoute.FallbackGroup
+						selectionModel, selectionGroup = configureSharedQuotaRouteFallback(
+							c, modelRequest.Model, modelRoute, block, service.GetSharedFallbackQuotaState(time.Now()),
+						)
 					} else if fallbackModel := block.FallbackModel(); fallbackModel != "" && applyQuotaProtectionFallback(c, modelRequest.Model, block) {
 						selectionModel = fallbackModel
 						if block.Group != "" {
@@ -282,6 +280,15 @@ func applyQuotaProtectionFallback(c *gin.Context, requestedModel string, block *
 func isSolTerraModel(modelName string) bool {
 	modelName = strings.ToLower(strings.TrimSpace(modelName))
 	return strings.HasPrefix(modelName, "gpt-5.6-sol") || strings.HasPrefix(modelName, "gpt-5.6-terra")
+}
+
+func configureSharedQuotaRouteFallback(c *gin.Context, requestedModel string, route service.ModelGroupRoute, block *service.ChannelQuotaProtectionBlock, quotaState service.SharedFallbackQuotaState) (string, string) {
+	if quotaState == service.SharedFallbackQuotaExhausted && applyQuotaProtectionFallback(c, requestedModel, block) {
+		return block.FallbackModel(), strings.TrimSpace(block.Group)
+	}
+
+	setPendingQuotaProtectionFallback(c, requestedModel, route.FallbackGroup, block.FallbackModel(), route.PreferredGroup)
+	return requestedModel, route.FallbackGroup
 }
 
 func setPendingQuotaProtectionFallback(c *gin.Context, requestedModel, fallbackGroup, reserveModel, reserveGroup string) {

@@ -7,23 +7,27 @@ import (
 )
 
 type ModelGroupRouteSetting struct {
-	Enabled        bool     `json:"enabled"`
-	UserGroups     []string `json:"user_groups"`
-	SourceGroups   []string `json:"source_groups"`
-	ModelPrefixes  []string `json:"model_prefixes"`
-	PreferredGroup string   `json:"preferred_group"`
-	FallbackGroup  string   `json:"fallback_group"`
-	FallbackGroups []string `json:"fallback_groups"`
+	Enabled                          bool     `json:"enabled"`
+	UserGroups                       []string `json:"user_groups"`
+	SourceGroups                     []string `json:"source_groups"`
+	ModelPrefixes                    []string `json:"model_prefixes"`
+	PreferredGroup                   string   `json:"preferred_group"`
+	FallbackGroup                    string   `json:"fallback_group"`
+	FallbackGroups                   []string `json:"fallback_groups"`
+	FallbackQuotaSourceChannelID     int      `json:"fallback_quota_source_channel_id"`
+	FallbackQuotaSourceMaxAgeSeconds int64    `json:"fallback_quota_source_max_age_seconds"`
 }
 
 var modelGroupRouteSetting = ModelGroupRouteSetting{
-	Enabled:        false,
-	UserGroups:     []string{"cmsg"},
-	SourceGroups:   []string{"asxs", "cmsg"},
-	ModelPrefixes:  []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-image"},
-	PreferredGroup: "cliproxy-codex",
-	FallbackGroup:  "asxs-gpt56-direct",
-	FallbackGroups: []string{"asxs-gpt56-direct", "asxs-gpt56", "asxs", "asxs-grok"},
+	Enabled:                          false,
+	UserGroups:                       []string{"cmsg"},
+	SourceGroups:                     []string{"asxs", "cmsg"},
+	ModelPrefixes:                    []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-image"},
+	PreferredGroup:                   "cliproxy-codex",
+	FallbackGroup:                    "asxs-gpt56-direct",
+	FallbackGroups:                   []string{"asxs-gpt56-direct", "asxs-gpt56", "asxs", "asxs-grok"},
+	FallbackQuotaSourceChannelID:     1,
+	FallbackQuotaSourceMaxAgeSeconds: 300,
 }
 
 func init() {
