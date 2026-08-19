@@ -110,6 +110,11 @@ func Distribute() func(c *gin.Context) {
 				affinityGroup := usingGroup
 				modelRoute, hasModelRoute := service.ResolveModelGroupRoute(userGroup, usingGroup, modelRequest.Model)
 				quotaProtectionGroups := distributorQuotaProtectionGroups(usingGroup, userGroup, modelRoute, hasModelRoute)
+				if hasModelRoute && isSolTerraModel(modelRequest.Model) {
+					// Channel 27 uses a shared upstream balance and must not be
+					// treated as a second independent protected quota source.
+					quotaProtectionGroups = []string{modelRoute.PreferredGroup}
+				}
 				selectionModel := modelRequest.Model
 				selectionGroup := usingGroup
 				if block, blockErr := service.FindChannelQuotaProtectionBlock(c.Request.Context(), quotaProtectionGroups, modelRequest.Model, requestPath); blockErr == nil && block != nil {
