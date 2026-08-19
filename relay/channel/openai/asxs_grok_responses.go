@@ -2,8 +2,10 @@ package openai
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -21,94 +23,239 @@ type asxsGrokToolRef struct {
 }
 
 func isASXSGrokChannel(info *relaycommon.RelayInfo) bool {
-	return info != nil && info.ChannelId == 25
+	if info == nil || info.ChannelMeta == nil {
+		return false
+	}
+	if info.ChannelId == 25 {
+		return true
+	}
+	model := strings.ToLower(strings.TrimSpace(info.UpstreamModelName))
+	return strings.HasPrefix(model, "grok-") && isASXSAPIBaseURL(info.ChannelBaseUrl)
+}
+
+func isASXSAPIBaseURL(rawURL string) bool {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return false
+	}
+	if !strings.Contains(rawURL, "://") {
+		rawURL = "https://" + rawURL
+	}
+	parsed, err := url.Parse(rawURL)
+	return err == nil && strings.EqualFold(parsed.Hostname(), "api.asxs.top")
 }
 
 func namespacedToolName(namespace, name string) string {
-	if namespace == "" {
+	namespace = strings.TrimSpace(namespace)
+	name = strings.TrimSpace(name)
+	if namespace == "" || name == "" {
 		return name
 	}
-	if strings.HasSuffix(namespace, "_") || strings.HasPrefix(name, "_") {
-		return namespace + name
+	if strings.HasPrefix(name, "mcp__") {
+		return name
 	}
-	return namespace + "_" + name
+	prefix := namespace
+	if !strings.HasSuffix(prefix, "__") {
+		prefix += "__"
+	}
+	if strings.HasPrefix(name, prefix) {
+		return name
+	}
+	return prefix + name
 }
 
 func normalizeASXSGrokResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (dto.OpenAIResponsesRequest, error) {
-	if !isASXSGrokChannel(info) || len(request.Tools) == 0 {
+	if !isASXSGrokChannel(info) {
 		if c != nil {
 			c.Set(asxSGrokToolNamespaceMapKey, map[string]asxsGrokToolRef{})
 		}
 		return request, nil
 	}
 
-	var tools []map[string]any
-	if err := common.Unmarshal(request.Tools, &tools); err != nil {
+	tools, err := parseASXSGrokTools(request.Tools)
+	if err != nil {
 		return request, err
+	}
+	input, additionalTools, hasAdditionalTools, err := extractASXSGrokAdditionalTools(request.Input)
+	if err != nil {
+		return request, err
+	}
+	if hasAdditionalTools {
+		request.Input = input
+		tools = append(tools, additionalTools...)
 	}
 
 	flattened := make([]map[string]any, 0, len(tools))
 	refs := make(map[string]asxsGrokToolRef)
-	sawNamespace := false
+	seenNames := make(map[string]struct{})
 	for _, tool := range tools {
 		if common.Interface2String(tool["type"]) != "namespace" {
-			flattened = append(flattened, tool)
+			normalized, keep := normalizeASXSGrokTool(tool, "")
+			if !keep {
+				continue
+			}
+			if err := appendASXSGrokTool(&flattened, seenNames, normalized); err != nil {
+				return request, err
+			}
 			continue
 		}
-		sawNamespace = true
-
 		namespace := strings.TrimSpace(common.Interface2String(tool["name"]))
 		children, ok := tool["tools"].([]any)
 		if !ok || namespace == "" {
-			continue
+			return request, fmt.Errorf("invalid namespace tool %q", namespace)
 		}
 		for _, rawChild := range children {
 			child, ok := rawChild.(map[string]any)
-			if !ok || common.Interface2String(child["type"]) != "function" {
+			if !ok {
+				return request, fmt.Errorf("namespace %q contains a non-object tool", namespace)
+			}
+			normalized, keep := normalizeASXSGrokTool(child, namespace)
+			if !keep {
 				continue
 			}
-			childName := strings.TrimSpace(common.Interface2String(child["name"]))
+			childName := strings.TrimSpace(common.Interface2String(normalized["name"]))
 			if childName == "" {
 				continue
 			}
-			flatName := namespacedToolName(namespace, childName)
-			if _, exists := refs[flatName]; exists {
-				continue
+			originalName := strings.TrimSpace(common.Interface2String(child["name"]))
+			if err := appendASXSGrokTool(&flattened, seenNames, normalized); err != nil {
+				return request, err
 			}
-			flatTool := make(map[string]any, len(child)+1)
-			for key, value := range child {
-				flatTool[key] = value
-			}
-			flatTool["type"] = "function"
-			flatTool["name"] = flatName
-			delete(flatTool, "namespace")
-			flattened = append(flattened, flatTool)
-			refs[flatName] = asxsGrokToolRef{Namespace: namespace, Name: childName}
+			refs[childName] = asxsGrokToolRef{Namespace: namespace, Name: originalName}
 		}
 	}
 
-	if !sawNamespace {
-		if c != nil {
-			c.Set(asxSGrokToolNamespaceMapKey, refs)
+	if len(flattened) == 0 {
+		request.Tools = nil
+		request.ToolChoice = nil
+		request.ParallelToolCalls = nil
+	} else {
+		toolsJSON, err := common.Marshal(flattened)
+		if err != nil {
+			return request, err
 		}
-		return request, nil
+		request.Tools = toolsJSON
 	}
 
-	toolsJSON, err := common.Marshal(flattened)
-	if err != nil {
-		return request, err
-	}
-	request.Tools = toolsJSON
-	request.Input = normalizeASXSGrokResponsesInput(request.Input, refs)
-	request.ToolChoice = normalizeASXSGrokToolChoice(request.ToolChoice, refs)
+	request.Input = normalizeASXSGrokResponsesInput(request.Input)
+	request.ToolChoice = normalizeASXSGrokToolChoice(request.ToolChoice)
 	if c != nil {
 		c.Set(asxSGrokToolNamespaceMapKey, refs)
 	}
 	return request, nil
 }
 
-func normalizeASXSGrokResponsesInput(input []byte, refs map[string]asxsGrokToolRef) []byte {
-	if len(input) == 0 || len(refs) == 0 {
+func parseASXSGrokTools(raw []byte) ([]map[string]any, error) {
+	if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, nil
+	}
+	var tools []map[string]any
+	if err := common.Unmarshal(raw, &tools); err != nil {
+		return nil, fmt.Errorf("parse tools: %w", err)
+	}
+	return tools, nil
+}
+
+func extractASXSGrokAdditionalTools(input []byte) ([]byte, []map[string]any, bool, error) {
+	trimmed := bytes.TrimSpace(input)
+	if len(trimmed) == 0 || trimmed[0] != '[' {
+		return input, nil, false, nil
+	}
+
+	var items []any
+	if err := common.Unmarshal(input, &items); err != nil {
+		return input, nil, false, fmt.Errorf("parse input items: %w", err)
+	}
+	kept := make([]any, 0, len(items))
+	additional := make([]map[string]any, 0)
+	found := false
+	for _, rawItem := range items {
+		item, ok := rawItem.(map[string]any)
+		if !ok || common.Interface2String(item["type"]) != "additional_tools" {
+			kept = append(kept, rawItem)
+			continue
+		}
+		found = true
+		rawTools, exists := item["tools"]
+		if !exists {
+			continue
+		}
+		toolItems, ok := rawTools.([]any)
+		if !ok {
+			return input, nil, false, fmt.Errorf("additional_tools.tools must be an array")
+		}
+		for _, rawTool := range toolItems {
+			tool, ok := rawTool.(map[string]any)
+			if !ok {
+				return input, nil, false, fmt.Errorf("additional_tools contains a non-object tool")
+			}
+			additional = append(additional, tool)
+		}
+	}
+	if !found {
+		return input, nil, false, nil
+	}
+	normalized, err := common.Marshal(kept)
+	if err != nil {
+		return input, nil, false, fmt.Errorf("marshal input items: %w", err)
+	}
+	return normalized, additional, true, nil
+}
+
+func normalizeASXSGrokTool(tool map[string]any, namespace string) (map[string]any, bool) {
+	normalized := make(map[string]any, len(tool)+1)
+	for key, value := range tool {
+		normalized[key] = value
+	}
+
+	toolType := strings.TrimSpace(common.Interface2String(normalized["type"]))
+	name := strings.TrimSpace(common.Interface2String(normalized["name"]))
+	switch toolType {
+	case "tool_search", "image_generation":
+		return nil, false
+	case "custom":
+		if name == "apply_patch" {
+			return nil, false
+		}
+		normalized["type"] = "function"
+		delete(normalized, "format")
+		if _, ok := normalized["parameters"]; !ok {
+			normalized["parameters"] = map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			}
+		}
+	case "function":
+		if _, ok := normalized["parameters"]; !ok {
+			normalized["parameters"] = map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			}
+		}
+	}
+	if namespace != "" && name != "" {
+		normalized["name"] = namespacedToolName(namespace, name)
+		delete(normalized, "namespace")
+	}
+	return normalized, true
+}
+
+func appendASXSGrokTool(tools *[]map[string]any, seen map[string]struct{}, tool map[string]any) error {
+	name := strings.TrimSpace(common.Interface2String(tool["name"]))
+	if name == "" {
+		*tools = append(*tools, tool)
+		return nil
+	}
+	if _, exists := seen[name]; exists {
+		return fmt.Errorf("duplicate flattened tool name %q", name)
+	}
+	seen[name] = struct{}{}
+	*tools = append(*tools, tool)
+	return nil
+}
+
+func normalizeASXSGrokResponsesInput(input []byte) []byte {
+	if len(input) == 0 {
 		return input
 	}
 	var items []map[string]any
@@ -117,16 +264,15 @@ func normalizeASXSGrokResponsesInput(input []byte, refs map[string]asxsGrokToolR
 	}
 	changed := false
 	for _, item := range items {
+		if common.Interface2String(item["type"]) != "function_call" {
+			continue
+		}
 		namespace := strings.TrimSpace(common.Interface2String(item["namespace"]))
 		name := strings.TrimSpace(common.Interface2String(item["name"]))
 		if namespace == "" || name == "" {
 			continue
 		}
-		flatName := namespacedToolName(namespace, name)
-		if _, ok := refs[flatName]; !ok {
-			continue
-		}
-		item["name"] = flatName
+		item["name"] = namespacedToolName(namespace, name)
 		delete(item, "namespace")
 		changed = true
 	}
@@ -140,12 +286,15 @@ func normalizeASXSGrokResponsesInput(input []byte, refs map[string]asxsGrokToolR
 	return updated
 }
 
-func normalizeASXSGrokToolChoice(choice []byte, refs map[string]asxsGrokToolRef) []byte {
-	if len(choice) == 0 || len(refs) == 0 {
+func normalizeASXSGrokToolChoice(choice []byte) []byte {
+	if len(choice) == 0 {
 		return choice
 	}
 	var value map[string]any
 	if err := common.Unmarshal(choice, &value); err != nil {
+		return choice
+	}
+	if common.Interface2String(value["type"]) != "function" {
 		return choice
 	}
 	namespace := strings.TrimSpace(common.Interface2String(value["namespace"]))
@@ -153,11 +302,7 @@ func normalizeASXSGrokToolChoice(choice []byte, refs map[string]asxsGrokToolRef)
 	if namespace == "" || name == "" {
 		return choice
 	}
-	flatName := namespacedToolName(namespace, name)
-	if _, ok := refs[flatName]; !ok {
-		return choice
-	}
-	value["name"] = flatName
+	value["name"] = namespacedToolName(namespace, name)
 	delete(value, "namespace")
 	updated, err := common.Marshal(value)
 	if err != nil {
