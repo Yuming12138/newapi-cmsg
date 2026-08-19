@@ -129,10 +129,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 	relayInfo.InitChannelMeta(c)
-	if err = helper.ApplyMappedBillingModel(relayInfo, c.GetString("model_mapping")); err != nil {
-		newAPIError = types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
-		return
-	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
@@ -161,22 +157,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	relayInfo.SetEstimatePromptTokens(tokens)
 
-	priceData, err := helper.ModelPriceHelper(c, relayInfo, tokens, meta)
-	if err != nil {
-		newAPIError = types.NewError(err, types.ErrorCodeModelPriceError, types.ErrOptionWithStatusCode(http.StatusBadRequest))
-		return
-	}
-
 	// common.SetContextKey(c, constant.ContextKeyTokenCountMeta, meta)
-
-	if priceData.FreeModel {
-		logger.LogInfo(c, fmt.Sprintf("模型 %s 免费，跳过预扣费", relayInfo.OriginModelName))
-	} else {
-		newAPIError = service.PreConsumeBilling(c, priceData.QuotaToPreConsume, relayInfo)
-		if newAPIError != nil {
-			return
-		}
-	}
 
 	defer func() {
 		// Only return quota if downstream failed and quota was actually pre-consumed
@@ -206,12 +187,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			newAPIError = preferLastRelayError(channelErr, relayInfo.LastError)
 			break
 		}
+		addUsedChannel(c, channel.Id)
+		if billingErr := prepareBillingForSelectedChannel(c, relayInfo, tokens, meta); billingErr != nil {
+			newAPIError = billingErr
+			break
+		}
 		if budgetErr := applyFallbackPreResponseBudget(c); budgetErr != nil {
 			newAPIError = budgetErr
 			break
 		}
 
-		addUsedChannel(c, channel.Id)
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
 			// Ensure consistent 413 for oversized bodies even when error occurs later (e.g., retry path)
@@ -376,6 +361,36 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 	return meta
 }
 
+// prepareBillingForSelectedChannel refreshes model- and group-dependent pricing
+// after retry routing has selected a channel. RelayInfo is reused across attempts,
+// so mapped billing state from the previous channel must not leak into this one.
+func prepareBillingForSelectedChannel(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) *types.NewAPIError {
+	info.InitChannelMeta(c)
+	info.BillingModelName = ""
+	info.TieredBillingSnapshot = nil
+
+	if err := helper.ApplyMappedBillingModel(info, c.GetString("model_mapping")); err != nil {
+		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+	}
+
+	priceData, err := helper.ModelPriceHelper(c, info, promptTokens, meta)
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeModelPriceError, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	if priceData.FreeModel {
+		return nil
+	}
+
+	if info.Billing == nil {
+		return service.PreConsumeBilling(c, priceData.QuotaToPreConsume, info)
+	}
+	if err := info.Billing.Reserve(priceData.QuotaToPreConsume); err != nil {
+		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+	}
+	info.FinalPreConsumedQuota = info.Billing.GetPreConsumedQuota()
+	return nil
+}
+
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
 	if info.ChannelMeta == nil {
 		autoBan := c.GetBool("auto_ban")
@@ -391,8 +406,6 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		}, nil
 	}
 	channel, selectGroup, err := service.CacheGetRandomSatisfiedChannel(retryParam)
-
-	info.PriceData.GroupRatioInfo = helper.HandleGroupRatio(c, info)
 
 	if err != nil {
 		return nil, types.NewErrorWithStatusCode(fmt.Errorf("获取分组 %s 下模型 %s 的可用渠道失败（retry）: %s", selectGroup, info.OriginModelName, err.Error()), types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
