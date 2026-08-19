@@ -149,3 +149,77 @@ func TestCacheGetRandomSatisfiedChannelUsesPreferredThenFallbackGroup(t *testing
 	require.Equal(t, "asxs-gpt56-direct", group)
 	require.Equal(t, "asxs-gpt56-direct", common.GetContextKeyString(fallbackContext, constant.ContextKeyAutoGroup))
 }
+
+func TestQuotaProtectionTriesSharedFallbackBeforeLunaReserve(t *testing.T) {
+	cfg := operation_setting.GetModelGroupRouteSetting()
+	originalCfg := *cfg
+	cfg.Enabled = true
+	cfg.UserGroups = []string{"cmsg"}
+	cfg.SourceGroups = []string{"asxs"}
+	cfg.ModelPrefixes = []string{"gpt-5.6-sol", "gpt-5.6-terra"}
+	cfg.PreferredGroup = "cliproxy-codex"
+	cfg.FallbackGroup = "asxs-gpt56-direct"
+	t.Cleanup(func() { *cfg = originalCfg })
+
+	originalDB := model.DB
+	originalMemoryCacheEnabled := common.MemoryCacheEnabled
+	db, err := gorm.Open(sqlite.Open("file:quota-route-fallback?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}))
+	model.DB = db
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() {
+		model.DB = originalDB
+		common.MemoryCacheEnabled = originalMemoryCacheEnabled
+		if originalDB != nil {
+			model.InitChannelCache()
+		}
+	})
+
+	priority := int64(0)
+	channels := []model.Channel{
+		{Id: 12, Name: "cliproxy-codex-pool", Group: "cliproxy-codex", Models: "gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna", Status: common.ChannelStatusEnabled, Key: "test", Priority: &priority},
+		// Channel 27 intentionally has no quota_source. Its spendable balance is
+		// shared with another upstream channel and is not modeled independently.
+		{Id: 27, Name: "asxs-5x", Group: "asxs-gpt56-direct", Models: "gpt-5.6-sol,gpt-5.6-terra", Status: common.ChannelStatusEnabled, Key: "test", Priority: &priority},
+	}
+	require.NoError(t, db.Create(&channels).Error)
+	abilities := []model.Ability{
+		{Group: "cliproxy-codex", Model: "gpt-5.6-sol", ChannelId: 12, Enabled: true, Priority: &priority},
+		{Group: "cliproxy-codex", Model: "gpt-5.6-terra", ChannelId: 12, Enabled: true, Priority: &priority},
+		{Group: "cliproxy-codex", Model: "gpt-5.6-luna", ChannelId: 12, Enabled: true, Priority: &priority},
+		{Group: "asxs-gpt56-direct", Model: "gpt-5.6-sol", ChannelId: 27, Enabled: true, Priority: &priority},
+		{Group: "asxs-gpt56-direct", Model: "gpt-5.6-terra", ChannelId: 27, Enabled: true, Priority: &priority},
+	}
+	require.NoError(t, db.Create(&abilities).Error)
+	model.InitChannelCache()
+
+	for _, sourceModel := range []string{"gpt-5.6-sol", "gpt-5.6-terra"} {
+		t.Run(sourceModel, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(nil)
+			common.SetContextKey(ctx, constant.ContextKeyUserGroup, "cmsg")
+			common.SetContextKey(ctx, constant.ContextKeyQuotaProtectionPendingFallback, true)
+			common.SetContextKey(ctx, constant.ContextKeyQuotaProtectionPendingModel, sourceModel)
+			common.SetContextKey(ctx, constant.ContextKeyQuotaProtectionPendingGroup, "asxs-gpt56-direct")
+			common.SetContextKey(ctx, constant.ContextKeyQuotaProtectionPendingReserveModel, "gpt-5.6-luna")
+			common.SetContextKey(ctx, constant.ContextKeyQuotaProtectionPendingReserveGroup, "cliproxy-codex")
+
+			param := &RetryParam{Ctx: ctx, TokenGroup: "asxs-gpt56-direct", ModelName: sourceModel, Retry: common.GetPointer(0)}
+			channel, group, err := CacheGetRandomSatisfiedChannel(param)
+			require.NoError(t, err)
+			require.Equal(t, 27, channel.Id)
+			require.Equal(t, "asxs-gpt56-direct", group)
+			require.True(t, common.GetContextKeyBool(ctx, constant.ContextKeyQuotaProtectionPendingFallback))
+			require.Empty(t, common.GetContextKeyString(ctx, constant.ContextKeyQuotaProtectionFallbackModel))
+
+			ExcludeChannelForRequest(ctx, 27, "shared upstream unavailable")
+			param.SetRetry(1)
+			channel, group, err = CacheGetRandomSatisfiedChannel(param)
+			require.NoError(t, err)
+			require.Equal(t, 12, channel.Id)
+			require.Equal(t, "cliproxy-codex", group)
+			require.False(t, common.GetContextKeyBool(ctx, constant.ContextKeyQuotaProtectionPendingFallback))
+			require.Equal(t, "gpt-5.6-luna", common.GetContextKeyString(ctx, constant.ContextKeyQuotaProtectionFallbackModel))
+		})
+	}
+}

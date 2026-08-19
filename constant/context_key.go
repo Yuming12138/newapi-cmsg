@@ -42,7 +42,12 @@ const (
 	ContextKeyQuotaProtectionFallbackModel ContextKey = "quota_protection_fallback_model"
 	// ContextKeyQuotaProtectionFallbackGroup keeps retries on the reserve
 	// channel's group instead of falling back to an unrelated model group.
-	ContextKeyQuotaProtectionFallbackGroup ContextKey = "quota_protection_fallback_group"
+	ContextKeyQuotaProtectionFallbackGroup       ContextKey = "quota_protection_fallback_group"
+	ContextKeyQuotaProtectionPendingFallback     ContextKey = "quota_protection_pending_fallback"
+	ContextKeyQuotaProtectionPendingModel        ContextKey = "quota_protection_pending_model"
+	ContextKeyQuotaProtectionPendingGroup        ContextKey = "quota_protection_pending_group"
+	ContextKeyQuotaProtectionPendingReserveModel ContextKey = "quota_protection_pending_reserve_model"
+	ContextKeyQuotaProtectionPendingReserveGroup ContextKey = "quota_protection_pending_reserve_group"
 
 	ContextKeyAutoGroup           ContextKey = "auto_group"
 	ContextKeyAutoGroupIndex      ContextKey = "auto_group_index"

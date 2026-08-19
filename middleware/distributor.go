@@ -113,7 +113,13 @@ func Distribute() func(c *gin.Context) {
 				selectionModel := modelRequest.Model
 				selectionGroup := usingGroup
 				if block, blockErr := service.FindChannelQuotaProtectionBlock(c.Request.Context(), quotaProtectionGroups, modelRequest.Model, requestPath); blockErr == nil && block != nil {
-					if fallbackModel := block.FallbackModel(); fallbackModel != "" && applyQuotaProtectionFallback(c, modelRequest.Model, block) {
+					if hasModelRoute && isSolTerraModel(modelRequest.Model) && strings.EqualFold(strings.TrimSpace(block.Group), strings.TrimSpace(modelRoute.PreferredGroup)) && block.FallbackModel() != "" {
+						// Try the route fallback with the original model first. The
+						// fallback channel can share a balance pool with another
+						// channel, so no separate quota is created here.
+						setPendingQuotaProtectionFallback(c, modelRequest.Model, modelRoute.FallbackGroup, block.FallbackModel(), modelRoute.PreferredGroup)
+						selectionGroup = modelRoute.FallbackGroup
+					} else if fallbackModel := block.FallbackModel(); fallbackModel != "" && applyQuotaProtectionFallback(c, modelRequest.Model, block) {
 						selectionModel = fallbackModel
 						if block.Group != "" {
 							selectionGroup = block.Group
@@ -180,6 +186,13 @@ func Distribute() func(c *gin.Context) {
 						TokenGroup:  selectionGroup,
 						Retry:       common.GetPointer(0),
 					})
+					if (err != nil || channel == nil) && activatePendingQuotaProtectionFallback(c) {
+						selectionModel = common.GetContextKeyString(c, constant.ContextKeyQuotaProtectionFallbackModel)
+						selectionGroup = common.GetContextKeyString(c, constant.ContextKeyQuotaProtectionFallbackGroup)
+						channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
+							Ctx: c, ModelName: selectionModel, RequestPath: requestPath, TokenGroup: selectionGroup, Retry: common.GetPointer(0),
+						})
+					}
 					if err != nil {
 						if abortIfChannelQuotaProtection(c, quotaProtectionGroups, modelRequest.Model, requestPath) {
 							return
@@ -254,6 +267,37 @@ func applyQuotaProtectionFallback(c *gin.Context, requestedModel string, block *
 	if group := strings.TrimSpace(block.Group); group != "" {
 		common.SetContextKey(c, constant.ContextKeyQuotaProtectionFallbackGroup, group)
 	}
+	return true
+}
+
+func isSolTerraModel(modelName string) bool {
+	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	return strings.HasPrefix(modelName, "gpt-5.6-sol") || strings.HasPrefix(modelName, "gpt-5.6-terra")
+}
+
+func setPendingQuotaProtectionFallback(c *gin.Context, requestedModel, fallbackGroup, reserveModel, reserveGroup string) {
+	if c == nil || strings.TrimSpace(fallbackGroup) == "" || strings.TrimSpace(reserveModel) == "" {
+		return
+	}
+	common.SetContextKey(c, constant.ContextKeyQuotaProtectionPendingFallback, true)
+	common.SetContextKey(c, constant.ContextKeyQuotaProtectionPendingModel, strings.TrimSpace(requestedModel))
+	common.SetContextKey(c, constant.ContextKeyQuotaProtectionPendingGroup, strings.TrimSpace(fallbackGroup))
+	common.SetContextKey(c, constant.ContextKeyQuotaProtectionPendingReserveModel, strings.TrimSpace(reserveModel))
+	common.SetContextKey(c, constant.ContextKeyQuotaProtectionPendingReserveGroup, strings.TrimSpace(reserveGroup))
+}
+
+func activatePendingQuotaProtectionFallback(c *gin.Context) bool {
+	if c == nil || !common.GetContextKeyBool(c, constant.ContextKeyQuotaProtectionPendingFallback) {
+		return false
+	}
+	reserveModel := common.GetContextKeyString(c, constant.ContextKeyQuotaProtectionPendingReserveModel)
+	reserveGroup := common.GetContextKeyString(c, constant.ContextKeyQuotaProtectionPendingReserveGroup)
+	if reserveModel == "" || reserveGroup == "" {
+		return false
+	}
+	common.SetContextKey(c, constant.ContextKeyQuotaProtectionPendingFallback, false)
+	common.SetContextKey(c, constant.ContextKeyQuotaProtectionFallbackModel, reserveModel)
+	common.SetContextKey(c, constant.ContextKeyQuotaProtectionFallbackGroup, reserveGroup)
 	return true
 }
 
