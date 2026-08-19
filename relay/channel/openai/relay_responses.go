@@ -18,6 +18,9 @@ import (
 )
 
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	if info != nil && isASXSGrokChannel(info) {
+		prepareASXSGrokResponseBody(resp, c)
+	}
 	defer service.CloseResponseBodyGracefully(resp)
 
 	// read response body
@@ -89,6 +92,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
 			sr.Error(err)
 			return
+		}
+		if info != nil && isASXSGrokChannel(info) {
+			data = restoreASXSGrokStreamData(c, data)
 		}
 		if err := sendResponsesStreamData(c, streamResponse, data); err != nil {
 			if c.Request != nil && c.Request.Context().Err() != nil {
