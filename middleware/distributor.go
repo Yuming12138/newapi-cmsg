@@ -128,6 +128,10 @@ func Distribute() func(c *gin.Context) {
 				}
 				if selectionGroup != usingGroup {
 					affinityGroup = selectionGroup
+				} else if common.GetContextKeyBool(c, constant.ContextKeyQuotaProtectionPendingFallback) {
+					// Pending quota fallback must not reuse a preferred affinity
+					// pointing at the protected channel 12 pool.
+					affinityGroup = selectionGroup
 				} else if hasModelRoute {
 					affinityGroup = modelRoute.PreferredGroup
 				}
