@@ -37,3 +37,27 @@ func TestApplyQuotaProtectionFallbackDoesNotRemapAllowedModel(t *testing.T) {
 	_, exists := common.GetContextKey(ctx, constant.ContextKeyQuotaProtectionFallbackModel)
 	require.False(t, exists)
 }
+
+func TestPendingQuotaProtectionFallbackActivatesReserveOnlyAfterRouteFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(nil)
+
+	setPendingQuotaProtectionFallback(ctx, "gpt-5.6-terra", "asxs-gpt56-direct", "gpt-5.6-luna", "cliproxy-codex")
+
+	require.True(t, common.GetContextKeyBool(ctx, constant.ContextKeyQuotaProtectionPendingFallback))
+	require.Equal(t, "gpt-5.6-terra", common.GetContextKeyString(ctx, constant.ContextKeyQuotaProtectionPendingModel))
+	require.Equal(t, "asxs-gpt56-direct", common.GetContextKeyString(ctx, constant.ContextKeyQuotaProtectionPendingGroup))
+	require.Empty(t, common.GetContextKeyString(ctx, constant.ContextKeyQuotaProtectionFallbackModel))
+
+	require.True(t, activatePendingQuotaProtectionFallback(ctx))
+	require.False(t, common.GetContextKeyBool(ctx, constant.ContextKeyQuotaProtectionPendingFallback))
+	require.Equal(t, "gpt-5.6-luna", common.GetContextKeyString(ctx, constant.ContextKeyQuotaProtectionFallbackModel))
+	require.Equal(t, "cliproxy-codex", common.GetContextKeyString(ctx, constant.ContextKeyQuotaProtectionFallbackGroup))
+	require.False(t, activatePendingQuotaProtectionFallback(ctx))
+}
+
+func TestSolTerraModelDetection(t *testing.T) {
+	require.True(t, isSolTerraModel("gpt-5.6-sol"))
+	require.True(t, isSolTerraModel("gpt-5.6-terra-openai-compact"))
+	require.False(t, isSolTerraModel("gpt-5.6-luna"))
+}

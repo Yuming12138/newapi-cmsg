@@ -89,6 +89,27 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	selectionModel := param.ModelName
 	selectionGroup := param.TokenGroup
 	if param != nil && param.Ctx != nil {
+		if common.GetContextKeyBool(param.Ctx, constant.ContextKeyQuotaProtectionPendingFallback) {
+			pendingModel := common.GetContextKeyString(param.Ctx, constant.ContextKeyQuotaProtectionPendingModel)
+			pendingGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyQuotaProtectionPendingGroup)
+			excluded := GetExcludedChannelIDsForRequest(param.Ctx)
+			channel, pendingErr := model.GetRandomSatisfiedChannelForRequestPath(pendingGroup, pendingModel, param.GetRetry(), param.RequestPath, excluded)
+			if channel != nil {
+				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, pendingGroup)
+				return channel, pendingGroup, nil
+			}
+
+			reserveModel := common.GetContextKeyString(param.Ctx, constant.ContextKeyQuotaProtectionPendingReserveModel)
+			reserveGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyQuotaProtectionPendingReserveGroup)
+			if reserveModel == "" || reserveGroup == "" {
+				return nil, pendingGroup, pendingErr
+			}
+			common.SetContextKey(param.Ctx, constant.ContextKeyQuotaProtectionPendingFallback, false)
+			common.SetContextKey(param.Ctx, constant.ContextKeyQuotaProtectionFallbackModel, reserveModel)
+			common.SetContextKey(param.Ctx, constant.ContextKeyQuotaProtectionFallbackGroup, reserveGroup)
+			selectionModel = reserveModel
+			selectionGroup = reserveGroup
+		}
 		if fallbackModel := common.GetContextKeyString(param.Ctx, constant.ContextKeyQuotaProtectionFallbackModel); fallbackModel != "" {
 			selectionModel = fallbackModel
 		}
