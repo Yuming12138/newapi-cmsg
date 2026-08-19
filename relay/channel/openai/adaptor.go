@@ -612,6 +612,10 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if err != nil {
 		return nil, err
 	}
+	request, err = normalizeASXSGrokResponsesRequest(c, info, request)
+	if err != nil {
+		return nil, fmt.Errorf("normalize ASXS Grok Responses tools: %w", err)
+	}
 	return request, nil
 }
 
