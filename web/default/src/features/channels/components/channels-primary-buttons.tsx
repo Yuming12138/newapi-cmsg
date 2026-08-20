@@ -51,6 +51,7 @@ import {
   handleTestAllChannels,
   handleUpdateAllBalances,
 } from '../lib'
+import { ASXSAutoResetControl } from './asxs-auto-reset-control'
 import { useChannels } from './channels-provider'
 
 export function ChannelsPrimaryButtons() {
@@ -79,6 +80,8 @@ export function ChannelsPrimaryButtons() {
   return (
     <>
       <div className='flex items-center gap-2'>
+        <ASXSAutoResetControl />
+
         {/* Desktop: Toggle switches visible */}
         <div className='hidden items-center gap-2 rounded-md border px-3 py-1.5 sm:flex'>
           <Tags className='text-muted-foreground h-4 w-4' />

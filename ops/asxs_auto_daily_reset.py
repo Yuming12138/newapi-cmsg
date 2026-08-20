@@ -36,6 +36,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "env_path": "/opt/new-api/ops/asxs_auto_daily_reset.env",
     "state_path": "/opt/new-api/ops/asxs_auto_daily_reset_state.json",
     "lock_path": "/run/lock/new-api-asxs-auto-daily-reset.lock",
+    "control_path": "",
     "timeout_sec": 20,
     "minimum_usage_percent": 99.0,
     "minimum_remaining_days_after_reset": 2,
@@ -105,6 +106,28 @@ def load_config(path: Path) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise GuardError("config_not_object")
     return deep_merge(DEFAULT_CONFIG, raw)
+
+
+def operator_control_enabled(config: dict[str, Any]) -> bool | None:
+    """Return the operator override, or None when no control file is configured."""
+    raw_path = str(config.get("control_path") or "").strip()
+    if not raw_path:
+        return None
+    control_path = Path(raw_path)
+    if not control_path.exists():
+        raise GuardError("operator_control_missing")
+    control = load_json(control_path, None)
+    if not isinstance(control, dict):
+        raise GuardError("operator_control_invalid")
+    if as_int(control.get("schema_version")) != 1:
+        raise GuardError("operator_control_schema_invalid")
+    expected_site_id = str(config.get("site_id") or "").strip()
+    actual_site_id = str(control.get("site_id") or "").strip()
+    if expected_site_id and actual_site_id != expected_site_id:
+        raise GuardError("operator_control_site_mismatch")
+    if not isinstance(control.get("enabled"), bool):
+        raise GuardError("operator_control_enabled_invalid")
+    return bool(control["enabled"])
 
 
 def atomic_write_text(path: Path, content: str, mode: int = 0o600) -> None:
@@ -660,11 +683,17 @@ def run(args: argparse.Namespace) -> int:
         return 0
 
     enabled = as_bool(config.get("enabled"), False)
-    if not enabled and not args.dry_run:
+    operator_enabled = operator_control_enabled(config)
+    if (not enabled or operator_enabled is False) and not args.dry_run:
         emit(
             "asxs_auto_daily_reset_disabled",
             site_id=str(config.get("site_id") or ""),
             config_path=str(config_path),
+            reason=(
+                "operator_control_disabled"
+                if enabled and operator_enabled is False
+                else "installation_disabled"
+            ),
         )
         return 0
 

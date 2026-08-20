@@ -183,6 +183,82 @@ class StateAndTokenTest(unittest.TestCase):
             self.assertEqual(0o600, state_path.stat().st_mode & 0o777)
 
 
+class OperatorControlTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.config = dict(guard.DEFAULT_CONFIG)
+        self.config.update({"enabled": True, "site_id": "aliyun"})
+
+    def write_control(self, path: Path, *, enabled: bool, site_id: str = "aliyun") -> None:
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "site_id": site_id,
+                    "enabled": enabled,
+                    "updated_at": int(NOW),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def test_no_configured_control_path_preserves_legacy_config(self) -> None:
+        self.assertIsNone(guard.operator_control_enabled(self.config))
+
+    def test_control_file_can_enable_or_disable_reset(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "control.json"
+            self.config["control_path"] = str(path)
+            self.write_control(path, enabled=False)
+            self.assertFalse(guard.operator_control_enabled(self.config))
+
+            self.write_control(path, enabled=True)
+            self.assertTrue(guard.operator_control_enabled(self.config))
+
+    def test_configured_but_missing_control_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            self.config["control_path"] = str(Path(temporary) / "missing.json")
+            with self.assertRaisesRegex(guard.GuardError, "operator_control_missing"):
+                guard.operator_control_enabled(self.config)
+
+    def test_control_for_another_site_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "control.json"
+            self.config["control_path"] = str(path)
+            self.write_control(path, enabled=True, site_id="campus")
+            with self.assertRaisesRegex(guard.GuardError, "operator_control_site_mismatch"):
+                guard.operator_control_enabled(self.config)
+
+    def test_disabled_control_returns_before_loading_token(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            control_path = root / "control.json"
+            config_path = root / "config.json"
+            self.write_control(control_path, enabled=False)
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "enabled": True,
+                        "site_id": "aliyun",
+                        "control_path": str(control_path),
+                        "env_path": str(root / "missing.env"),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = type(
+                "Args",
+                (),
+                {
+                    "config": str(config_path),
+                    "state": "",
+                    "dry_run": False,
+                    "install_token_stdin": False,
+                },
+            )()
+
+            self.assertEqual(0, guard.run(args))
+
+
 class RunCycleTest(unittest.TestCase):
     def setUp(self) -> None:
         self.config = dict(guard.DEFAULT_CONFIG)
