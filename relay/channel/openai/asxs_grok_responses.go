@@ -16,6 +16,13 @@ import (
 )
 
 const asxSGrokToolNamespaceMapKey = "asxs_grok_tool_namespace_map"
+const asxSGrokToolFallbackModelKey = "asxs_grok_tool_fallback_model"
+
+// ASXS currently exposes Grok 4.6 as a Responses-compatible text model, but
+// it does not emit function_call items when tools are supplied. Grok 4.5 on
+// the same upstream does emit standard function_call items, so tool-bearing
+// requests must use it to keep the Codex tool loop executable.
+const asxSGrokToolFallbackModel = "grok-4.5"
 
 type asxsGrokToolRef struct {
 	Namespace string
@@ -80,6 +87,12 @@ func normalizeASXSGrokResponsesRequest(c *gin.Context, info *relaycommon.RelayIn
 	if err != nil {
 		return request, err
 	}
+	if shouldFallbackASXSGrokToolModel(info, request, hasAdditionalTools) {
+		request.Model = asxSGrokToolFallbackModel
+		if c != nil {
+			c.Set(asxSGrokToolFallbackModelKey, asxSGrokToolFallbackModel)
+		}
+	}
 	if hasAdditionalTools {
 		request.Input = input
 		tools = append(tools, additionalTools...)
@@ -143,6 +156,39 @@ func normalizeASXSGrokResponsesRequest(c *gin.Context, info *relaycommon.RelayIn
 		c.Set(asxSGrokToolNamespaceMapKey, refs)
 	}
 	return request, nil
+}
+
+func shouldFallbackASXSGrokToolModel(info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest, hasAdditionalTools bool) bool {
+	if info == nil || info.ChannelMeta == nil || !strings.EqualFold(strings.TrimSpace(info.UpstreamModelName), "grok-4.6") {
+		return false
+	}
+	if hasAdditionalTools || hasASXSGrokToolDefinitions(request.Tools) {
+		return true
+	}
+	return hasASXSGrokToolHistory(request.Input)
+}
+
+func hasASXSGrokToolDefinitions(raw []byte) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) && !bytes.Equal(trimmed, []byte("[]"))
+}
+
+func hasASXSGrokToolHistory(raw []byte) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '[' {
+		return false
+	}
+	var items []map[string]any
+	if err := common.Unmarshal(trimmed, &items); err != nil {
+		return false
+	}
+	for _, item := range items {
+		switch common.Interface2String(item["type"]) {
+		case "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "additional_tools":
+			return true
+		}
+	}
+	return false
 }
 
 func parseASXSGrokTools(raw []byte) ([]map[string]any, error) {

@@ -63,6 +63,56 @@ func TestNormalizeASXSGrokResponsesLiteAdditionalTools(t *testing.T) {
 	require.Equal(t, asxsGrokToolRef{Namespace: "mcp__exa", Name: "exec"}, refs["mcp__exa__exec"])
 }
 
+func TestNormalizeASXSGrokResponsesFallsBackForGrok46ToolRequests(t *testing.T) {
+	c, _ := gin.CreateTestContext(nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{
+		ChannelId:         25,
+		UpstreamModelName: "grok-4.6",
+	}}
+	request := dto.OpenAIResponsesRequest{
+		Model: "grok-4.6",
+		Tools: []byte(`[{"type":"function","name":"shell__exec","description":"run","parameters":{"type":"object"}}]`),
+	}
+
+	normalized, err := normalizeASXSGrokResponsesRequest(c, info, request)
+	require.NoError(t, err)
+	require.Equal(t, asxSGrokToolFallbackModel, normalized.Model)
+	fallback, ok := c.Get(asxSGrokToolFallbackModelKey)
+	require.True(t, ok)
+	require.Equal(t, asxSGrokToolFallbackModel, fallback)
+}
+
+func TestNormalizeASXSGrokResponsesKeepsGrok46ForTextOnlyRequests(t *testing.T) {
+	c, _ := gin.CreateTestContext(nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{
+		ChannelId:         25,
+		UpstreamModelName: "grok-4.6",
+	}}
+	request := dto.OpenAIResponsesRequest{Model: "grok-4.6", Input: []byte(`[{"role":"user","content":"hello"}]`)}
+
+	normalized, err := normalizeASXSGrokResponsesRequest(c, info, request)
+	require.NoError(t, err)
+	require.Equal(t, "grok-4.6", normalized.Model)
+	_, ok := c.Get(asxSGrokToolFallbackModelKey)
+	require.False(t, ok)
+}
+
+func TestNormalizeASXSGrokResponsesFallsBackForToolHistoryWithoutDefinitions(t *testing.T) {
+	c, _ := gin.CreateTestContext(nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{
+		ChannelId:         25,
+		UpstreamModelName: "grok-4.6",
+	}}
+	request := dto.OpenAIResponsesRequest{
+		Model: "grok-4.6",
+		Input: []byte(`[{"type":"function_call_output","call_id":"call_1","output":"ok"}]`),
+	}
+
+	normalized, err := normalizeASXSGrokResponsesRequest(c, info, request)
+	require.NoError(t, err)
+	require.Equal(t, asxSGrokToolFallbackModel, normalized.Model)
+}
+
 func TestNormalizeASXSGrokResponsesToolsOnlyForTarget(t *testing.T) {
 	c, _ := gin.CreateTestContext(nil)
 	request := dto.OpenAIResponsesRequest{
