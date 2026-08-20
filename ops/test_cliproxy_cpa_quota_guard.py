@@ -190,6 +190,7 @@ class OptionOverrideTest(unittest.TestCase):
     class StaticDB:
         def psql(self, sql: str, capture: bool = False) -> str:
             return "\n".join([
+                "cliproxy_cpa_quota_guard.daily_budget_unrestricted_percent\t10",
                 "cliproxy_cpa_quota_guard.daily_budget_model_reserve_percent\t5",
                 'cliproxy_cpa_quota_guard.daily_budget_model_reserve_models\t["gpt-5.6-luna", ""]',
                 'cliproxy_cpa_quota_guard.model_reserve_topup\t{"percent":5,"day":"2026-08-18","grant_id":"test-grant"}',
@@ -198,6 +199,7 @@ class OptionOverrideTest(unittest.TestCase):
     def test_loads_model_reserve_percent_and_json_list(self) -> None:
         overrides = guard.load_option_overrides(self.StaticDB())
 
+        self.assertEqual(10.0, overrides["daily_budget_unrestricted_percent"])
         self.assertEqual(5.0, overrides["daily_budget_model_reserve_percent"])
         self.assertEqual(["gpt-5.6-luna"], overrides["daily_budget_model_reserve_models"])
         self.assertEqual(
@@ -1010,6 +1012,13 @@ class DynamicDailyBudgetTest(unittest.TestCase):
         })
         self.now = 1_800_000_000
 
+    def configure_fixed_buckets(self, unrestricted_percent: float = 10.0) -> None:
+        self.config.update({
+            "daily_budget_unrestricted_percent": unrestricted_percent,
+            "daily_budget_model_reserve_percent": 5.0,
+            "daily_budget_model_reserve_models": ["gpt-5.6-luna"],
+        })
+
     def test_daily_budget_reserves_fifteen_percent(self) -> None:
         state: dict = {}
         result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
@@ -1017,8 +1026,133 @@ class DynamicDailyBudgetTest(unittest.TestCase):
         budget = result["dynamic_daily_budget"]
         self.assertTrue(result["quota_ok"])
         self.assertAlmostEqual(85.0 / 7.0, budget["daily_limit_percent"], places=6)
+        self.assertEqual("dynamic", budget["daily_budget_limit_mode"])
+        self.assertEqual(0.0, budget["daily_budget_unrestricted_percent"])
         self.assertAlmostEqual(15.0, budget["reserve_percent"], places=6)
         self.assertAlmostEqual(85.0 / 7.0, result["usable_balance_units"], places=6)
+
+    def test_fixed_policy_creates_ten_percent_ordinary_plus_five_percent_luna(self) -> None:
+        self.configure_fixed_buckets()
+        state: dict = {}
+
+        result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+
+        budget = result["dynamic_daily_budget"]
+        self.assertTrue(result["quota_ok"])
+        self.assertEqual("fixed_unrestricted", budget["daily_budget_limit_mode"])
+        self.assertEqual(10.0, budget["daily_budget_unrestricted_percent"])
+        self.assertEqual(10.0, budget["daily_limit_percent"])
+        self.assertEqual(10.0, budget["normal_daily_budget_remaining_percent"])
+        self.assertEqual(5.0, budget["model_reserve_remaining_percent"])
+        self.assertEqual(15.0, budget["daily_budget_total_percent"])
+        self.assertEqual(15.0, budget["daily_budget_remaining_total_percent"])
+
+    def test_fixed_ordinary_exhaustion_leaves_luna_reserve_routable(self) -> None:
+        self.configure_fixed_buckets()
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+
+        result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(90.0), state, self.now + 60)
+
+        budget = result["dynamic_daily_budget"]
+        self.assertTrue(result["quota_ok"])
+        self.assertEqual("dynamic_daily_budget_model_reserve_active", result["reason"])
+        self.assertEqual(["gpt-5.6-luna"], result["quota_model_allowlist"])
+        self.assertEqual(0.0, budget["normal_daily_budget_remaining_percent"])
+        self.assertEqual(5.0, budget["model_reserve_remaining_percent"])
+        self.assertEqual(5.0, budget["daily_budget_remaining_total_percent"])
+
+    def test_fixed_luna_reserve_exhaustion_blocks_all_models(self) -> None:
+        self.configure_fixed_buckets()
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+
+        result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(85.0), state, self.now + 60)
+
+        budget = result["dynamic_daily_budget"]
+        self.assertFalse(result["quota_ok"])
+        self.assertEqual("dynamic_daily_budget_exhausted", result["reason"])
+        self.assertNotIn("quota_model_allowlist", result)
+        self.assertEqual(0.0, budget["daily_budget_remaining_total_percent"])
+
+    def test_fixed_buckets_restore_on_new_guard_day(self) -> None:
+        self.configure_fixed_buckets()
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+        exhausted = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(85.0), state, self.now + 60)
+
+        restored = guard.apply_dynamic_daily_budget(
+            self.config,
+            dynamic_budget_result(85.0),
+            state,
+            self.now + 86_400,
+        )
+
+        budget = restored["dynamic_daily_budget"]
+        self.assertFalse(exhausted["quota_ok"])
+        self.assertTrue(restored["quota_ok"])
+        self.assertEqual(10.0, budget["normal_daily_budget_remaining_percent"])
+        self.assertEqual(5.0, budget["model_reserve_remaining_percent"])
+        self.assertEqual(15.0, budget["daily_budget_remaining_total_percent"])
+
+    def test_switch_to_fixed_policy_preserves_same_day_consumption(self) -> None:
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+        self.configure_fixed_buckets()
+
+        result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(93.0), state, self.now + 60)
+
+        budget = result["dynamic_daily_budget"]
+        self.assertEqual("daily_budget_policy_changed", budget["last_replan_reason"])
+        self.assertEqual(100.0, budget["baseline_remaining_percent"])
+        self.assertEqual(7.0, budget["consumed_today_percent"])
+        self.assertEqual(3.0, budget["normal_daily_budget_remaining_percent"])
+        self.assertEqual(5.0, budget["model_reserve_remaining_percent"])
+        self.assertEqual(8.0, budget["daily_budget_remaining_total_percent"])
+
+    def test_legacy_state_switch_to_fixed_policy_preserves_same_day_consumption(self) -> None:
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+        for key in (
+            "budget_policy_signature",
+            "daily_budget_limit_mode",
+            "daily_budget_unrestricted_percent",
+        ):
+            state["dynamic_daily_budget"].pop(key, None)
+        self.configure_fixed_buckets()
+
+        result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(93.0), state, self.now + 60)
+
+        budget = result["dynamic_daily_budget"]
+        self.assertEqual("daily_budget_policy_changed", budget["last_replan_reason"])
+        self.assertEqual(100.0, budget["baseline_remaining_percent"])
+        self.assertEqual(7.0, budget["consumed_today_percent"])
+        self.assertEqual(3.0, budget["normal_daily_budget_remaining_percent"])
+        self.assertEqual(5.0, budget["model_reserve_remaining_percent"])
+
+    def test_larger_fixed_policy_reopens_only_unconsumed_same_day_amount(self) -> None:
+        state: dict = {}
+        guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(100.0), state, self.now)
+        exhausted = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(87.0), state, self.now + 60)
+        self.configure_fixed_buckets(20.0)
+
+        result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(87.0), state, self.now + 120)
+
+        budget = result["dynamic_daily_budget"]
+        self.assertFalse(exhausted["quota_ok"])
+        self.assertTrue(result["quota_ok"])
+        self.assertEqual(13.0, budget["consumed_today_percent"])
+        self.assertEqual(7.0, budget["normal_daily_budget_remaining_percent"])
+
+    def test_fixed_policy_still_honors_real_upstream_reserve(self) -> None:
+        self.configure_fixed_buckets()
+        state: dict = {}
+
+        result = guard.apply_dynamic_daily_budget(self.config, dynamic_budget_result(15.0), state, self.now)
+
+        self.assertFalse(result["quota_ok"])
+        self.assertEqual("protected_reserve_reached", result["reason"])
+        self.assertNotIn("quota_model_allowlist", result)
 
     def test_daily_budget_exhaustion_disables_channel(self) -> None:
         state: dict = {}
