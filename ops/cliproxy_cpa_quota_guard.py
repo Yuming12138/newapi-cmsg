@@ -54,7 +54,6 @@ DEFAULT_CONFIG = {
     "management_auth_failure_backoff_sec": 30 * 60,
     "balance_units_per_percent": 1.0,
     "dynamic_daily_budget_enabled": False,
-    "daily_budget_unrestricted_percent": 0.0,
     "daily_budget_model_reserve_percent": 0.0,
     "daily_budget_model_reserve_models": [],
     # A top-up grant is intentionally day- and grant-id-scoped. It adds a
@@ -107,7 +106,6 @@ OPTION_CONFIG_MAP = {
     "cliproxy_cpa_quota_guard.min_remaining_percent_5h": ("min_remaining_percent_5h", "float"),
     "cliproxy_cpa_quota_guard.min_remaining_percent_7d": ("min_remaining_percent_7d", "float"),
     "cliproxy_cpa_quota_guard.dynamic_daily_budget_enabled": ("dynamic_daily_budget_enabled", "bool"),
-    "cliproxy_cpa_quota_guard.daily_budget_unrestricted_percent": ("daily_budget_unrestricted_percent", "float"),
     "cliproxy_cpa_quota_guard.daily_budget_model_reserve_percent": ("daily_budget_model_reserve_percent", "float"),
     "cliproxy_cpa_quota_guard.daily_budget_model_reserve_models": ("daily_budget_model_reserve_models", "json_list"),
     "cliproxy_cpa_quota_guard.model_reserve_topup": ("model_reserve_topup", "json"),
@@ -1792,33 +1790,6 @@ def protected_dynamic_daily_limit(account_plans: list[dict[str, Any]], reserve_p
     )
 
 
-def daily_budget_limit_policy(
-    config: dict[str, Any],
-    account_plans: list[dict[str, Any]],
-    reserve_per_account: float,
-) -> dict[str, Any]:
-    """Select the ordinary daily bucket without changing consumption history.
-
-    A positive fixed percentage replaces the rolling dynamic calculation. Zero
-    intentionally preserves the legacy dynamic policy so existing deployments
-    remain backward compatible.
-    """
-    unrestricted_percent = clamp_percent(config.get("daily_budget_unrestricted_percent"), 0.0)
-    if unrestricted_percent > 0.000001:
-        mode = "fixed_unrestricted"
-        daily_limit = unrestricted_percent
-    else:
-        mode = "dynamic"
-        daily_limit = protected_dynamic_daily_limit(account_plans, reserve_per_account)
-    signature_payload = f"{mode}:{unrestricted_percent:.6f}"
-    return {
-        "mode": mode,
-        "daily_limit_percent": max(0.0, daily_limit),
-        "daily_budget_unrestricted_percent": unrestricted_percent,
-        "signature": hashlib.sha256(signature_payload.encode("utf-8")).hexdigest()[:16],
-    }
-
-
 def reset_credit_timestamp(value: Any) -> int | None:
     return timestamp_value(value)
 
@@ -2237,13 +2208,25 @@ def apply_dynamic_daily_budget(
     reserve_5h_per_account = clamp_percent(config.get("min_remaining_percent_5h"), 15.0)
     reserve_total = reserve_per_account * int(snapshot["account_count"])
     current_remaining = float(snapshot["remaining_percent"])
-    budget_policy = daily_budget_limit_policy(config, snapshot["account_plans"], reserve_per_account)
+    configured_model_reserve_percent = clamp_percent(config.get("daily_budget_model_reserve_percent"), 0.0)
+    configured_reserve_models = config.get("daily_budget_model_reserve_models")
+    if not isinstance(configured_reserve_models, list):
+        configured_reserve_models = []
+    model_reserve_models = list(dict.fromkeys(
+        str(model).strip() for model in configured_reserve_models if str(model).strip()
+    ))
+    partition_signature_payload = "|".join([
+        "carved-v1",
+        f"{configured_model_reserve_percent:.6f}",
+        *model_reserve_models,
+    ])
+    partition_signature = hashlib.sha256(partition_signature_payload.encode("utf-8")).hexdigest()[:16]
 
     previous_day = str(budget_state.get("day") or "")
     previous_signature = str(budget_state.get("account_signature") or "")
     previous_weekly_signature = str(budget_state.get("weekly_signature") or "")
     previous_planning_signature = str(budget_state.get("planning_signature") or "")
-    previous_budget_policy_signature = str(budget_state.get("budget_policy_signature") or "")
+    previous_partition_signature = str(budget_state.get("daily_budget_partition_signature") or "")
     previous_reset_at = int(budget_state.get("reset_at") or 0)
     previous_baseline = number(budget_state.get("baseline_remaining_percent"))
     low_watermark = number(budget_state.get("minimum_remaining_percent_seen"))
@@ -2291,13 +2274,6 @@ def apply_dynamic_daily_budget(
     elif not previous_planning_signature:
         should_reset = True
         reset_reason = "planning_metadata_missing"
-    elif previous_budget_policy_signature != budget_policy["signature"]:
-        should_replan = True
-        replan_reason = (
-            "daily_budget_policy_metadata_missing"
-            if not previous_budget_policy_signature and budget_policy["mode"] == "dynamic"
-            else "daily_budget_policy_changed"
-        )
     else:
         candidate_reasons: list[str] = []
         if previous_signature and previous_signature != snapshot["account_signature"]:
@@ -2355,7 +2331,7 @@ def apply_dynamic_daily_budget(
 
     if should_reset:
         baseline = current_remaining
-        daily_limit = float(budget_policy["daily_limit_percent"])
+        daily_limit = protected_dynamic_daily_limit(snapshot["account_plans"], reserve_per_account)
         budget_state = {
             "day": day_key,
             "account_signature": snapshot["account_signature"],
@@ -2364,11 +2340,6 @@ def apply_dynamic_daily_budget(
             "reset_at": int(snapshot["weekly_reset_at"]),
             "baseline_remaining_percent": round(baseline, 6),
             "daily_limit_percent": round(daily_limit, 6),
-            "daily_budget_limit_mode": budget_policy["mode"],
-            "daily_budget_unrestricted_percent": round(
-                float(budget_policy["daily_budget_unrestricted_percent"]), 6
-            ),
-            "budget_policy_signature": budget_policy["signature"],
             "baseline_account_plans": snapshot["account_plans"],
             "minimum_remaining_percent_seen": round(current_remaining, 6),
             "daily_exhausted": False,
@@ -2378,34 +2349,49 @@ def apply_dynamic_daily_budget(
         }
         low_watermark = current_remaining
     elif should_replan:
-        daily_limit = float(budget_policy["daily_limit_percent"])
+        daily_limit = protected_dynamic_daily_limit(snapshot["account_plans"], reserve_per_account)
         budget_state.update({
             "account_signature": snapshot["account_signature"],
             "weekly_signature": snapshot["weekly_signature"],
             "planning_signature": snapshot["planning_signature"],
             "reset_at": int(snapshot["weekly_reset_at"]),
             "daily_limit_percent": round(daily_limit, 6),
-            "daily_budget_limit_mode": budget_policy["mode"],
-            "daily_budget_unrestricted_percent": round(
-                float(budget_policy["daily_budget_unrestricted_percent"]), 6
-            ),
-            "budget_policy_signature": budget_policy["signature"],
             "baseline_account_plans": snapshot["account_plans"],
             "last_replan_reason": replan_reason,
             "last_replan_at": now,
         })
         budget_state.pop("reset_candidate", None)
-        if replan_reason == "daily_budget_policy_changed":
-            # Re-evaluate exhaustion against the new limit while preserving
-            # the existing baseline and therefore all same-day consumption.
-            budget_state.pop("daily_exhausted", None)
-            budget_state.pop("daily_exhausted_at", None)
+
+    partition_changed = previous_partition_signature != partition_signature
+    if not should_reset and partition_changed:
+        # Partition changes only redistribute the already planned daily total.
+        # Preserve the baseline/low watermark and re-evaluate ordinary-bucket
+        # exhaustion against the new split.
+        budget_state.pop("daily_exhausted", None)
+        budget_state.pop("daily_exhausted_at", None)
+        budget_state["last_daily_budget_partition_change_at"] = now
+        budget_state["last_daily_budget_partition_change_reason"] = (
+            "partition_metadata_missing"
+            if not previous_partition_signature
+            else "partition_config_changed"
+        )
+    budget_state.update({
+        "daily_budget_partition_mode": "carved_model_reserve",
+        "daily_budget_partition_signature": partition_signature,
+        "configured_model_reserve_percent": round(configured_model_reserve_percent, 6),
+    })
 
     baseline = float(number(budget_state.get("baseline_remaining_percent")) or current_remaining)
     daily_limit = max(0.0, float(number(budget_state.get("daily_limit_percent")) or 0.0))
+    model_reserve_percent = (
+        min(configured_model_reserve_percent, daily_limit)
+        if model_reserve_models
+        else 0.0
+    )
+    normal_daily_limit = max(0.0, daily_limit - model_reserve_percent)
     consumption_low_watermark = min(float(low_watermark), current_remaining)
     consumed_today = max(0.0, baseline - consumption_low_watermark)
-    calculated_remaining_today = max(0.0, daily_limit - consumed_today)
+    calculated_remaining_today = max(0.0, normal_daily_limit - consumed_today)
     minimum_remaining_7d = float(snapshot["minimum_remaining_percent_7d"])
     minimum_remaining_5h = number(snapshot.get("minimum_remaining_percent_5h"))
     hard_reserve_available = minimum_remaining_7d > reserve_per_account + 0.000001
@@ -2421,14 +2407,7 @@ def apply_dynamic_daily_budget(
     original_quota_ok = bool(result.get("quota_ok", result.get("within_share")))
     original_usable_balance = max(0.0, float(number(result.get("usable_balance_units")) or 0.0))
     original_remaining_share = max(0.0, float(number(result.get("remaining_share_percent")) or 0.0))
-    model_reserve_percent = clamp_percent(config.get("daily_budget_model_reserve_percent"), 0.0)
-    configured_reserve_models = config.get("daily_budget_model_reserve_models")
-    if not isinstance(configured_reserve_models, list):
-        configured_reserve_models = []
-    model_reserve_models = list(dict.fromkeys(
-        str(model).strip() for model in configured_reserve_models if str(model).strip()
-    ))
-    model_reserve_consumed = max(0.0, consumed_today - daily_limit)
+    model_reserve_consumed = max(0.0, consumed_today - normal_daily_limit)
     model_reserve_remaining = max(0.0, model_reserve_percent - model_reserve_consumed)
 
     topup_percent, topup_grant_key = model_reserve_topup_config(config, day_key, now)
@@ -2448,7 +2427,7 @@ def apply_dynamic_daily_budget(
         topup_grant_key = ""
     model_reserve_configured = (model_reserve_percent + topup_percent) > 0.000001 and bool(model_reserve_models)
     model_reserve_remaining_total = model_reserve_remaining + topup_remaining
-    daily_budget_total = max(0.0, daily_limit) + model_reserve_percent + topup_percent
+    daily_budget_total = max(0.0, daily_limit) + topup_percent
     daily_budget_remaining_total = max(0.0, remaining_today) + model_reserve_remaining_total
     current_cycle_signature = str(snapshot.get("planning_signature") or "").strip()
     force_unlock_active = (
@@ -2494,12 +2473,15 @@ def apply_dynamic_daily_budget(
         "next_daily_budget_reset_at": next_daily_reset_at,
         "daily_exhausted": daily_exhausted,
         "quota_ok": quota_ok,
-        # The normal daily bucket and the model-only bucket are deliberately
-        # tracked separately. The latter is additive: it is not part of the
-        # normal bucket and must remain available when that bucket reaches 0.
+        # The base model reserve is carved out of the planned daily total; only
+        # an explicit administrative top-up may increase that total. This keeps
+        # Luna available after the ordinary bucket reaches 0 without granting
+        # extra quota every day.
         "daily_budget_total_percent": round(daily_budget_total, 6),
         "daily_budget_remaining_total_percent": round(daily_budget_remaining_total, 6),
+        "normal_daily_budget_percent": round(normal_daily_limit, 6),
         "normal_daily_budget_remaining_percent": round(remaining_today, 6),
+        "model_reserve_configured_percent": round(configured_model_reserve_percent, 6),
         "model_reserve_percent": round(model_reserve_percent, 6),
         "model_reserve_consumed_percent": round(model_reserve_consumed, 6),
         "model_reserve_remaining_percent": round(model_reserve_remaining_total, 6),
