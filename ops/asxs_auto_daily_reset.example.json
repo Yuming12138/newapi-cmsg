@@ -8,6 +8,7 @@
   "env_path": "/opt/new-api/ops/asxs_auto_daily_reset.env",
   "state_path": "/opt/new-api/ops/asxs_auto_daily_reset_state.json",
   "lock_path": "/run/lock/new-api-asxs-auto-daily-reset.lock",
+  "control_path": "/opt/new-api/data/ops-control/asxs-auto-daily-reset.json",
   "timeout_sec": 20,
   "minimum_usage_percent": 99.0,
   "minimum_remaining_days_after_reset": 2,

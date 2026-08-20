@@ -1,4 +1,7 @@
 {
+  "Failed to update ASXS auto reset": "Failed to update ASXS auto reset",
+  "The public Aliyun node will resume checking once per minute and may consume an eligible ASXS reset when usage reaches the configured threshold.": "The public Aliyun node will resume checking once per minute and may consume an eligible ASXS reset when usage reaches the configured threshold.",
+  "The public Aliyun node will stop consuming ASXS subscription resets from the next timer run. Existing channel routing is not changed.": "The public Aliyun node will stop consuming ASXS subscription resets from the next timer run. Existing channel routing is not changed.",
   "Failed to delete users": "Failed to delete users",
   "Failed to update quota protection": "Failed to update quota protection",
   "This temporarily bypasses only the New API daily budget and protected reserve for channel 12. It does not consume a reset credit or bypass actual CPA quota exhaustion or account unavailability.": "This temporarily bypasses only the New API daily budget and protected reserve for channel 12. It does not consume a reset credit or bypass actual CPA quota exhaustion or account unavailability.",

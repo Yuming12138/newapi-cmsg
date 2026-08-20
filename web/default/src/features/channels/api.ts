@@ -88,6 +88,34 @@ export type CodexCredentialRefreshResponse = {
   }
 }
 
+export type ASXSAutoDailyResetControl = {
+  configured: boolean
+  site_id: 'aliyun'
+  enabled: boolean
+  updated_at: number
+}
+
+export type ASXSAutoDailyResetControlResponse = {
+  success: boolean
+  message?: string
+  data?: ASXSAutoDailyResetControl
+}
+
+export async function getASXSAutoDailyResetControl() {
+  const res = await api.get<ASXSAutoDailyResetControlResponse>(
+    '/api/option/asxs_auto_daily_reset'
+  )
+  return res.data
+}
+
+export async function updateASXSAutoDailyResetControl(enabled: boolean) {
+  const res = await api.put<ASXSAutoDailyResetControlResponse>(
+    '/api/option/asxs_auto_daily_reset',
+    { enabled }
+  )
+  return res.data
+}
+
 export type CliproxyCPADispatchAuditError = {
   code?: string
   message?: string

@@ -188,6 +188,8 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			optionRoute.GET("/", controller.GetOptions)
 			optionRoute.PUT("/", controller.UpdateOption)
+			optionRoute.GET("/asxs_auto_daily_reset", controller.GetASXSAutoDailyResetControl)
+			optionRoute.PUT("/asxs_auto_daily_reset", middleware.CriticalRateLimit(), controller.UpdateASXSAutoDailyResetControl)
 			optionRoute.GET("/channel_affinity_cache", controller.GetChannelAffinityCacheStats)
 			optionRoute.DELETE("/channel_affinity_cache", controller.ClearChannelAffinityCache)
 			optionRoute.POST("/rest_model_ratio", controller.ResetModelRatio)
