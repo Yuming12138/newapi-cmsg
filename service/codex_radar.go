@@ -21,8 +21,8 @@ const (
 	codexRadarSourceURL      = "https://codexradar.com/"
 	codexRadarCacheTTL       = 10 * time.Minute
 	codexRadarStaleTTL       = 24 * time.Hour
-	codexRadarHTTPTimeout    = 5 * time.Second
-	codexRadarMaxBodyBytes   = 2 << 20
+	codexRadarHTTPTimeout    = 15 * time.Second
+	codexRadarMaxBodyBytes   = 4 << 20
 )
 
 type CodexRadarMetric struct {
