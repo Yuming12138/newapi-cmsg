@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -132,6 +133,33 @@ func TestCodexRadarProviderFiltersAndCachesMetrics(t *testing.T) {
 	}
 	if got := requestCount.Load(); got != 1 {
 		t.Fatalf("upstream requests = %d, want 1", got)
+	}
+}
+
+func TestCodexRadarProviderAcceptsExpandedPayload(t *testing.T) {
+	payload := strings.Replace(
+		codexRadarTestPayload,
+		"{",
+		`{"padding":"`+strings.Repeat("x", (2<<20)+1)+`",`,
+		1,
+	)
+	if len(payload) <= 2<<20 || len(payload) > codexRadarMaxBodyBytes {
+		t.Fatalf("expanded payload size = %d, want above previous limit and within current limit", len(payload))
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+	t.Cleanup(server.Close)
+
+	provider := newCodexRadarProvider(server.URL, server.Client())
+	overview, err := provider.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if len(overview.Metrics) != 5 {
+		t.Fatalf("metrics count = %d, want 5", len(overview.Metrics))
 	}
 }
 
