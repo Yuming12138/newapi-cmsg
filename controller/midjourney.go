@@ -177,9 +177,31 @@ func UpdateMidjourneyTaskBulk() {
 				if err != nil {
 					logger.LogError(ctx, "UpdateMidjourneyTask task error: "+err.Error())
 				} else if won && shouldReturnQuota {
-					err = model.IncreaseUserQuota(task.UserId, task.Quota, false)
-					if err != nil {
-						logger.LogError(ctx, "fail to increase user quota: "+err.Error())
+					// Use the source captured at submission time whenever it is
+					// available. This prevents a later role change from turning an
+					// administrator's metered-only request into a wallet refund (or
+					// vice versa). Empty source means an old row; retain the legacy
+					// role-based fallback for those rows and fail closed on lookup
+					// errors.
+					refundWallet := false
+					switch task.BillingSource {
+					case service.BillingSourceMeteredOnly, service.BillingSourceSubscription:
+						// Neither source charged the legacy MJ wallet path.
+					case service.BillingSourceWallet:
+						refundWallet = true
+					default:
+						role, roleErr := model.GetUserRole(task.UserId)
+						if roleErr != nil {
+							logger.LogError(ctx, fmt.Sprintf("skip Midjourney refund for task %s: user role lookup failed: %v", task.MjId, roleErr))
+						} else {
+							refundWallet = role < common.RoleAdminUser
+						}
+					}
+					if refundWallet {
+						err = model.IncreaseUserQuota(task.UserId, task.Quota, false)
+						if err != nil {
+							logger.LogError(ctx, "fail to increase user quota: "+err.Error())
+						}
 					}
 					model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
 						UserId:    task.UserId,
@@ -188,10 +210,16 @@ func UpdateMidjourneyTaskBulk() {
 						ChannelId: task.ChannelId,
 						ModelName: service.CovertMjpActionToModelName(task.Action),
 						Quota:     task.Quota,
-						Other: map[string]interface{}{
-							"task_id": task.MjId,
-							"reason":  "构图失败",
-						},
+						Other: func() map[string]interface{} {
+							other := map[string]interface{}{
+								"task_id": task.MjId,
+								"reason":  "构图失败",
+							}
+							if task.BillingSource != "" {
+								other["billing_source"] = task.BillingSource
+							}
+							return other
+						}(),
 					})
 				}
 			}

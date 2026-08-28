@@ -196,6 +196,10 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 	}
 
 	info.InitChannelMeta(c)
+	adminUnlimited := common.GetContextKeyBool(c, constant.ContextKeyAdminAPIUnlimited)
+	if adminUnlimited {
+		info.BillingSource = service.BillingSourceMeteredOnly
+	}
 
 	if swapFaceRequest.SourceBase64 == "" || swapFaceRequest.TargetBase64 == "" {
 		return service.MidjourneyErrorWrapper(constant.MjRequestError, "sour_base64_and_target_base64_is_required")
@@ -210,15 +214,18 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 		}
 	}
 
-	userQuota, err := model.GetUserQuota(info.UserId, false)
-	if err != nil {
-		return &dto.MidjourneyResponse{
-			Code:        4,
-			Description: err.Error(),
+	userQuota := 0
+	if !adminUnlimited {
+		userQuota, err = model.GetUserQuota(info.UserId, false)
+		if err != nil {
+			return &dto.MidjourneyResponse{
+				Code:        4,
+				Description: err.Error(),
+			}
 		}
 	}
 
-	if userQuota-priceData.Quota < 0 {
+	if !adminUnlimited && userQuota-priceData.Quota < 0 {
 		return &dto.MidjourneyResponse{
 			Code:        4,
 			Description: "quota_not_enough",
@@ -274,6 +281,12 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 		FailReason:  "",
 		ChannelId:   c.GetInt("channel_id"),
 		Quota:       priceData.Quota,
+		BillingSource: func() string {
+			if info.BillingSource != "" {
+				return info.BillingSource
+			}
+			return service.BillingSourceWallet
+		}(),
 	}
 	err = midjourneyTask.Insert()
 	if err != nil {
@@ -302,7 +315,7 @@ func RelayMidjourneyTaskImageSeed(c *gin.Context) *dto.MidjourneyResponse {
 	if err != nil {
 		return service.MidjourneyErrorWrapper(constant.MjRequestError, "get_channel_info_failed")
 	}
-	if channel.Status != common.ChannelStatusEnabled {
+	if channel.Status != common.ChannelStatusEnabled && !(common.GetContextKeyBool(c, constant.ContextKeyAdminAPIUnlimited) && model.IsChannelAutoDisabledByBudgetGuard(channel)) {
 		return service.MidjourneyErrorWrapper(constant.MjRequestError, "该任务所属渠道已被禁用")
 	}
 	c.Set("channel_id", originTask.ChannelId)
@@ -390,6 +403,10 @@ func RelayMidjourneyTask(c *gin.Context, relayMode int) *dto.MidjourneyResponse 
 }
 
 func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dto.MidjourneyResponse {
+	adminUnlimited := common.GetContextKeyBool(c, constant.ContextKeyAdminAPIUnlimited)
+	if adminUnlimited {
+		relayInfo.BillingSource = service.BillingSourceMeteredOnly
+	}
 	consumeQuota := true
 	var midjRequest dto.MidjourneyRequest
 	err := common.UnmarshalBodyReusable(c, &midjRequest)
@@ -476,7 +493,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 			if err != nil {
 				return service.MidjourneyErrorWrapper(constant.MjRequestError, "get_channel_info_failed")
 			}
-			if channel.Status != common.ChannelStatusEnabled {
+			if channel.Status != common.ChannelStatusEnabled && !(adminUnlimited && model.IsChannelAutoDisabledByBudgetGuard(channel)) {
 				return service.MidjourneyErrorWrapper(constant.MjRequestError, "该任务所属渠道已被禁用")
 			}
 			c.Set("base_url", channel.GetBaseURL())
@@ -517,15 +534,18 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		}
 	}
 
-	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
-	if err != nil {
-		return &dto.MidjourneyResponse{
-			Code:        4,
-			Description: err.Error(),
+	userQuota := 0
+	if !adminUnlimited {
+		userQuota, err = model.GetUserQuota(relayInfo.UserId, false)
+		if err != nil {
+			return &dto.MidjourneyResponse{
+				Code:        4,
+				Description: err.Error(),
+			}
 		}
 	}
 
-	if consumeQuota && userQuota-priceData.Quota < 0 {
+	if consumeQuota && !adminUnlimited && userQuota-priceData.Quota < 0 {
 		return &dto.MidjourneyResponse{
 			Code:        4,
 			Description: "quota_not_enough",
@@ -587,6 +607,12 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		FailReason:  "",
 		ChannelId:   c.GetInt("channel_id"),
 		Quota:       priceData.Quota,
+		BillingSource: func() string {
+			if relayInfo.BillingSource != "" {
+				return relayInfo.BillingSource
+			}
+			return service.BillingSourceWallet
+		}(),
 	}
 	if midjResponse.Code == 3 {
 		//无实例账号自动禁用渠道（No available account instance）

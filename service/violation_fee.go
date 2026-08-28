@@ -105,6 +105,10 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 	if ctx == nil || relayInfo == nil || apiErr == nil {
 		return false
 	}
+	// Keep violation-fee accounting consistent with the administrator API
+	// policy.  The fee is still written to usage/log counters, while the
+	// legacy billing sink is prevented from changing any balance.
+	ensureMeteredOnlyFunding(ctx, relayInfo)
 	//if relayInfo.IsPlayground {
 	//	return false
 	//}

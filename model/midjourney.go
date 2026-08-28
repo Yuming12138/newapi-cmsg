@@ -21,8 +21,13 @@ type Midjourney struct {
 	FailReason  string `json:"fail_reason"`
 	ChannelId   int    `json:"channel_id"`
 	Quota       int    `json:"quota"`
-	Buttons     string `json:"buttons"`
-	Properties  string `json:"properties"`
+	// BillingSource is persisted at submission time so asynchronous failure
+	// handling does not infer whether a wallet was charged from the user's
+	// current role (which may have changed since submission). It is internal
+	// metadata and is intentionally omitted from API responses.
+	BillingSource string `json:"-" gorm:"type:varchar(20);index"`
+	Buttons       string `json:"buttons"`
+	Properties    string `json:"properties"`
 }
 
 // TaskQueryParams 用于包含所有搜索条件的结构体，可以根据需求添加更多字段

@@ -686,6 +686,7 @@ func GetUserModels(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	adminUnlimited := common.GetContextKeyBool(c, constant.ContextKeyAdminAPIUnlimited)
 	groups := service.GetUserUsableGroups(user.Group)
 	group := c.Query("group")
 	var groupsToQuery []string
@@ -695,11 +696,15 @@ func GetUserModels(c *gin.Context) {
 			groupsToQuery = append(groupsToQuery, g)
 		}
 	case group == "auto":
-		if _, ok := groups[group]; ok {
+		if adminUnlimited {
+			groupsToQuery = service.GetAdminAutoGroups()
+		} else if _, ok := groups[group]; ok {
 			groupsToQuery = service.GetUserAutoGroup(user.Group)
 		}
 	default:
-		if _, ok := groups[group]; ok {
+		if adminUnlimited && strings.TrimSpace(group) != "" {
+			groupsToQuery = []string{group}
+		} else if _, ok := groups[group]; ok {
 			groupsToQuery = []string{group}
 		}
 	}

@@ -15,6 +15,16 @@ import (
 )
 
 func ReturnPreConsumedQuota(c *gin.Context, relayInfo *relaycommon.RelayInfo) {
+	if relayInfo == nil {
+		return
+	}
+	if ensureMeteredOnlyFunding(c, relayInfo) {
+		// An administrator (or a group-level metered-only request) never has a
+		// real reservation to return.  Clear stale compatibility state so an
+		// older caller cannot accidentally refund a wallet/token balance.
+		relayInfo.FinalPreConsumedQuota = 0
+		return
+	}
 	if relayInfo.FinalPreConsumedQuota != 0 {
 		logger.LogInfo(c, fmt.Sprintf("用户 %d 请求失败, 返还预扣费额度 %s", relayInfo.UserId, logger.FormatQuota(relayInfo.FinalPreConsumedQuota)))
 		gopool.Go(func() {
@@ -31,6 +41,13 @@ func ReturnPreConsumedQuota(c *gin.Context, relayInfo *relaycommon.RelayInfo) {
 // PreConsumeQuota checks if the user has enough quota to pre-consume.
 // It returns the pre-consumed quota if successful, or an error if not.
 func PreConsumeQuota(c *gin.Context, preConsumedQuota int, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	if relayInfo == nil {
+		return types.NewError(fmt.Errorf("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	if ensureMeteredOnlyFunding(c, relayInfo) {
+		relayInfo.FinalPreConsumedQuota = 0
+		return nil
+	}
 	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())

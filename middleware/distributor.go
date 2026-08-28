@@ -30,6 +30,7 @@ type ModelRequest struct {
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
+		adminUnlimited := common.GetContextKeyBool(c, constant.ContextKeyAdminAPIUnlimited)
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
 		modelRequest, shouldSelectChannel, err := getModelRequest(c)
 		if err != nil {
@@ -47,21 +48,31 @@ func Distribute() func(c *gin.Context) {
 				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidChannelId))
 				return
 			}
-			if block := service.GetChannelQuotaProtectionBlockForModel(channel, modelRequest.Model); block != nil {
-				if !applyQuotaProtectionFallback(c, modelRequest.Model, block) {
-					abortWithChannelQuotaProtection(c, block)
-					return
+			if !adminUnlimited {
+				if block := service.GetChannelQuotaProtectionBlockForModel(channel, modelRequest.Model); block != nil {
+					if !applyQuotaProtectionFallback(c, modelRequest.Model, block) {
+						abortWithChannelQuotaProtection(c, block)
+						return
+					}
 				}
 			}
-			if channel.Status != common.ChannelStatusEnabled {
+			if channel.Status != common.ChannelStatusEnabled && !(adminUnlimited && model.IsChannelAutoDisabledByBudgetGuard(channel)) {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
+				return
+			}
+			if blocked, state := model.IsChannelTemporarilyUnschedulable(channel.Id); blocked {
+				reason := "temporarily unschedulable"
+				if state != nil && strings.TrimSpace(state.Reason) != "" {
+					reason = state.Reason
+				}
+				abortWithOpenAiMessage(c, http.StatusServiceUnavailable, fmt.Sprintf("指定渠道 #%d 当前暂不可调度: %s", channel.Id, reason))
 				return
 			}
 		} else {
 			// Select a channel for the user
 			// check token model mapping
 			modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
-			if modelLimitEnable {
+			if modelLimitEnable && !adminUnlimited {
 				s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
 				if !ok {
 					// token model limit is empty, all models are not allowed
@@ -97,7 +108,7 @@ func Distribute() func(c *gin.Context) {
 						return
 					}
 					if playgroundRequest.Group != "" {
-						if !service.GroupInUserUsableGroups(usingGroup, playgroundRequest.Group) && playgroundRequest.Group != usingGroup {
+						if !adminUnlimited && !service.GroupInUserUsableGroups(usingGroup, playgroundRequest.Group) && playgroundRequest.Group != usingGroup {
 							abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
 							return
 						}
@@ -110,22 +121,24 @@ func Distribute() func(c *gin.Context) {
 				affinityGroup := usingGroup
 				modelRoute, hasModelRoute := service.ResolveModelGroupRoute(userGroup, usingGroup, modelRequest.Model)
 				quotaProtectionGroups := distributorQuotaProtectionGroups(usingGroup, userGroup, modelRoute, hasModelRoute)
-				if hasModelRoute && isSolTerraModel(modelRequest.Model) {
+				if !adminUnlimited && hasModelRoute && isSolTerraModel(modelRequest.Model) {
 					// Channel 27 uses a shared upstream balance and must not be
 					// treated as a second independent protected quota source.
 					quotaProtectionGroups = []string{modelRoute.PreferredGroup}
 				}
 				selectionModel := modelRequest.Model
 				selectionGroup := usingGroup
-				if block, blockErr := service.FindChannelQuotaProtectionBlock(c.Request.Context(), quotaProtectionGroups, modelRequest.Model, requestPath); blockErr == nil && block != nil {
-					if hasModelRoute && isSolTerraModel(modelRequest.Model) && strings.EqualFold(strings.TrimSpace(block.Group), strings.TrimSpace(modelRoute.PreferredGroup)) && block.FallbackModel() != "" {
-						selectionModel, selectionGroup = configureSharedQuotaRouteFallback(
-							c, modelRequest.Model, modelRoute, block, service.GetSharedFallbackQuotaState(time.Now()),
-						)
-					} else if fallbackModel := block.FallbackModel(); fallbackModel != "" && applyQuotaProtectionFallback(c, modelRequest.Model, block) {
-						selectionModel = fallbackModel
-						if block.Group != "" {
-							selectionGroup = block.Group
+				if !adminUnlimited {
+					if block, blockErr := service.FindChannelQuotaProtectionBlock(c.Request.Context(), quotaProtectionGroups, modelRequest.Model, requestPath); blockErr == nil && block != nil {
+						if hasModelRoute && isSolTerraModel(modelRequest.Model) && strings.EqualFold(strings.TrimSpace(block.Group), strings.TrimSpace(modelRoute.PreferredGroup)) && block.FallbackModel() != "" {
+							selectionModel, selectionGroup = configureSharedQuotaRouteFallback(
+								c, modelRequest.Model, modelRoute, block, service.GetSharedFallbackQuotaState(time.Now()),
+							)
+						} else if fallbackModel := block.FallbackModel(); fallbackModel != "" && applyQuotaProtectionFallback(c, modelRequest.Model, block) {
+							selectionModel = fallbackModel
+							if block.Group != "" {
+								selectionGroup = block.Group
+							}
 						}
 					}
 				}
@@ -144,7 +157,7 @@ func Distribute() func(c *gin.Context) {
 					if err != nil || preferred == nil {
 						service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer exists", preferredChannelID))
 					} else {
-						if preferred.Status != common.ChannelStatusEnabled {
+						if preferred.Status != common.ChannelStatusEnabled && !(adminUnlimited && model.IsChannelAutoDisabledByBudgetGuard(preferred)) {
 							service.ExcludeChannelForRequest(c, preferred.Id, "preferred affinity channel disabled")
 							service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d is disabled", preferred.Id))
 						} else if blocked, state := model.IsChannelTemporarilyUnschedulable(preferred.Id); blocked {
@@ -158,9 +171,16 @@ func Distribute() func(c *gin.Context) {
 						} else if affinityGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroup(userGroup)
+							if adminUnlimited {
+								autoGroups = service.GetAdminAutoGroups()
+							}
 							matched := false
 							for _, g := range autoGroups {
-								if model.IsChannelEnabledForGroupModel(g, selectionModel, preferred.Id) {
+								configured := model.IsChannelEnabledForGroupModel(g, selectionModel, preferred.Id)
+								if adminUnlimited && model.IsChannelAutoDisabledByBudgetGuard(preferred) {
+									configured = model.IsChannelAvailableForAdminGroupModel(preferred, g, selectionModel)
+								}
+								if configured {
 									selectGroup = g
 									common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
 									channel = preferred
@@ -172,7 +192,7 @@ func Distribute() func(c *gin.Context) {
 							if !matched {
 								service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer satisfies auto group/model", preferred.Id))
 							}
-						} else if model.IsChannelEnabledForGroupModel(affinityGroup, selectionModel, preferred.Id) {
+						} else if (adminUnlimited && model.IsChannelAutoDisabledByBudgetGuard(preferred) && model.IsChannelAvailableForAdminGroupModel(preferred, affinityGroup, selectionModel)) || model.IsChannelEnabledForGroupModel(affinityGroup, selectionModel, preferred.Id) {
 							channel = preferred
 							selectGroup = affinityGroup
 							if hasModelRoute {
@@ -193,7 +213,7 @@ func Distribute() func(c *gin.Context) {
 						TokenGroup:  selectionGroup,
 						Retry:       common.GetPointer(0),
 					})
-					if (err != nil || channel == nil) && activatePendingQuotaProtectionFallback(c) {
+					if !adminUnlimited && (err != nil || channel == nil) && activatePendingQuotaProtectionFallback(c) {
 						selectionModel = common.GetContextKeyString(c, constant.ContextKeyQuotaProtectionFallbackModel)
 						selectionGroup = common.GetContextKeyString(c, constant.ContextKeyQuotaProtectionFallbackGroup)
 						channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
@@ -201,7 +221,7 @@ func Distribute() func(c *gin.Context) {
 						})
 					}
 					if err != nil {
-						if abortIfChannelQuotaProtection(c, quotaProtectionGroups, modelRequest.Model, requestPath) {
+						if !adminUnlimited && abortIfChannelQuotaProtection(c, quotaProtectionGroups, modelRequest.Model, requestPath) {
 							return
 						}
 						showGroup := usingGroup
@@ -218,7 +238,7 @@ func Distribute() func(c *gin.Context) {
 						return
 					}
 					if channel == nil {
-						if abortIfChannelQuotaProtection(c, quotaProtectionGroups, modelRequest.Model, requestPath) {
+						if !adminUnlimited && abortIfChannelQuotaProtection(c, quotaProtectionGroups, modelRequest.Model, requestPath) {
 							return
 						}
 						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": usingGroup, "Model": modelRequest.Model}), types.ErrorCodeModelNotFound)

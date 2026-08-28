@@ -965,16 +965,31 @@ func ResetUserPasswordByEmail(email string, password string) error {
 }
 
 func IsAdmin(userId int) bool {
-	if userId == 0 {
+	role, err := GetUserRole(userId)
+	if err != nil {
+		if userId != 0 {
+			common.SysLog("failed to query user role: " + err.Error())
+		}
 		return false
+	}
+	return role >= common.RoleAdminUser
+}
+
+// GetUserRole returns the authoritative role for a user. Authentication and
+// quota bypass decisions must use the database value rather than a username
+// allowlist so role changes take effect without a code/config change.
+func GetUserRole(userId int) (int, error) {
+	if userId == 0 {
+		return 0, errors.New("id 为空！")
+	}
+	if DB == nil {
+		return 0, errors.New("database is not initialized")
 	}
 	var user User
-	err := DB.Where("id = ?", userId).Select("role").Find(&user).Error
-	if err != nil {
-		common.SysLog("no such user " + err.Error())
-		return false
+	if err := DB.Select("role").First(&user, "id = ?", userId).Error; err != nil {
+		return 0, err
 	}
-	return user.Role >= common.RoleAdminUser
+	return user.Role, nil
 }
 
 func ValidateAccessToken(token string) (*User, error) {

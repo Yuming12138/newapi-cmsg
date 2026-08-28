@@ -223,9 +223,16 @@ func ValidateUserToken(key string) (token *Token, err error) {
 	}
 	token, err = GetTokenByKey(key, false)
 	if err == nil {
-		quotaCharged := isTokenQuotaCharged(token)
+		// Administrators retain the normal token lifecycle checks (disabled and
+		// expired tokens are still rejected), but an exhausted/zero-quota token
+		// must not prevent an administrator API request from being handled.
+		admin := IsAdmin(token.UserId)
+		quotaCharged := true
+		if !admin {
+			quotaCharged = isTokenQuotaCharged(token)
+		}
 		if token.Status == common.TokenStatusExpired ||
-			(token.Status == common.TokenStatusExhausted && quotaCharged) ||
+			(token.Status == common.TokenStatusExhausted && quotaCharged && !admin) ||
 			(token.Status != common.TokenStatusEnabled && token.Status != common.TokenStatusExhausted) {
 			return token, ErrTokenInvalid
 		}
@@ -239,7 +246,7 @@ func ValidateUserToken(key string) (token *Token, err error) {
 			}
 			return token, ErrTokenInvalid
 		}
-		if !token.UnlimitedQuota && token.RemainQuota <= 0 && quotaCharged {
+		if !admin && !token.UnlimitedQuota && token.RemainQuota <= 0 && quotaCharged {
 			if !common.RedisEnabled {
 				token.Status = common.TokenStatusExhausted
 				err := token.SelectUpdate()

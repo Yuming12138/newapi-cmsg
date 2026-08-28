@@ -84,7 +84,7 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 	if err != nil {
 		return service.TaskErrorWrapperLocal(err, "channel_not_found", http.StatusBadRequest)
 	}
-	if ch.Status != common.ChannelStatusEnabled {
+	if ch.Status != common.ChannelStatusEnabled && !(common.GetContextKeyBool(c, constant.ContextKeyAdminAPIUnlimited) && model.IsChannelAutoDisabledByBudgetGuard(ch)) {
 		return service.TaskErrorWrapperLocal(errors.New("the channel of the origin task is disabled"), "task_channel_disable", http.StatusBadRequest)
 	}
 	info.LockedChannel = ch

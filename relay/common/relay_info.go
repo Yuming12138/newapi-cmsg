@@ -7,6 +7,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -93,6 +94,41 @@ type TokenCountMeta struct {
 	estimatePromptTokens int
 }
 
+// MeteredUsageTracker serializes request-local metered usage settlement. A
+// relay may reach its billing hook more than once (for example after a stream
+// cleanup race or a legacy compatibility callback); the tracker turns an
+// absolute usage target into an idempotent signed delta. The target is
+// committed only when the durable accounting operation succeeds.
+type MeteredUsageTracker struct {
+	mu       sync.Mutex
+	recorded int
+}
+
+func (t *MeteredUsageTracker) Apply(target int, record func(delta int) error) error {
+	if t == nil {
+		return errors.New("metered usage tracker is nil")
+	}
+	if target < 0 {
+		target = 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delta := target - t.recorded
+	if delta == 0 {
+		return nil
+	}
+	if record == nil {
+		return errors.New("metered usage recorder is nil")
+	}
+	if err := record(delta); err != nil {
+		return err
+	}
+	t.recorded = target
+	return nil
+}
+
+var meteredUsageTrackerInitMu sync.Mutex
+
 type RelayInfo struct {
 	TokenId           int
 	TokenKey          string
@@ -141,6 +177,10 @@ type RelayInfo struct {
 	// BillingSource indicates whether this request is billed from wallet quota or subscription.
 	// "" or "wallet" => wallet; "subscription" => subscription
 	BillingSource string
+	// meteredUsageTracker keeps token usage accounting idempotent for this
+	// request. It is a pointer so copying RelayInfo for deferred cleanup keeps
+	// the same accounting state instead of copying a mutex by value.
+	meteredUsageTracker *MeteredUsageTracker
 	// SubscriptionId is the user_subscriptions.id used when BillingSource == "subscription"
 	SubscriptionId int
 	// SubscriptionPreConsumed is the amount pre-consumed on subscription item (quota units or 1)
@@ -202,6 +242,26 @@ type RelayInfo struct {
 	*ImageResultInfo
 	*ChannelMeta
 	*TaskRelayInfo
+}
+
+// ApplyMeteredUsage records an absolute usage target once for this relay. It
+// is intentionally a method on RelayInfo so BillingSession-backed and legacy
+// direct billing paths share the same request-local guard.
+func (info *RelayInfo) ApplyMeteredUsage(target int, record func(delta int) error) error {
+	if info == nil {
+		return errors.New("relay info is nil")
+	}
+	// Protect both the read and write of the lazily initialized pointer. The
+	// request can settle from concurrent stream-cleanup paths, so a lock only
+	// around the assignment would still race with the initial nil read.
+	meteredUsageTrackerInitMu.Lock()
+	tracker := info.meteredUsageTracker
+	if tracker == nil {
+		tracker = &MeteredUsageTracker{}
+		info.meteredUsageTracker = tracker
+	}
+	meteredUsageTrackerInitMu.Unlock()
+	return tracker.Apply(target, record)
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {

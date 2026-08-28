@@ -184,6 +184,12 @@ func filterUserQuotaGuardUsers(cfg *operation_setting.UserQuotaGuardSetting, use
 		if user == nil {
 			continue
 		}
+		// Administrators are never subject to the personal quota guard, even if
+		// an include ID/role/group rule would otherwise select them.  This is a
+		// defense-in-depth check in addition to the admin API's no-charge policy.
+		if user.Role >= common.RoleAdminUser {
+			continue
+		}
 		if _, excluded := excludeIDs[user.Id]; excluded {
 			continue
 		}
@@ -222,6 +228,14 @@ func currentUserQuotaPhase(cfg *operation_setting.UserQuotaGuardSetting) (userQu
 }
 
 func applyUserQuotaGuardPolicy(cfg *operation_setting.UserQuotaGuardSetting, user *model.User, state userQuotaGuardUserState, exists bool, phase userQuotaPhase, quotaPerUSD int, unlockedQuotaUSD float64, unlockedQuotaSource string) (userQuotaGuardUserState, bool, error) {
+	if user == nil {
+		return state, false, nil
+	}
+	// Keep the policy helper safe when called directly by a future task or test
+	// instead of through filterUserQuotaGuardUsers.
+	if user.Role >= common.RoleAdminUser {
+		return state, false, nil
+	}
 	if phase.Phase == "restricted" {
 		baseUSD, extraUSD, targetUSD := userQuotaRestrictedUSD(cfg, phase.DateKey, user.Id)
 		targetQuota := quotaFromUSD(targetUSD, quotaPerUSD)

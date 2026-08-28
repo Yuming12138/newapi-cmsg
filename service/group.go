@@ -62,6 +62,17 @@ func GetUserAutoGroup(userGroup string) []string {
 	return autoGroups
 }
 
+// GetAdminAutoGroups returns the configured auto-group order without applying
+// a user's usable-group allowlist. Administrator API requests are explicitly
+// allowed to select any configured channel group; the normal user helper above
+// remains unchanged for non-administrator traffic.
+func GetAdminAutoGroups() []string {
+	configured := setting.GetAutoGroups()
+	groups := make([]string, len(configured))
+	copy(groups, configured)
+	return groups
+}
+
 // GetGroupsEnabledModels 按 groups 顺序获取各分组启用的模型并去重
 func GetGroupsEnabledModels(groups []string) []string {
 	seen := make(map[string]struct{})

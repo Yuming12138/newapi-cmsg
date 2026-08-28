@@ -357,7 +357,7 @@ func TestFilterUserQuotaGuardUsers(t *testing.T) {
 		{Id: 99, Role: common.RoleRootUser, Group: "default"},
 	}
 	got := filterUserQuotaGuardUsers(cfg, users)
-	if len(got) != 2 || got[0].Id != 2 || got[1].Id != 99 {
+	if len(got) != 1 || got[0].Id != 2 {
 		t.Fatalf("filterUserQuotaGuardUsers() got ids %+v", got)
 	}
 }

@@ -121,6 +121,48 @@ func TestTryReserveQuotaWithoutRedis(t *testing.T) {
 	assert.Equal(t, 55, getTokenFromDB(t, token.Id).RemainQuota)
 }
 
+func TestRecordTokenUsedQuotaKeepsRemainingBalance(t *testing.T) {
+	truncateTables(t)
+	resetBatchUpdateTestState(t)
+
+	token := createReserveTestToken(t, 80)
+	require.NoError(t, RecordTokenUsedQuota(token.Id, token.Key, 25))
+
+	got := getTokenFromDB(t, token.Id)
+	assert.Equal(t, 80, got.RemainQuota)
+	assert.Equal(t, 25, got.UsedQuota)
+}
+
+func TestRecordTokenUsedQuotaUpdatesRedisAndDatabase(t *testing.T) {
+	truncateTables(t)
+	resetBatchUpdateTestState(t)
+	useQuotaReserveMiniRedis(t)
+
+	token := createReserveTestToken(t, 80)
+	require.NoError(t, RecordTokenUsedQuota(token.Id, token.Key, 25))
+
+	got := getTokenFromDB(t, token.Id)
+	assert.Equal(t, 80, got.RemainQuota)
+	assert.Equal(t, 25, got.UsedQuota)
+	cached, err := GetTokenByKey(token.Key, false)
+	require.NoError(t, err)
+	assert.Equal(t, 80, cached.RemainQuota)
+	assert.Equal(t, 25, cached.UsedQuota)
+}
+
+func TestAdjustTokenUsedQuotaSupportsSignedDeltaWithoutChangingRemain(t *testing.T) {
+	truncateTables(t)
+	resetBatchUpdateTestState(t)
+
+	token := createReserveTestToken(t, 80)
+	require.NoError(t, AdjustTokenUsedQuota(token.Id, token.Key, 40))
+	require.NoError(t, AdjustTokenUsedQuota(token.Id, token.Key, -15))
+
+	got := getTokenFromDB(t, token.Id)
+	assert.Equal(t, 80, got.RemainQuota)
+	assert.Equal(t, 25, got.UsedQuota)
+}
+
 func TestRedisBatchReserveNeverFallsBackToStaleDatabaseBalance(t *testing.T) {
 	truncateTables(t)
 	useQuotaReserveMiniRedis(t)

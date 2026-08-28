@@ -715,10 +715,12 @@ func applyChannelBudgetGuard(ctx context.Context, cfg *operation_setting.Channel
 		})
 		otherInfo[channelQuotaSourceInfoKey] = buildInternalQuotaLedgerSource(mode, limitUSD, 0, quotaPerUSD, limitUSD, nowTs, "daily_reset")
 		updates := channelBudgetChannelUpdate{UsedQuota: int64Ptr(0), Balance: float64Ptr(limitUSD), OtherInfo: otherInfo}
-		if state.DisabledByGuard && channel.Status != common.ChannelStatusManuallyDisabled {
+		statusRestored := false
+		if state.DisabledByGuard && channel.Status != common.ChannelStatusManuallyDisabled && wasDisabledByChannelBudgetGuard(state, channel.OtherInfo) {
 			updates.Status = intPtr(common.ChannelStatusEnabled)
 			updates.AbilitiesEnabled = boolPtr(true)
 			statusChanged = true
+			statusRestored = true
 		}
 		if err := updateChannelBudgetGuardChannel(channel, updates, nowTs); err != nil {
 			return state, false, false, err
@@ -726,7 +728,9 @@ func applyChannelBudgetGuard(ctx context.Context, cfg *operation_setting.Channel
 		state.LastResetDate = today
 		state.DisabledByGuard = false
 		channel.UsedQuota = 0
-		channel.Status = common.ChannelStatusEnabled
+		if statusRestored {
+			channel.Status = common.ChannelStatusEnabled
+		}
 	}
 
 	remainingQuota := limitQuota - channel.UsedQuota
@@ -746,6 +750,9 @@ func applyChannelBudgetGuard(ctx context.Context, cfg *operation_setting.Channel
 			updates.AbilitiesEnabled = boolPtr(false)
 			otherInfo["status_reason"] = fmt.Sprintf("channel_budget_exhausted: %s limit $%g", mode, limitUSD)
 			otherInfo["status_time"] = nowTs
+			if budgetInfo, ok := otherInfo["budget_guard"].(map[string]interface{}); ok {
+				budgetInfo["disabled_by_guard"] = true
+			}
 			state.DisabledByGuard = true
 			statusChanged = true
 		}
@@ -800,6 +807,9 @@ func applyASXSChannelBudgetGuard(ctx context.Context, cfg *operation_setting.Cha
 			updates.AbilitiesEnabled = boolPtr(false)
 			otherInfo["status_reason"] = fmt.Sprintf("channel_budget_exhausted: upstream daily limit $%g", limitUSD)
 			otherInfo["status_time"] = nowTs
+			if budgetInfo, ok := otherInfo["budget_guard"].(map[string]interface{}); ok {
+				budgetInfo["disabled_by_guard"] = true
+			}
 			state.DisabledByGuard = true
 			statusChanged = true
 		}
@@ -1217,24 +1227,37 @@ func loadChannelBudgetGuardState() channelBudgetGuardState {
 	return state
 }
 
-func wasDisabledByChannelBudgetGuard(state channelBudgetGuardChannelState, otherInfoRaw string) bool {
-	if state.DisabledByGuard {
-		return true
-	}
+func wasDisabledByChannelBudgetGuard(_ channelBudgetGuardChannelState, otherInfoRaw string) bool {
 	otherInfo := parseGuardObject(otherInfoRaw)
+	statusReason, hasStatusReason := otherInfo["status_reason"].(string)
+	if !hasStatusReason || !isChannelBudgetExhaustedReason(statusReason) {
+		// The state option can outlive a later upstream/manual status update.
+		// Never let that stale bit re-enable a channel whose current reason is
+		// not the budget guard's explicit exhaustion marker.
+		return false
+	}
 	budgetInfo, ok := otherInfo["budget_guard"].(map[string]interface{})
-	if ok {
-		if disabled, ok := budgetInfo["disabled_by_guard"].(bool); ok && disabled {
-			return true
-		}
-		if reason, ok := budgetInfo["reason"].(string); ok && reason == "budget_exhausted" {
-			return true
+	if !ok {
+		return false
+	}
+	disabled, hasDisabled := budgetInfo["disabled_by_guard"].(bool)
+	if !hasDisabled || !disabled {
+		nestedReason, reasonOK := budgetInfo["reason"].(string)
+		if !reasonOK || strings.ToLower(strings.TrimSpace(nestedReason)) != "budget_exhausted" {
+			return false
 		}
 	}
-	if reason, ok := otherInfo["status_reason"].(string); ok && strings.Contains(reason, "channel_budget_exhausted") {
-		return true
+	if statusTime, statusOK := guardObjectInt64(otherInfo, "status_time"); statusOK {
+		if updatedAt, updatedOK := guardObjectInt64(budgetInfo, "updated_at"); updatedOK && statusTime > updatedAt {
+			return false
+		}
 	}
-	return false
+	return true
+}
+
+func isChannelBudgetExhaustedReason(reason string) bool {
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	return strings.HasPrefix(reason, "channel_budget_exhausted:")
 }
 
 func parseGuardObject(raw string) map[string]interface{} {
