@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -48,7 +50,7 @@ func newBillingTestContext() *gin.Context {
 	return c
 }
 
-func TestPreConsumeBilling_InternalMeteredOnlyGroupSkipsUserAndTokenQuota(t *testing.T) {
+func TestPreConsumeBilling_InternalMeteredOnlyGroupSkipsBalancesAndRecordsUsage(t *testing.T) {
 	truncate(t)
 	withQuotaPolicy(t, "asxs,default", "charged", internalMeteredOnlyBillingRules())
 
@@ -82,7 +84,104 @@ func TestPreConsumeBilling_InternalMeteredOnlyGroupSkipsUserAndTokenQuota(t *tes
 
 	require.Equal(t, 0, getUserQuota(t, userID))
 	require.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
-	require.Equal(t, 0, getTokenUsedQuota(t, tokenID))
+	require.Equal(t, 2500, getTokenUsedQuota(t, tokenID))
+}
+
+func TestPreConsumeBilling_AdminOnlyMetersWithoutChargingAnyBalance(t *testing.T) {
+	truncate(t)
+
+	const userID = 105
+	const tokenID = 105
+	const tokenRemain = 0
+	const actualQuota = 2500
+
+	seedUser(t, userID, 0)
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", userID).Update("role", common.RoleAdminUser).Error)
+	seedToken(t, tokenID, userID, "admin-metered-token", tokenRemain)
+	require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", tokenID).Updates(map[string]interface{}{
+		"status":       common.TokenStatusExhausted,
+		"remain_quota": tokenRemain,
+	}).Error)
+
+	c := newBillingTestContext()
+	common.SetContextKey(c, constant.ContextKeyAdminAPIUnlimited, true)
+	info := &relaycommon.RelayInfo{
+		UserId:          userID,
+		TokenId:         tokenID,
+		TokenKey:        "admin-metered-token",
+		UserGroup:       "default",
+		UsingGroup:      "asxs",
+		OriginModelName: "gpt-5.5",
+		RequestId:       "admin-metered-request",
+	}
+
+	require.Nil(t, PreConsumeBilling(c, 3000, info))
+	require.Equal(t, BillingSourceMeteredOnly, info.BillingSource)
+	require.Equal(t, 0, info.FinalPreConsumedQuota)
+	require.NoError(t, SettleBilling(c, info, actualQuota))
+
+	// The administrator's usage is intentionally accounted separately by the
+	// relay usage path; this legacy settlement must not mutate either balance.
+	require.Equal(t, 0, getUserQuota(t, userID))
+	require.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	require.Equal(t, actualQuota, getTokenUsedQuota(t, tokenID))
+}
+
+func TestSettleBilling_MeteredUsageIsIdempotentAndAdjustable(t *testing.T) {
+	truncate(t)
+
+	const userID = 107
+	const tokenID = 107
+	const tokenRemain = 9000
+
+	seedUser(t, userID, 0)
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", userID).Update("role", common.RoleAdminUser).Error)
+	seedToken(t, tokenID, userID, "admin-idempotent-token", tokenRemain)
+
+	c := newBillingTestContext()
+	common.SetContextKey(c, constant.ContextKeyAdminAPIUnlimited, true)
+	info := &relaycommon.RelayInfo{
+		UserId:          userID,
+		TokenId:         tokenID,
+		TokenKey:        "admin-idempotent-token",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+		OriginModelName: "gpt-5.5",
+	}
+
+	require.Nil(t, PreConsumeBilling(c, 3000, info))
+	require.NoError(t, SettleBilling(c, info, 2500))
+	require.NoError(t, SettleBilling(c, info, 2500))
+	require.Equal(t, 2500, getTokenUsedQuota(t, tokenID), "repeating the same settlement must not double-count")
+
+	require.NoError(t, SettleBilling(c, info, 3200))
+	require.Equal(t, 3200, getTokenUsedQuota(t, tokenID), "a higher absolute target records only the difference")
+
+	require.NoError(t, SettleBilling(c, info, 1800))
+	require.Equal(t, 1800, getTokenUsedQuota(t, tokenID), "a lower final target must reconcile the signed difference")
+	require.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	require.Equal(t, 0, getUserQuota(t, userID))
+}
+
+func TestPostConsumeQuota_AdminMeteredSourceRecordsUsageWithoutCharging(t *testing.T) {
+	truncate(t)
+	const userID = 106
+	const tokenID = 106
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "admin-legacy-token", 0)
+	info := &relaycommon.RelayInfo{
+		UserId:        userID,
+		TokenId:       tokenID,
+		TokenKey:      "admin-legacy-token",
+		BillingSource: BillingSourceMeteredOnly,
+		IsPlayground:  false,
+	}
+	require.NoError(t, PostConsumeQuota(info, 4000, 0, true))
+	require.Equal(t, 0, getUserQuota(t, userID))
+	require.Equal(t, 0, getTokenRemainQuota(t, tokenID))
+	require.Equal(t, 4000, getTokenUsedQuota(t, tokenID))
+	require.NoError(t, PostConsumeQuota(info, 750, 0, true))
+	require.Equal(t, 4750, getTokenUsedQuota(t, tokenID))
 }
 
 func TestPreConsumeBilling_ExternalCPAGroupStillRequiresUserQuota(t *testing.T) {
@@ -153,7 +252,7 @@ func TestPreWssConsumeQuota_MeteredOnlySkipsQuotaLookups(t *testing.T) {
 	require.NoError(t, PreWssConsumeQuota(newBillingTestContext(), info, &dto.RealtimeUsage{}))
 }
 
-func TestRecalculateTaskQuota_MeteredOnlySkipsFundingAndTokenQuota(t *testing.T) {
+func TestRecalculateTaskQuota_MeteredOnlySkipsFundingAndRecordsTokenUsage(t *testing.T) {
 	truncate(t)
 
 	const userID = 103
@@ -173,11 +272,40 @@ func TestRecalculateTaskQuota_MeteredOnlySkipsFundingAndTokenQuota(t *testing.T)
 
 	require.Equal(t, 0, getUserQuota(t, userID))
 	require.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
-	require.Equal(t, 0, getTokenUsedQuota(t, tokenID))
+	require.Equal(t, actualQuota-preConsumed, getTokenUsedQuota(t, tokenID))
 	require.Equal(t, actualQuota, task.Quota)
 
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	require.Equal(t, model.LogTypeConsume, log.Type)
 	require.Equal(t, actualQuota-preConsumed, log.Quota)
+}
+
+func TestRecalculateTaskQuota_MeteredOnlyCanReconcileLowerFinalUsage(t *testing.T) {
+	truncate(t)
+
+	const userID = 108
+	const tokenID = 108
+	const channelID = 108
+	const tokenRemain = 9000
+	const preConsumed = 3000
+	const actualQuota = 1800
+
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "metered-task-lower-token", tokenRemain)
+	seedChannel(t, channelID)
+	require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", tokenID).Update("used_quota", preConsumed).Error)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceMeteredOnly, 0)
+	RecalculateTaskQuota(context.Background(), task, actualQuota, "metered lower adjustment")
+
+	require.Equal(t, actualQuota, getTokenUsedQuota(t, tokenID))
+	require.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	require.Equal(t, 0, getUserQuota(t, userID))
+	require.Equal(t, actualQuota, task.Quota)
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	require.Equal(t, model.LogTypeRefund, log.Type)
+	require.Equal(t, preConsumed-actualQuota, log.Quota)
 }

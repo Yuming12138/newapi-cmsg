@@ -168,7 +168,11 @@ func ListModels(c *gin.Context, modelType int) {
 		}
 		var models []string
 		if tokenGroup == "auto" {
-			models = service.GetGroupsEnabledModels(service.GetUserAutoGroup(userGroup))
+			autoGroups := service.GetUserAutoGroup(userGroup)
+			if common.GetContextKeyBool(c, constant.ContextKeyAdminAPIUnlimited) {
+				autoGroups = service.GetAdminAutoGroups()
+			}
+			models = service.GetGroupsEnabledModels(autoGroups)
 		} else {
 			models = model.GetGroupEnabledModels(group)
 			for _, routedModel := range service.GetModelGroupRouteModels(userGroup, group) {

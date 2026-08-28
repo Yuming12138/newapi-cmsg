@@ -289,6 +289,32 @@ func TestRefundTaskQuota_NoToken(t *testing.T) {
 	assert.Equal(t, model.LogTypeRefund, log.Type)
 }
 
+func TestRefundTaskQuota_MeteredOnlyRevertsRecordedTokenUsage(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 5, 5, 5
+	const preConsumed = 3000
+	const tokenRemain = 9000
+
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "sk-metered-refund", tokenRemain)
+	seedChannel(t, channelID)
+	require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", tokenID).Update("used_quota", preConsumed).Error)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceMeteredOnly, 0)
+	RefundTaskQuota(ctx, task, "metered task failed")
+
+	assert.Equal(t, 0, getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, 0, getTokenUsedQuota(t, tokenID))
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	assert.Equal(t, model.LogTypeRefund, log.Type)
+	assert.Equal(t, preConsumed, log.Quota)
+}
+
 // ===========================================================================
 // RecalculateTaskQuota tests
 // ===========================================================================

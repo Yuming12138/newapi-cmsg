@@ -62,6 +62,10 @@ const (
 	ContextKeyUserGroup   ContextKey = "user_group"
 	ContextKeyUsingGroup  ContextKey = "group"
 	ContextKeyUserName    ContextKey = "username"
+	// ContextKeyAdminAPIUnlimited marks an authenticated administrator request
+	// that may use configured channels without consuming wallet, subscription,
+	// or API-token quota. Usage accounting and consume logs remain enabled.
+	ContextKeyAdminAPIUnlimited ContextKey = "admin_api_unlimited"
 
 	ContextKeyLocalCountTokens ContextKey = "local_count_tokens"
 

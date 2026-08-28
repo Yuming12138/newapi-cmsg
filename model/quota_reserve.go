@@ -72,6 +72,19 @@ redis.call('HINCRBY', KEYS[1], 'UsedQuota', -tonumber(ARGV[1]))
 redis.call('HSET', KEYS[1], 'AccessedTime', ARGV[3])
 return 1`
 
+// tokenUsedQuotaDeltaScript records metered usage without touching the
+// token's remaining balance.  It intentionally requires a complete, current
+// cache hash so a stale or partial Redis entry cannot create phantom usage.
+const tokenUsedQuotaDeltaScript = `
+if tonumber(redis.call('HGET', KEYS[1], 'Id') or '0') ~= tonumber(ARGV[2])
+  or tonumber(redis.call('HGET', KEYS[1], 'CacheSchema') or '0') ~= tonumber(ARGV[4])
+  or redis.call('HEXISTS', KEYS[1], 'UsedQuota') == 0 then
+  return -1
+end
+redis.call('HINCRBY', KEYS[1], 'UsedQuota', tonumber(ARGV[1]))
+redis.call('HSET', KEYS[1], 'AccessedTime', ARGV[3])
+return 1`
+
 func quotaResultFromLua(result int, err error) (cacheQuotaResult, error) {
 	if err != nil {
 		return cacheQuotaMiss, err
@@ -106,6 +119,12 @@ func cacheTryReserveTokenQuota(id int, key string, amount int64) (cacheQuotaResu
 
 func cacheApplyTokenQuotaDelta(id int, key string, delta int64) (cacheQuotaResult, error) {
 	result, err := common.RDB.Eval(context.Background(), tokenQuotaDeltaScript,
+		[]string{getTokenCacheKey(key)}, delta, id, common.GetTimestamp(), tokenCacheSchemaVersion).Int()
+	return quotaResultFromLua(result, err)
+}
+
+func cacheApplyTokenUsedQuotaDelta(id int, key string, delta int64) (cacheQuotaResult, error) {
+	result, err := common.RDB.Eval(context.Background(), tokenUsedQuotaDeltaScript,
 		[]string{getTokenCacheKey(key)}, delta, id, common.GetTimestamp(), tokenCacheSchemaVersion).Int()
 	return quotaResultFromLua(result, err)
 }
@@ -146,6 +165,31 @@ func persistTokenQuotaDelta(id int, delta int) error {
 		return gorm.ErrRecordNotFound
 	}
 	return nil
+}
+
+func persistTokenUsedQuotaDelta(id int, delta int) error {
+	if common.BatchUpdateEnabled {
+		addNewRecord(BatchUpdateTypeTokenUsedQuota, id, delta)
+		return nil
+	}
+	result := DB.Model(&Token{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"used_quota":    gorm.Expr("used_quota + ?", delta),
+		"accessed_time": common.GetTimestamp(),
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+func increaseTokenUsedQuota(id int, quota int) error {
+	return DB.Model(&Token{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"used_quota":    gorm.Expr("used_quota + ?", quota),
+		"accessed_time": common.GetTimestamp(),
+	}).Error
 }
 
 func reserveUserQuotaDB(id int, quota int) (bool, error) {
@@ -268,4 +312,50 @@ func TryReserveTokenQuota(id int, key string, quota int, unlimited bool) (bool, 
 		return false, err
 	}
 	return true, nil
+}
+
+// AdjustTokenUsedQuota records a signed metered usage delta while leaving
+// remain_quota unchanged.  A negative delta is used when an asynchronous task
+// replaces an initial estimate with a lower final amount. Redis and database
+// updates follow the same cache-first/DB-persist pattern as normal token quota
+// mutations, including compensation when the durable write fails.
+func AdjustTokenUsedQuota(id int, key string, delta int) error {
+	if id <= 0 || delta == 0 {
+		return nil
+	}
+	if !common.RedisEnabled || key == "" {
+		return persistTokenUsedQuotaDelta(id, delta)
+	}
+
+	result, err := cacheApplyTokenUsedQuotaDelta(id, key, int64(delta))
+	if err == nil && result == cacheQuotaMiss {
+		if _, hydrateErr := GetTokenByKey(key, true); hydrateErr == nil {
+			result, err = cacheApplyTokenUsedQuotaDelta(id, key, int64(delta))
+		}
+	}
+	if err != nil || result == cacheQuotaMiss {
+		if err != nil {
+			common.SysLog("token used quota cache update unavailable, falling back to database: " + err.Error())
+		}
+		return persistTokenUsedQuotaDelta(id, delta)
+	}
+	if err = persistTokenUsedQuotaDelta(id, delta); err != nil {
+		compensated, compensateErr := cacheApplyTokenUsedQuotaDelta(id, key, int64(-delta))
+		if compensateErr != nil || compensated != cacheQuotaOK {
+			common.SysError(fmt.Sprintf("failed to compensate metered token usage: result=%d error=%v", compensated, compensateErr))
+		}
+		return err
+	}
+	return nil
+}
+
+// RecordTokenUsedQuota is the positive-delta convenience API used by normal
+// administrator request settlement.  Keep rejecting negative values here so
+// callers that express an increment cannot accidentally perform a refund;
+// asynchronous reconciliation should call AdjustTokenUsedQuota explicitly.
+func RecordTokenUsedQuota(id int, key string, quota int) error {
+	if quota < 0 {
+		return errors.New("quota 不能为负数！")
+	}
+	return AdjustTokenUsedQuota(id, key, quota)
 }

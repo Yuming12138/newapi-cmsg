@@ -22,6 +22,13 @@ type RetryParam struct {
 
 const contextKeyModelGroupRouteFallbackRetryStart constant.ContextKey = "model_group_route_fallback_retry_start"
 
+func getRandomSatisfiedChannelForRequestPath(c *gin.Context, group string, modelName string, retry int, requestPath string, excluded map[int]struct{}) (*model.Channel, error) {
+	if c != nil && common.GetContextKeyBool(c, constant.ContextKeyAdminAPIUnlimited) {
+		return model.GetRandomSatisfiedChannelForRequestPathAdmin(group, modelName, retry, requestPath, excluded)
+	}
+	return model.GetRandomSatisfiedChannelForRequestPath(group, modelName, retry, requestPath, excluded)
+}
+
 func (p *RetryParam) GetRetry() int {
 	if p.Retry == nil {
 		return 0
@@ -93,7 +100,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			pendingModel := common.GetContextKeyString(param.Ctx, constant.ContextKeyQuotaProtectionPendingModel)
 			pendingGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyQuotaProtectionPendingGroup)
 			excluded := GetExcludedChannelIDsForRequest(param.Ctx)
-			channel, pendingErr := model.GetRandomSatisfiedChannelForRequestPath(pendingGroup, pendingModel, param.GetRetry(), param.RequestPath, excluded)
+			channel, pendingErr := getRandomSatisfiedChannelForRequestPath(param.Ctx, pendingGroup, pendingModel, param.GetRetry(), param.RequestPath, excluded)
 			if channel != nil {
 				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, pendingGroup)
 				return channel, pendingGroup, nil
@@ -138,7 +145,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 				}
 			}
 
-			channel, err = model.GetRandomSatisfiedChannelForRequestPath(selectedGroup, selectionModel, groupRetry, param.RequestPath, excluded)
+			channel, err = getRandomSatisfiedChannelForRequestPath(param.Ctx, selectedGroup, selectionModel, groupRetry, param.RequestPath, excluded)
 			if channel != nil {
 				common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, selectedGroup)
 				return channel, selectedGroup, nil
@@ -155,7 +162,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 				logger.LogDebug(param.Ctx, "Preferred model route group %s exhausted for model %s on retry %d: %v", route.PreferredGroup, selectionModel, retry, err)
 			}
 
-			channel, err = model.GetRandomSatisfiedChannelForRequestPath(route.FallbackGroup, selectionModel, 0, param.RequestPath, excluded)
+			channel, err = getRandomSatisfiedChannelForRequestPath(param.Ctx, route.FallbackGroup, selectionModel, 0, param.RequestPath, excluded)
 			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, route.FallbackGroup)
 			common.SetContextKey(param.Ctx, contextKeyModelGroupRouteFallbackRetryStart, retry)
 			if err != nil {
@@ -164,7 +171,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			return channel, route.FallbackGroup, nil
 		}
 
-		channel, err = model.GetRandomSatisfiedChannelForRequestPath(route.PreferredGroup, selectionModel, 0, param.RequestPath, excluded)
+		channel, err = getRandomSatisfiedChannelForRequestPath(param.Ctx, route.PreferredGroup, selectionModel, 0, param.RequestPath, excluded)
 		if channel != nil {
 			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, route.PreferredGroup)
 			return channel, route.PreferredGroup, nil
@@ -173,7 +180,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			logger.LogDebug(param.Ctx, "Preferred model route group %s unavailable for model %s: %v", route.PreferredGroup, selectionModel, err)
 		}
 
-		channel, err = model.GetRandomSatisfiedChannelForRequestPath(route.FallbackGroup, selectionModel, 0, param.RequestPath, excluded)
+		channel, err = getRandomSatisfiedChannelForRequestPath(param.Ctx, route.FallbackGroup, selectionModel, 0, param.RequestPath, excluded)
 		if channel != nil {
 			common.SetContextKey(param.Ctx, constant.ContextKeyAutoGroup, route.FallbackGroup)
 			common.SetContextKey(param.Ctx, contextKeyModelGroupRouteFallbackRetryStart, 0)
@@ -192,6 +199,9 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			return nil, selectGroup, errors.New("auto groups is not enabled")
 		}
 		autoGroups := GetUserAutoGroup(userGroup)
+		if common.GetContextKeyBool(param.Ctx, constant.ContextKeyAdminAPIUnlimited) {
+			autoGroups = GetAdminAutoGroups()
+		}
 
 		// startGroupIndex: the group index to start searching from
 		// startGroupIndex: 开始搜索的分组索引
@@ -216,7 +226,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannelForRequestPath(autoGroup, selectionModel, priorityRetry, param.RequestPath, excluded)
+			channel, _ = getRandomSatisfiedChannelForRequestPath(param.Ctx, autoGroup, selectionModel, priorityRetry, param.RequestPath, excluded)
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -254,7 +264,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannelForRequestPath(selectionGroup, selectionModel, param.GetRetry(), param.RequestPath, excluded)
+		channel, err = getRandomSatisfiedChannelForRequestPath(param.Ctx, selectionGroup, selectionModel, param.GetRetry(), param.RequestPath, excluded)
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}

@@ -14,6 +14,7 @@ import (
 const (
 	BatchUpdateTypeUserQuota = iota
 	BatchUpdateTypeTokenQuota
+	BatchUpdateTypeTokenUsedQuota
 	BatchUpdateTypeUsedQuota
 	BatchUpdateTypeChannelUsedQuota
 	BatchUpdateTypeRequestCount
@@ -85,6 +86,11 @@ func batchUpdate() {
 				err := increaseTokenQuota(key, value)
 				if err != nil {
 					common.SysLog("failed to batch update token quota: " + err.Error())
+				}
+			case BatchUpdateTypeTokenUsedQuota:
+				err := increaseTokenUsedQuota(key, value)
+				if err != nil {
+					common.SysLog("failed to batch update token used quota: " + err.Error())
 				}
 			case BatchUpdateTypeChannelUsedQuota:
 				updateChannelUsedQuota(key, value)

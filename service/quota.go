@@ -89,7 +89,10 @@ func calculateAudioQuota(info QuotaInfo) int {
 }
 
 func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage) error {
-	if relayInfo != nil && relayInfo.BillingSource == BillingSourceMeteredOnly {
+	if relayInfo == nil || usage == nil {
+		return fmt.Errorf("invalid relay info or usage")
+	}
+	if ensureMeteredOnlyFunding(ctx, relayInfo) {
 		return nil
 	}
 	if relayInfo.UsePrice {
@@ -409,6 +412,17 @@ func PreConsumeTokenQuota(relayInfo *relaycommon.RelayInfo, quota int) error {
 }
 
 func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQuota int, sendEmail bool) (err error) {
+	if relayInfo == nil {
+		return errors.New("relayInfo is nil")
+	}
+	// Keep this guard at the legacy sink itself.  Some providers (realtime,
+	// Midjourney, violation-fee handling) still call PostConsumeQuota directly;
+	// none of those paths may turn an administrator's usage record into a real
+	// wallet/subscription/token mutation.
+	if relayInfo.BillingSource == BillingSourceMeteredOnly {
+		recordMeteredTokenUsageDelta(relayInfo, quota)
+		return nil
+	}
 
 	// 1) Consume from wallet quota OR subscription item
 	if relayInfo != nil && relayInfo.BillingSource == BillingSourceSubscription {

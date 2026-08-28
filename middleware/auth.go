@@ -33,10 +33,76 @@ func validUserInfo(username string, role int) bool {
 	return true
 }
 
+// authInt normalizes values restored by the different session backends.  Most
+// backends preserve int, while JSON-backed stores may restore integral values
+// as float64 or strings.  Authentication must reject malformed values rather
+// than panic on a type assertion.
+func authInt(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int8:
+		return int(v), true
+	case int16:
+		return int(v), true
+	case int32:
+		return int(v), true
+	case int64:
+		return int(v), true
+	case uint:
+		return int(v), true
+	case uint8:
+		return int(v), true
+	case uint16:
+		return int(v), true
+	case uint32:
+		return int(v), true
+	case uint64:
+		return int(v), true
+	case float32:
+		return int(v), float32(int(v)) == v
+	case float64:
+		return int(v), float64(int(v)) == v
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(v))
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+// setAdminAPIUnlimitedContext records the role-based administrator billing
+// privilege on the request. It is deliberately derived from the numeric role,
+// never from a username, so renaming an account or adding another admin does
+// not require a code change.
+func setAdminAPIUnlimitedContext(c *gin.Context, role int) {
+	if c == nil {
+		return
+	}
+	isAdmin := role >= common.RoleAdminUser
+	common.SetContextKey(c, constant.ContextKeyAdminAPIUnlimited, isAdmin)
+	// Keep the plain Gin key for code paths that predate ContextKey helpers.
+	c.Set(string(constant.ContextKeyAdminAPIUnlimited), isAdmin)
+}
+
+// IsAdminAPIUnlimited reports whether the current request belongs to an
+// administrator. The marker is set by every authenticated request path; the
+// role fallback also keeps direct middleware/unit-test composition safe.
+func IsAdminAPIUnlimited(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	if value, ok := common.GetContextKey(c, constant.ContextKeyAdminAPIUnlimited); ok {
+		if isAdmin, ok := value.(bool); ok {
+			return isAdmin
+		}
+	}
+	return c.GetInt("role") >= common.RoleAdminUser
+}
+
 func authHelper(c *gin.Context, minRole int) {
 	session := sessions.Default(c)
 	username := session.Get("username")
-	role := session.Get("role")
 	id := session.Get("id")
 	status := session.Get("status")
 	useAccessToken := false
@@ -79,7 +145,6 @@ func authHelper(c *gin.Context, minRole int) {
 			}
 			// Token is valid
 			username = user.Username
-			role = user.Role
 			id = user.Id
 			status = user.Status
 			useAccessToken = true
@@ -92,6 +157,32 @@ func authHelper(c *gin.Context, minRole int) {
 			return
 		}
 	}
+
+	// Session role data is a cached login snapshot.  Resolve the current role
+	// from the database on every request so demotions take effect immediately
+	// and promotions do not require a fresh login.  If the lookup fails, use a
+	// common-user role (fail closed for administrator-only billing privileges)
+	// while retaining the ordinary authentication path.
+	userID, idOK := authInt(id)
+	usernameValue, usernameOK := username.(string)
+	roleValue := common.RoleCommonUser
+	statusValue, statusOK := authInt(status)
+	if !idOK || !usernameOK || !statusOK {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid),
+		})
+		c.Abort()
+		return
+	}
+	if resolvedRole, roleErr := model.GetUserRole(userID); roleErr == nil {
+		roleValue = resolvedRole
+	} else {
+		roleValue = common.RoleCommonUser
+	}
+	id = userID
+	username = usernameValue
+	status = statusValue
 	// get header New-Api-User
 	apiUserIdStr := c.Request.Header.Get("New-Api-User")
 	if apiUserIdStr == "" {
@@ -112,7 +203,7 @@ func authHelper(c *gin.Context, minRole int) {
 		return
 
 	}
-	if id != apiUserId {
+	if userID != apiUserId {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"success": false,
 			"message": common.TranslateMessage(c, i18n.MsgAuthUserIdMismatch),
@@ -120,7 +211,7 @@ func authHelper(c *gin.Context, minRole int) {
 		c.Abort()
 		return
 	}
-	if status.(int) == common.UserStatusDisabled {
+	if statusValue == common.UserStatusDisabled {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": common.TranslateMessage(c, i18n.MsgAuthUserBanned),
@@ -128,7 +219,7 @@ func authHelper(c *gin.Context, minRole int) {
 		c.Abort()
 		return
 	}
-	if role.(int) < minRole {
+	if roleValue < minRole {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": common.TranslateMessage(c, i18n.MsgAuthInsufficientPrivilege),
@@ -136,7 +227,7 @@ func authHelper(c *gin.Context, minRole int) {
 		c.Abort()
 		return
 	}
-	if !validUserInfo(username.(string), role.(int)) {
+	if !validUserInfo(usernameValue, roleValue) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": common.TranslateMessage(c, i18n.MsgAuthUserInfoInvalid),
@@ -147,11 +238,12 @@ func authHelper(c *gin.Context, minRole int) {
 	// 防止不同newapi版本冲突，导致数据不通用
 	c.Header("Auth-Version", "864b7076dbcd0a3c01b5520316720ebf")
 	c.Set("username", username)
-	c.Set("role", role)
-	c.Set("id", id)
+	c.Set("role", roleValue)
+	c.Set("id", userID)
 	c.Set("group", session.Get("group"))
 	c.Set("user_group", session.Get("group"))
 	c.Set("use_access_token", useAccessToken)
+	setAdminAPIUnlimitedContext(c, roleValue)
 
 	c.Next()
 }
@@ -195,9 +287,15 @@ func TokenOrUserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		// Try session auth first (dashboard users)
 		session := sessions.Default(c)
-		if id := session.Get("id"); id != nil {
-			if status, ok := session.Get("status").(int); ok && status == common.UserStatusEnabled {
-				c.Set("id", id)
+		if sessionID, idOK := authInt(session.Get("id")); idOK {
+			if status, statusOK := authInt(session.Get("status")); statusOK && status == common.UserStatusEnabled {
+				role := common.RoleCommonUser
+				if resolved, err := model.GetUserRole(sessionID); err == nil {
+					role = resolved
+				}
+				c.Set("id", sessionID)
+				c.Set("role", role)
+				setAdminAPIUnlimitedContext(c, role)
 				c.Next()
 				return
 			}
@@ -280,6 +378,12 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 		c.Set("id", token.UserId)
 		c.Set("token_id", token.Id)
 		c.Set("token_key", token.Key)
+		role := common.RoleCommonUser
+		if resolved, roleErr := model.GetUserRole(token.UserId); roleErr == nil {
+			role = resolved
+		}
+		c.Set("role", role)
+		setAdminAPIUnlimitedContext(c, role)
 		c.Next()
 	}
 }
@@ -389,14 +493,28 @@ func TokenAuth() func(c *gin.Context) {
 		}
 
 		userCache.WriteContext(c)
+		role, roleErr := model.GetUserRole(token.UserId)
+		admin := roleErr == nil && role >= common.RoleAdminUser
+		if roleErr == nil {
+			c.Set("role", role)
+			setAdminAPIUnlimitedContext(c, role)
+		} else {
+			// A role lookup failure must fail closed for privileged behavior while
+			// still allowing the ordinary token request to proceed if the user is
+			// otherwise valid.
+			c.Set("role", common.RoleCommonUser)
+			setAdminAPIUnlimitedContext(c, common.RoleCommonUser)
+		}
 
 		userGroup := userCache.Group
 		tokenGroup := token.Group
 		if tokenGroup != "" {
-			// check common.UserUsableGroups[userGroup]
-			if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
-				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
-				return
+			if !admin {
+				// check common.UserUsableGroups[userGroup]
+				if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
+					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
+					return
+				}
 			}
 			// check group in common.GroupRatio
 			if !ratio_setting.ContainsGroupRatio(tokenGroup) {
@@ -429,7 +547,8 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 	if !token.UnlimitedQuota {
 		c.Set("token_quota", token.RemainQuota)
 	}
-	if token.ModelLimitsEnabled {
+	admin := IsAdminAPIUnlimited(c)
+	if token.ModelLimitsEnabled && !admin {
 		c.Set("token_model_limit_enabled", true)
 		c.Set("token_model_limit", token.GetModelLimitsMap())
 	} else {
@@ -438,7 +557,7 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 	common.SetContextKey(c, constant.ContextKeyTokenGroup, token.Group)
 	common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, token.CrossGroupRetry)
 	if len(parts) > 1 {
-		if model.IsAdmin(token.UserId) {
+		if admin || model.IsAdmin(token.UserId) {
 			c.Set("specific_channel_id", parts[1])
 		} else {
 			c.Header("specific_channel_version", "701e3ae1dc3f7975556d354e0675168d004891c8")

@@ -70,6 +70,27 @@ func TestValidateUserToken_AllowsInternalExhaustedTokenForMeteredOnlyGroup(t *te
 	require.Equal(t, common.TokenStatusExhausted, token.Status)
 }
 
+func TestValidateUserToken_AllowsExhaustedTokenForAdministrator(t *testing.T) {
+	truncateTables(t)
+	insertUserForQuotaPolicy(t, 205, "default")
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", 205).Update("role", common.RoleAdminUser).Error)
+
+	insertTokenForQuotaPolicy(t, &Token{
+		Id:          205,
+		UserId:      205,
+		Key:         "admin-exhausted-token",
+		Name:        "admin",
+		Status:      common.TokenStatusExhausted,
+		RemainQuota: 0,
+		Group:       "default",
+	})
+
+	token, err := ValidateUserToken("admin-exhausted-token")
+	require.NoError(t, err)
+	require.NotNil(t, token)
+	require.Equal(t, common.TokenStatusExhausted, token.Status)
+}
+
 func TestValidateUserToken_RejectsExternalExhaustedTokenForCPAGroup(t *testing.T) {
 	truncateTables(t)
 	withModelQuotaPolicy(t, "asxs,default", "charged", internalMeteredOnlyRules())

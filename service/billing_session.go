@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -364,6 +365,22 @@ func (s *BillingSession) syncRelayInfo() {
 func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preConsumedQuota int) (*BillingSession, *types.NewAPIError) {
 	if relayInfo == nil {
 		return nil, types.NewError(fmt.Errorf("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+
+	// Administrators are metered for observability, but their API requests do
+	// not reserve or settle wallet, subscription, or token quota.  Keep this
+	// decision at the billing-session factory so every normal relay format uses
+	// the same no-charge funding source, regardless of the configured group
+	// billing preference.
+	if common.GetContextKeyBool(c, constant.ContextKeyAdminAPIUnlimited) {
+		session := &BillingSession{
+			relayInfo: relayInfo,
+			funding:   &MeteredOnlyFunding{},
+		}
+		if apiErr := session.preConsume(c, preConsumedQuota); apiErr != nil {
+			return nil, apiErr
+		}
+		return session, nil
 	}
 
 	if !operation_setting.IsQuotaChargedForUser(relayInfo.UserGroup, relayInfo.UsingGroup) {

@@ -91,6 +91,29 @@ func taskIsMeteredOnly(task *model.Task) bool {
 	return task.PrivateData.BillingSource == BillingSourceMeteredOnly
 }
 
+// RecordTaskTokenUsage records a positive metered-only task adjustment on the
+// token without changing its remaining quota. It is exported for legacy
+// asynchronous task pollers that do not carry a RelayInfo/BillingSession.
+func RecordTaskTokenUsage(ctx context.Context, task *model.Task, quota int) {
+	if quota <= 0 {
+		return
+	}
+	AdjustTaskTokenUsage(ctx, task, quota)
+}
+
+// AdjustTaskTokenUsage reconciles a signed metered-only task delta on the
+// token without changing its remaining quota. A negative delta is used when
+// the asynchronous final amount is below the submission estimate.
+func AdjustTaskTokenUsage(ctx context.Context, task *model.Task, delta int) {
+	if task == nil || !taskIsMeteredOnly(task) || delta == 0 || task.PrivateData.TokenId <= 0 {
+		return
+	}
+	tokenKey := resolveTokenKey(ctx, task.PrivateData.TokenId, task.TaskID)
+	if err := model.AdjustTokenUsedQuota(task.PrivateData.TokenId, tokenKey, delta); err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("调整仅计量任务令牌用量失败 (delta=%d, task=%s): %s", delta, task.TaskID, err.Error()))
+	}
+}
+
 // taskAdjustFunding 调整任务的资金来源（钱包或订阅），delta > 0 表示扣费，delta < 0 表示退还。
 func taskAdjustFunding(task *model.Task, delta int) error {
 	if taskIsMeteredOnly(task) {
@@ -109,6 +132,7 @@ func taskAdjustFunding(task *model.Task, delta int) error {
 // 需要通过 resolveTokenKey 运行时获取 key（不从 PrivateData 中读取）。
 func taskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
 	if taskIsMeteredOnly(task) {
+		AdjustTaskTokenUsage(ctx, task, delta)
 		return
 	}
 	if task.PrivateData.TokenId <= 0 || delta == 0 {
