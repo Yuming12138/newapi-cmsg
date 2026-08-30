@@ -5238,6 +5238,20 @@ type homeAuthDispatcher interface {
 	RPopAuth(ctx context.Context, requestedModel string, sessionID string, headers http.Header, count int) ([]byte, error)
 }
 
+type homeHeartbeatGraceDispatcher interface {
+	HeartbeatOKWithin(grace time.Duration) bool
+}
+
+func homeDispatcherHeartbeatOK(client homeAuthDispatcher) bool {
+	if client == nil {
+		return false
+	}
+	if graceful, ok := client.(homeHeartbeatGraceDispatcher); ok {
+		return graceful.HeartbeatOKWithin(home.DefaultHeartbeatGrace)
+	}
+	return client.HeartbeatOK()
+}
+
 var currentHomeDispatcher = func() homeAuthDispatcher {
 	return home.Current()
 }
@@ -5442,7 +5456,7 @@ func (m *Manager) pickNextViaHome(ctx context.Context, model string, opts clipro
 	}
 
 	client := currentHomeDispatcher()
-	if client == nil || !client.HeartbeatOK() {
+	if !homeDispatcherHeartbeatOK(client) {
 		return nil, nil, "", &Error{Code: "home_unavailable", Message: "home control center unavailable", HTTPStatus: http.StatusServiceUnavailable}
 	}
 
