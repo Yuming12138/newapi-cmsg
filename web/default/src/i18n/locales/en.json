@@ -1857,6 +1857,8 @@
     "Force unlock channel 12 quota protection": "Force unlock channel 12 quota protection",
     "Force unlock channel 12 quota protection?": "Force unlock channel 12 quota protection?",
     "Force unlock until reset": "Force unlock until reset",
+    "Unlocked until {{time}}": "Unlocked until {{time}}",
+    "Channel 12 quota protection is temporarily bypassed until {{time}}.": "Channel 12 quota protection is temporarily bypassed until {{time}}.",
     "Channel 12 quota protection force-unlocked": "Channel 12 quota protection force-unlocked",
     "Restore channel 12 quota protection": "Restore channel 12 quota protection",
     "Restore channel 12 quota protection?": "Restore channel 12 quota protection?",

@@ -26,6 +26,7 @@ import {
   ChevronRight,
   ListOrdered,
   RotateCcw,
+  ShieldOff,
   Shuffle,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -183,6 +184,8 @@ type CliproxyCPAQuotaMeta = {
   weekly: CliproxyCPAQuotaWindow | null
   nextResetAfterSeconds: number | null
   nextResetAt: number | null
+  manualForceUnlockActive: boolean
+  manualForceUnlockUntil: number | null
   buckets: CliproxyCPAQuotaBucket[]
   accounts: CliproxyCPAQuotaAccount[]
 }
@@ -462,6 +465,7 @@ function parseCliproxyCPAQuotaMeta(
     const guard = asObject(parsed?.cliproxy_cpa_quota_guard)
     const health = asObject(guard?.health)
     const windows = asObject(health?.windows)
+    const dynamicDailyBudget = asObject(health?.dynamic_daily_budget)
     if (!guard || !health) return null
     const updatedAt =
       timestampValue(quotaSource?.updated_at) ??
@@ -491,6 +495,21 @@ function parseCliproxyCPAQuotaMeta(
     const bucketNextResetAtCandidates = buckets
       .map((bucket) => bucket.nextResetAt)
       .filter((value): value is number => value != null && value > 0)
+    const manualOverride =
+      asObject(health.manual_force_unlock) ??
+      asObject(dynamicDailyBudget?.manual_force_unlock) ??
+      asObject(guard.manual_force_unlock)
+    const manualForceUnlockUntil =
+      timestampValue(manualOverride?.until) ??
+      timestampValue(dynamicDailyBudget?.manual_force_unlock_until)
+    const manualForceUnlockRequested =
+      booleanValue(manualOverride?.active) ??
+      booleanValue(dynamicDailyBudget?.manual_force_unlock_active) ??
+      false
+    const manualForceUnlockActive =
+      manualForceUnlockRequested &&
+      manualForceUnlockUntil != null &&
+      manualForceUnlockUntil > Math.floor(Date.now() / 1000)
 
     return {
       sourceType:
@@ -533,6 +552,8 @@ function parseCliproxyCPAQuotaMeta(
         (bucketNextResetAtCandidates.length > 0
           ? Math.min(...bucketNextResetAtCandidates)
           : null),
+      manualForceUnlockActive,
+      manualForceUnlockUntil,
       guardMode:
         typeof health.guard_mode === 'string' ? health.guard_mode : null,
       buckets,
@@ -571,6 +592,43 @@ function formatCompactTimestamp(timestamp: number | null | undefined): string {
   const hours = String(date.getHours()).padStart(2, '0')
   const minutes = String(date.getMinutes()).padStart(2, '0')
   return `${month}-${day} ${hours}:${minutes}`
+}
+
+function CliproxyCPAForceUnlockIndicator({
+  meta,
+}: {
+  meta: CliproxyCPAQuotaMeta
+}) {
+  const { t } = useTranslation()
+  if (!meta.manualForceUnlockActive || meta.manualForceUnlockUntil == null) {
+    return null
+  }
+
+  const compactTime = formatCompactTimestamp(meta.manualForceUnlockUntil)
+  const fullTime = formatTimestampToDate(meta.manualForceUnlockUntil)
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span className='inline-flex max-w-[230px] cursor-help items-center gap-1 truncate text-[11px] font-semibold text-amber-600 dark:text-amber-400' />
+        }
+      >
+        <ShieldOff className='size-3 shrink-0' />
+        <span className='truncate'>
+          {t('Unlocked until {{time}}', { time: compactTime })}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className={CPA_TOOLTIP_CONTENT_CLASS}>
+        <p>
+          {t(
+            'Channel 12 quota protection is temporarily bypassed until {{time}}.',
+            { time: fullTime }
+          )}
+        </p>
+      </TooltipContent>
+    </Tooltip>
+  )
 }
 
 function formatCliproxyCPAUnits(value: number | null | undefined): string {
@@ -1346,6 +1404,7 @@ function CliproxyCPAQuotaDetails({
   channelId: number
   onRequestResetCredit: (account: CliproxyCPAQuotaAccount) => void
 }) {
+  const { t } = useTranslation()
   if (isCliproxyCPAModelQuota(meta)) {
     return <CliproxyCPAModelQuotaDetails meta={meta} />
   }
@@ -1357,6 +1416,16 @@ function CliproxyCPAQuotaDetails({
 
   return (
     <div className='text-foreground w-[360px] max-w-[calc(100vw-2rem)] space-y-2'>
+      {meta.manualForceUnlockActive && meta.manualForceUnlockUntil != null && (
+        <div className='flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-300'>
+          <ShieldOff className='size-3.5 shrink-0' />
+          <span>
+            {t('Unlocked until {{time}}', {
+              time: formatTimestampToDate(meta.manualForceUnlockUntil),
+            })}
+          </span>
+        </div>
+      )}
       <div className='grid grid-cols-2 gap-2'>
         <div
           className={cn(
@@ -1804,27 +1873,32 @@ function BalanceCell({ channel }: { channel: Channel }) {
           )}
         </div>
         {cliproxyCPAQuota && (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <span
-                  className={cn(
-                    'text-muted-foreground max-w-[230px] cursor-help truncate text-[11px] leading-none font-normal',
-                    cliproxyCPALunaReserve && textColorMap.purple
-                  )}
+          <div className='flex max-w-full flex-wrap items-center gap-x-2 gap-y-0.5'>
+            {cliproxyCPAQuota.manualForceUnlockActive && (
+              <CliproxyCPAForceUnlockIndicator meta={cliproxyCPAQuota} />
+            )}
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    className={cn(
+                      'text-muted-foreground max-w-[230px] cursor-help truncate text-[11px] leading-none font-normal',
+                      cliproxyCPALunaReserve && textColorMap.purple
+                    )}
+                  />
+                }
+              >
+                {formatCliproxyCPASummary(cliproxyCPAQuota)}
+              </TooltipTrigger>
+              <TooltipContent className={CPA_TOOLTIP_CONTENT_CLASS}>
+                <CliproxyCPAQuotaDetails
+                  meta={cliproxyCPAQuota}
+                  channelId={channel.id}
+                  onRequestResetCredit={setResetCreditAccount}
                 />
-              }
-            >
-              {formatCliproxyCPASummary(cliproxyCPAQuota)}
-            </TooltipTrigger>
-            <TooltipContent className={CPA_TOOLTIP_CONTENT_CLASS}>
-              <CliproxyCPAQuotaDetails
-                meta={cliproxyCPAQuota}
-                channelId={channel.id}
-                onRequestResetCredit={setResetCreditAccount}
-              />
-            </TooltipContent>
-          </Tooltip>
+              </TooltipContent>
+            </Tooltip>
+          </div>
         )}
       </div>
 
