@@ -327,6 +327,10 @@ export function ChannelsTable() {
       }
     },
     placeholderData: (previousData) => previousData,
+    // The CPA guard runs every minute; refresh channel metadata so the
+    // unlock badge reflects the current expiry and disappears after reset.
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   })
 
   // Apply tag aggregation if tag mode is enabled

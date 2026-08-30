@@ -1857,6 +1857,8 @@
     "Force unlock channel 12 quota protection": "强制解除渠道 12 额度保护",
     "Force unlock channel 12 quota protection?": "强制解除渠道 12 额度保护？",
     "Force unlock until reset": "解除限制直到刷新",
+    "Unlocked until {{time}}": "解除限制至 {{time}}",
+    "Channel 12 quota protection is temporarily bypassed until {{time}}.": "渠道 12 额度保护临时解除至 {{time}}。",
     "Channel 12 quota protection force-unlocked": "渠道 12 额度保护已解除",
     "Restore channel 12 quota protection": "恢复渠道 12 额度保护",
     "Restore channel 12 quota protection?": "恢复渠道 12 额度保护？",
