@@ -39,6 +39,11 @@ const (
 	homeRefreshOperationTimeout    = 35 * time.Second
 	homeSubscriptionReceiveTimeout = 3 * time.Second
 	redisChannelCluster            = "cluster"
+	// DefaultHeartbeatGrace keeps brief Home subscription reconnects from
+	// turning into an immediate outage for request traffic. The command
+	// connection is still probed when a request arrives, so a longer outage
+	// remains unavailable instead of using an unbounded stale state.
+	DefaultHeartbeatGrace = 20 * time.Second
 )
 
 var (
@@ -93,6 +98,7 @@ type Client struct {
 	instanceID string
 
 	heartbeatOK       atomic.Bool
+	lastHeartbeatAt   atomic.Int64
 	clusterNodes      []clusterNode
 	reconnectFailures int
 }
@@ -137,6 +143,36 @@ func (c *Client) HeartbeatOK() bool {
 		return false
 	}
 	return c.heartbeatOK.Load()
+}
+
+// HeartbeatOKWithin reports whether Home is healthy now or recovered within
+// the supplied short grace window. It is intended only for request-time
+// handling of transient subscription reconnects; callers still perform their
+// actual Home operation and must handle its error.
+func (c *Client) HeartbeatOKWithin(grace time.Duration) bool {
+	if c == nil || !c.Enabled() {
+		return false
+	}
+	if c.heartbeatOK.Load() {
+		return true
+	}
+	if grace <= 0 {
+		return false
+	}
+	last := c.lastHeartbeatAt.Load()
+	if last <= 0 {
+		return false
+	}
+	elapsed := time.Since(time.Unix(0, last))
+	return elapsed >= 0 && elapsed <= grace
+}
+
+func (c *Client) markHeartbeatOK() {
+	if c == nil {
+		return
+	}
+	c.lastHeartbeatAt.Store(time.Now().UnixNano())
+	c.heartbeatOK.Store(true)
 }
 
 func (c *Client) Close() {
@@ -1121,7 +1157,7 @@ func (c *Client) StartConfigSubscriber(ctx context.Context, onConfig func([]byte
 		}
 
 		c.resetReconnectFailures()
-		c.heartbeatOK.Store(true)
+		c.markHeartbeatOK()
 
 		for {
 			_, receiveTimeout = c.subscriptionParameters()

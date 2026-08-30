@@ -399,7 +399,7 @@ func (s *Server) homeHeartbeatMiddleware() gin.HandlerFunc {
 			}
 		}
 		client := home.Current()
-		if client == nil || !client.HeartbeatOK() {
+		if client == nil || !client.HeartbeatOKWithin(home.DefaultHeartbeatGrace) {
 			c.AbortWithStatus(http.StatusServiceUnavailable)
 			return
 		}

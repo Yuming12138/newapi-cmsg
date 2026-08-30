@@ -5,13 +5,15 @@ health_url="${CMSG_HOME_WATCHDOG_HEALTH_URL:-http://127.0.0.1:8317/healthz}"
 listen_port="${CMSG_HOME_WATCHDOG_LISTEN_PORT:-18327}"
 failure_threshold="${CMSG_HOME_WATCHDOG_FAILURE_THRESHOLD:-3}"
 state_file="${CMSG_HOME_WATCHDOG_STATE_FILE:-/run/cmsg-home-tunnel-watchdog.failures}"
+reconnect_enabled="${CMSG_HOME_WATCHDOG_RECONNECT:-0}"
+notice_file="${state_file}.notice"
 
 log_message() {
   /usr/bin/logger -t cmsg-home-tunnel-watchdog -- "$*" || true
 }
 
 reset_failures() {
-  rm -f -- "$state_file"
+	rm -f -- "$state_file" "$notice_file"
 }
 
 if [[ ! "$listen_port" =~ ^[0-9]+$ ]] || ((listen_port < 1 || listen_port > 65535)); then
@@ -59,8 +61,24 @@ fi
 
 listener_output=$(/usr/bin/ss -H -ltnp "sport = :${listen_port}" || true)
 if ! /usr/bin/grep -Fq "127.0.0.1:${listen_port}" <<< "$listener_output"; then
-  log_message "health returned 503 $failures times but the expected loopback listener is absent"
-  exit 1
+	if [[ ! -e "$notice_file" ]]; then
+		log_message "Home heartbeat failed $failures consecutive checks; loopback listener is absent, waiting for the remote tunnel client"
+		: > "$notice_file"
+	fi
+	exit 0
+fi
+
+# /healthz is gated by the same Home heartbeat carried through this tunnel.
+# Killing the listener solely because that endpoint returned 503 creates a
+# feedback loop: the watchdog disconnects the tunnel, which keeps Home down.
+# The remote tunnel service already has its own SSH keepalive and restart
+# policy. Keep reconnect as an explicit emergency opt-in instead.
+if [[ "$reconnect_enabled" != "1" ]]; then
+	if [[ ! -e "$notice_file" ]]; then
+		log_message "Home heartbeat failed $failures consecutive checks; leaving the cmsg-tunnel listener intact (automatic reconnect disabled)"
+		: > "$notice_file"
+	fi
+	exit 0
 fi
 
 mapfile -t listener_pids < <(
