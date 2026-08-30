@@ -414,8 +414,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           {quotaProtection && (
             <>
               <DropdownMenuItem
-                onSelect={(event) => {
-                  event.preventDefault()
+                onClick={() => {
                   openQuotaProtectionDialog('unlock')
                 }}
                 className='text-amber-700 focus:text-amber-700 dark:text-amber-400 dark:focus:text-amber-400'
@@ -429,8 +428,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
               </DropdownMenuItem>
               {quotaProtection.active && (
                 <DropdownMenuItem
-                  onSelect={(event) => {
-                    event.preventDefault()
+                  onClick={() => {
                     openQuotaProtectionDialog('restore')
                   }}
                 >
