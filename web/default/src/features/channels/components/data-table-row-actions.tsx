@@ -36,6 +36,7 @@ import {
   Loader2,
   ShieldCheck,
   ShieldOff,
+  CalendarClock,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -55,6 +56,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { DateTimePicker } from '@/components/datetime-picker'
 import {
   cancelChannelQuotaProtectionForceUnlock,
   forceUnlockChannelQuotaProtection,
@@ -82,6 +84,11 @@ type ChannelQuotaProtectionState = {
   resetAt: number | null
 }
 
+// Keep these bounds aligned with the backend guard. The backend remains the
+// source of truth; the client-side checks only provide immediate feedback.
+const FORCE_UNLOCK_MIN_WINDOW_SECONDS = 60
+const FORCE_UNLOCK_MAX_WINDOW_SECONDS = 8 * 24 * 60 * 60
+
 function recordValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -91,6 +98,20 @@ function recordValue(value: unknown): Record<string, unknown> | null {
 function timestampValue(value: unknown): number | null {
   const parsed = typeof value === 'number' ? value : Number(value)
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null
+}
+
+function defaultQuotaProtectionUntil(
+  protection: ChannelQuotaProtectionState
+): Date {
+  const now = Math.floor(Date.now() / 1000)
+  const minUntil = now + FORCE_UNLOCK_MIN_WINDOW_SECONDS
+  const maxUntil = now + FORCE_UNLOCK_MAX_WINDOW_SECONDS
+  const preferredUntil =
+    protection.until != null && protection.until > now
+      ? protection.until
+      : (protection.resetAt ?? now + 60 * 60)
+  const clampedUntil = Math.min(maxUntil, Math.max(minUntil, preferredUntil))
+  return new Date(clampedUntil * 1000)
 }
 
 function channelQuotaProtectionState(
@@ -137,6 +158,12 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [quotaProtectionConfirmOpen, setQuotaProtectionConfirmOpen] =
     useState(false)
+  const [quotaProtectionUntil, setQuotaProtectionUntil] = useState<
+    Date | undefined
+  >()
+  const [quotaProtectionTimeError, setQuotaProtectionTimeError] = useState<
+    string | null
+  >(null)
   const [isTesting, setIsTesting] = useState(false)
   const [isTogglingStatus, setIsTogglingStatus] = useState(false)
   const [isUpdatingQuotaProtection, setIsUpdatingQuotaProtection] =
@@ -145,6 +172,19 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const isEnabled = isChannelEnabled(channel)
   const isMultiKey = isMultiKeyChannel(channel)
   const quotaProtection = channelQuotaProtectionState(channel)
+
+  const openQuotaProtectionDialog = () => {
+    if (!quotaProtection) return
+    setQuotaProtectionTimeError(null)
+    setQuotaProtectionUntil(
+      quotaProtection.active
+        ? quotaProtection.until != null
+          ? new Date(quotaProtection.until * 1000)
+          : undefined
+        : defaultQuotaProtectionUntil(quotaProtection)
+    )
+    setQuotaProtectionConfirmOpen(true)
+  }
 
   const handleEdit = () => {
     setCurrentRow(channel)
@@ -207,11 +247,40 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
 
   const handleQuotaProtectionConfirm = async () => {
     if (!quotaProtection) return
+
+    let requestedUntil: number | undefined
+    if (!quotaProtection.active) {
+      const now = Math.floor(Date.now() / 1000)
+      const selectedMilliseconds = quotaProtectionUntil?.getTime() ?? NaN
+      if (!Number.isFinite(selectedMilliseconds)) {
+        setQuotaProtectionTimeError(t('Select a date and time'))
+        return
+      }
+      requestedUntil = Math.floor(selectedMilliseconds / 1000)
+      const secondsFromNow = requestedUntil - now
+      if (secondsFromNow <= 0) {
+        setQuotaProtectionTimeError(t('The unlock time must be in the future'))
+        return
+      }
+      if (secondsFromNow < FORCE_UNLOCK_MIN_WINDOW_SECONDS) {
+        setQuotaProtectionTimeError(
+          t('The unlock time must be at least 1 minute from now')
+        )
+        return
+      }
+      if (secondsFromNow > FORCE_UNLOCK_MAX_WINDOW_SECONDS) {
+        setQuotaProtectionTimeError(
+          t('The unlock time cannot be more than 8 days from now')
+        )
+        return
+      }
+    }
+
     setIsUpdatingQuotaProtection(true)
     try {
       const response = quotaProtection.active
         ? await cancelChannelQuotaProtectionForceUnlock(channel.id)
-        : await forceUnlockChannelQuotaProtection(channel.id)
+        : await forceUnlockChannelQuotaProtection(channel.id, requestedUntil)
       if (!response.success) {
         toast.error(response.message || t('Failed to update quota protection'))
         return
@@ -221,6 +290,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           ? t('Channel 12 quota protection restored')
           : t('Channel 12 quota protection force-unlocked')
       )
+      setQuotaProtectionTimeError(null)
       setQuotaProtectionConfirmOpen(false)
       await queryClient.invalidateQueries({
         queryKey: channelsQueryKeys.lists(),
@@ -239,7 +309,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     statusIcon = <PowerOff className='size-4' />
   }
 
-  let quotaProtectionConfirmText = t('Force unlock until reset')
+  let quotaProtectionConfirmText = t('Force unlock until selected time')
   if (isUpdatingQuotaProtection) {
     quotaProtectionConfirmText = t('Updating')
   } else if (quotaProtection?.active) {
@@ -345,7 +415,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             <DropdownMenuItem
               onSelect={(event) => {
                 event.preventDefault()
-                setQuotaProtectionConfirmOpen(true)
+                openQuotaProtectionDialog()
               }}
               className={
                 quotaProtection.active
@@ -471,14 +541,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
               </p>
               <p className='text-muted-foreground'>
                 {t(
-                  'The override expires automatically at the detected reset boundary: {{time}}.',
-                  {
-                    time: formatTimestampToDate(
-                      quotaProtection?.resetAt ??
-                        quotaProtection?.until ??
-                        undefined
-                    ),
-                  }
+                  'Choose the date and time when the temporary bypass should end. The current CPA quota cycle can still end it earlier.'
                 )}
               </p>
             </div>
@@ -488,7 +551,45 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         destructive={!quotaProtection?.active}
         isLoading={isUpdatingQuotaProtection}
         handleConfirm={handleQuotaProtectionConfirm}
-      />
+      >
+        {!quotaProtection?.active && (
+          <div className='space-y-2'>
+            <div className='text-muted-foreground flex items-center gap-1.5 text-xs font-medium'>
+              <CalendarClock className='size-3.5' />
+              <span>{t('Unlock until')}</span>
+            </div>
+            <DateTimePicker
+              value={quotaProtectionUntil}
+              onChange={(date) => {
+                setQuotaProtectionUntil(date)
+                setQuotaProtectionTimeError(null)
+              }}
+              className='w-full'
+              placeholder={t('Select unlock date')}
+            />
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'You can choose from 1 minute up to 8 days from now. The time uses your browser local time.'
+              )}
+            </p>
+            {quotaProtectionTimeError && (
+              <p className='text-destructive text-xs' role='alert'>
+                {quotaProtectionTimeError}
+              </p>
+            )}
+            {quotaProtectionUntil &&
+              Number.isFinite(quotaProtectionUntil.getTime()) && (
+                <p className='text-muted-foreground text-xs'>
+                  {t('Selected end time: {{time}}', {
+                    time: formatTimestampToDate(
+                      Math.floor(quotaProtectionUntil.getTime() / 1000)
+                    ),
+                  })}
+                </p>
+              )}
+          </div>
+        )}
+      </ConfirmDialog>
 
       <ConfirmDialog
         open={deleteConfirmOpen}

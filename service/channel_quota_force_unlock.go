@@ -14,7 +14,15 @@ const (
 	CliproxyCPAQuotaForceUnlockChannelID = 12
 	cliproxyCPAQuotaForceUnlockOptionKey = "cliproxy_cpa_quota_guard.force_unlock"
 	cliproxyCPAQuotaForceUnlockMaxWindow = 8 * 24 * time.Hour
+	cliproxyCPAQuotaForceUnlockMinWindow = time.Minute
 )
+
+// ChannelQuotaForceUnlockRequest is the optional payload accepted by the
+// channel quota-protection override endpoint. A nil Until keeps the legacy
+// behaviour of choosing the next official reset boundary.
+type ChannelQuotaForceUnlockRequest struct {
+	Until *int64 `json:"until"`
+}
 
 type ChannelQuotaForceUnlockResult struct {
 	ChannelID            int   `json:"channel_id"`
@@ -25,6 +33,16 @@ type ChannelQuotaForceUnlockResult struct {
 }
 
 func ForceUnlockCliproxyCPAQuotaGuard(channelID int, requestedBy int, now int64) (*ChannelQuotaForceUnlockResult, error) {
+	return ForceUnlockCliproxyCPAQuotaGuardUntil(channelID, requestedBy, now, nil)
+}
+
+// ForceUnlockCliproxyCPAQuotaGuardUntil temporarily bypasses New API's local
+// quota guard for channel 12. When requestedUntil is nil, the override ends at
+// the next detected official reset boundary. When it is supplied, the caller
+// may choose any future time inside the bounded administrative window; the
+// guard still records the current planning signature so an upstream cycle
+// change invalidates the override automatically.
+func ForceUnlockCliproxyCPAQuotaGuardUntil(channelID int, requestedBy int, now int64, requestedUntil *int64) (*ChannelQuotaForceUnlockResult, error) {
 	channel, guard, health, err := getCliproxyCPAQuotaGuardChannel(channelID)
 	if err != nil {
 		return nil, err
@@ -39,7 +57,7 @@ func ForceUnlockCliproxyCPAQuotaGuard(channelID int, requestedBy int, now int64)
 		return nil, fmt.Errorf("channel 12 has no schedulable upstream quota; force unlock cannot bypass actual CPA exhaustion or account unavailability")
 	}
 
-	until, cycleSignature, err := cliproxyCPAQuotaForceUnlockBoundary(health, now)
+	until, cycleSignature, err := cliproxyCPAQuotaForceUnlockTarget(health, now, requestedUntil)
 	if err != nil {
 		return nil, err
 	}
@@ -178,11 +196,11 @@ func cliproxyCPAQuotaForceUnlockEligible(health map[string]interface{}) bool {
 }
 
 func cliproxyCPAQuotaForceUnlockBoundary(health map[string]interface{}, now int64) (int64, string, error) {
-	dynamic, _ := health["dynamic_daily_budget"].(map[string]interface{})
-	cycleSignature := strings.TrimSpace(quotaProtectionString(dynamic, "planning_signature"))
-	if cycleSignature == "" {
-		return 0, "", fmt.Errorf("channel 12 quota cycle signature is unavailable; wait for the next guard probe")
+	cycleSignature, err := cliproxyCPAQuotaForceUnlockCycleSignature(health)
+	if err != nil {
+		return 0, "", err
 	}
+	dynamic, _ := health["dynamic_daily_budget"].(map[string]interface{})
 	candidates := make([]int64, 0, 4)
 	for _, key := range []string{"next_daily_budget_reset_at", "weekly_reset_at", "effective_reset_at"} {
 		if value, ok := guardObjectInt64(dynamic, key); ok {
@@ -208,6 +226,39 @@ func cliproxyCPAQuotaForceUnlockBoundary(health map[string]interface{}, now int6
 		return until, cycleSignature, nil
 	}
 	return 0, "", fmt.Errorf("channel 12 official reset time is unavailable or stale; wait for the next guard probe")
+}
+
+func cliproxyCPAQuotaForceUnlockCycleSignature(health map[string]interface{}) (string, error) {
+	dynamic, _ := health["dynamic_daily_budget"].(map[string]interface{})
+	cycleSignature := strings.TrimSpace(quotaProtectionString(dynamic, "planning_signature"))
+	if cycleSignature == "" {
+		return "", fmt.Errorf("channel 12 quota cycle signature is unavailable; wait for the next guard probe")
+	}
+	return cycleSignature, nil
+}
+
+func cliproxyCPAQuotaForceUnlockTarget(health map[string]interface{}, now int64, requestedUntil *int64) (int64, string, error) {
+	cycleSignature, err := cliproxyCPAQuotaForceUnlockCycleSignature(health)
+	if err != nil {
+		return 0, "", err
+	}
+	if requestedUntil == nil {
+		return cliproxyCPAQuotaForceUnlockBoundary(health, now)
+	}
+
+	until := *requestedUntil
+	minUntil := now + int64(cliproxyCPAQuotaForceUnlockMinWindow/time.Second)
+	maxUntil := now + int64(cliproxyCPAQuotaForceUnlockMaxWindow/time.Second)
+	if until <= now {
+		return 0, "", fmt.Errorf("channel 12 requested unlock time must be in the future")
+	}
+	if until < minUntil {
+		return 0, "", fmt.Errorf("channel 12 requested unlock time must be at least 1 minute in the future")
+	}
+	if until > maxUntil {
+		return 0, "", fmt.Errorf("channel 12 requested unlock time cannot be more than 8 days in the future")
+	}
+	return until, cycleSignature, nil
 }
 
 func saveCliproxyCPAQuotaForceUnlockOption(value map[string]interface{}) error {

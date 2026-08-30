@@ -464,7 +464,8 @@ export async function resetCliproxyCPAQuotaState(
 }
 
 export async function forceUnlockChannelQuotaProtection(
-  channelId: number
+  channelId: number,
+  until?: number
 ): Promise<ChannelQuotaForceUnlockResponse> {
   const config: ExtendedApiConfig = {
     skipBusinessError: true,
@@ -472,7 +473,7 @@ export async function forceUnlockChannelQuotaProtection(
   }
   const res = await api.post(
     `/api/channel/${channelId}/quota_protection/force_unlock`,
-    {},
+    until == null ? {} : { until },
     config
   )
   return res.data

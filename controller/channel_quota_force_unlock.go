@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -17,15 +19,22 @@ func ForceUnlockChannelQuotaProtection(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "invalid channel id"})
 		return
 	}
+	var request service.ChannelQuotaForceUnlockRequest
+	if c.Request.Body != nil {
+		if err := common.DecodeJson(c.Request.Body, &request); err != nil && !errors.Is(err, io.EOF) {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": fmt.Sprintf("invalid request body: %v", err)})
+			return
+		}
+	}
 	now := common.GetTimestamp()
 	userID := c.GetInt("id")
-	result, err := service.ForceUnlockCliproxyCPAQuotaGuard(channelID, userID, now)
+	result, err := service.ForceUnlockCliproxyCPAQuotaGuardUntil(channelID, userID, now, request.Until)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 		return
 	}
 	model.RecordLog(userID, model.LogTypeManage, fmt.Sprintf(
-		"强制解除渠道 12 额度保护，自动失效时间：%d",
+		"强制解除渠道 12 额度保护，失效时间：%d",
 		result.Until,
 	))
 	common.ApiSuccess(c, result)
