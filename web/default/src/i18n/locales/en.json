@@ -1856,6 +1856,8 @@
     "Force format response to OpenAI standard (OpenAI channel only)": "Force format response to OpenAI standard (OpenAI channel only)",
     "Force unlock channel 12 quota protection": "Force unlock channel 12 quota protection",
     "Force unlock channel 12 quota protection?": "Force unlock channel 12 quota protection?",
+    "Adjust channel 12 quota unlock expiry": "Adjust channel 12 quota unlock expiry",
+    "Adjust channel 12 quota unlock expiry?": "Adjust channel 12 quota unlock expiry?",
     "Force unlock until reset": "Force unlock until reset",
     "Force unlock until selected time": "Force unlock until selected time",
     "Unlocked until {{time}}": "Unlocked until {{time}}",

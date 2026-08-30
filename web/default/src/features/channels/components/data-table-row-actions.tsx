@@ -84,6 +84,8 @@ type ChannelQuotaProtectionState = {
   resetAt: number | null
 }
 
+type QuotaProtectionDialogMode = 'unlock' | 'restore'
+
 // Keep these bounds aligned with the backend guard. The backend remains the
 // source of truth; the client-side checks only provide immediate feedback.
 const FORCE_UNLOCK_MIN_WINDOW_SECONDS = 60
@@ -158,6 +160,8 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [quotaProtectionConfirmOpen, setQuotaProtectionConfirmOpen] =
     useState(false)
+  const [quotaProtectionDialogMode, setQuotaProtectionDialogMode] =
+    useState<QuotaProtectionDialogMode>('unlock')
   const [quotaProtectionUntil, setQuotaProtectionUntil] = useState<
     Date | undefined
   >()
@@ -173,16 +177,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const isMultiKey = isMultiKeyChannel(channel)
   const quotaProtection = channelQuotaProtectionState(channel)
 
-  const openQuotaProtectionDialog = () => {
+  const openQuotaProtectionDialog = (mode: QuotaProtectionDialogMode) => {
     if (!quotaProtection) return
+    setQuotaProtectionDialogMode(mode)
     setQuotaProtectionTimeError(null)
-    setQuotaProtectionUntil(
-      quotaProtection.active
-        ? quotaProtection.until != null
-          ? new Date(quotaProtection.until * 1000)
-          : undefined
-        : defaultQuotaProtectionUntil(quotaProtection)
-    )
+    setQuotaProtectionUntil(defaultQuotaProtectionUntil(quotaProtection))
     setQuotaProtectionConfirmOpen(true)
   }
 
@@ -249,7 +248,8 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     if (!quotaProtection) return
 
     let requestedUntil: number | undefined
-    if (!quotaProtection.active) {
+    const restoringProtection = quotaProtectionDialogMode === 'restore'
+    if (!restoringProtection) {
       const now = Math.floor(Date.now() / 1000)
       const selectedMilliseconds = quotaProtectionUntil?.getTime() ?? NaN
       if (!Number.isFinite(selectedMilliseconds)) {
@@ -278,7 +278,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
 
     setIsUpdatingQuotaProtection(true)
     try {
-      const response = quotaProtection.active
+      const response = restoringProtection
         ? await cancelChannelQuotaProtectionForceUnlock(channel.id)
         : await forceUnlockChannelQuotaProtection(channel.id, requestedUntil)
       if (!response.success) {
@@ -286,7 +286,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         return
       }
       toast.success(
-        quotaProtection.active
+        restoringProtection
           ? t('Channel 12 quota protection restored')
           : t('Channel 12 quota protection force-unlocked')
       )
@@ -312,7 +312,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   let quotaProtectionConfirmText = t('Force unlock until selected time')
   if (isUpdatingQuotaProtection) {
     quotaProtectionConfirmText = t('Updating')
-  } else if (quotaProtection?.active) {
+  } else if (quotaProtectionDialogMode === 'restore') {
     quotaProtectionConfirmText = t('Restore protection')
   }
 
@@ -412,28 +412,35 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           </DropdownMenuItem>
 
           {quotaProtection && (
-            <DropdownMenuItem
-              onSelect={(event) => {
-                event.preventDefault()
-                openQuotaProtectionDialog()
-              }}
-              className={
-                quotaProtection.active
-                  ? undefined
-                  : 'text-amber-700 focus:text-amber-700 dark:text-amber-400 dark:focus:text-amber-400'
-              }
-            >
-              {quotaProtection.active
-                ? t('Restore channel 12 quota protection')
-                : t('Force unlock channel 12 quota protection')}
-              <DropdownMenuShortcut>
-                {quotaProtection.active ? (
-                  <ShieldCheck size={16} />
-                ) : (
+            <>
+              <DropdownMenuItem
+                onSelect={(event) => {
+                  event.preventDefault()
+                  openQuotaProtectionDialog('unlock')
+                }}
+                className='text-amber-700 focus:text-amber-700 dark:text-amber-400 dark:focus:text-amber-400'
+              >
+                {quotaProtection.active
+                  ? t('Adjust channel 12 quota unlock expiry')
+                  : t('Force unlock channel 12 quota protection')}
+                <DropdownMenuShortcut>
                   <ShieldOff size={16} />
-                )}
-              </DropdownMenuShortcut>
-            </DropdownMenuItem>
+                </DropdownMenuShortcut>
+              </DropdownMenuItem>
+              {quotaProtection.active && (
+                <DropdownMenuItem
+                  onSelect={(event) => {
+                    event.preventDefault()
+                    openQuotaProtectionDialog('restore')
+                  }}
+                >
+                  {t('Restore channel 12 quota protection')}
+                  <DropdownMenuShortcut>
+                    <ShieldCheck size={16} />
+                  </DropdownMenuShortcut>
+                </DropdownMenuItem>
+              )}
+            </>
           )}
 
           {/* Fetch Models */}
@@ -523,12 +530,14 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         open={quotaProtectionConfirmOpen}
         onOpenChange={setQuotaProtectionConfirmOpen}
         title={
-          quotaProtection?.active
+          quotaProtectionDialogMode === 'restore'
             ? t('Restore channel 12 quota protection?')
-            : t('Force unlock channel 12 quota protection?')
+            : quotaProtection?.active
+              ? t('Adjust channel 12 quota unlock expiry?')
+              : t('Force unlock channel 12 quota protection?')
         }
         desc={
-          quotaProtection?.active ? (
+          quotaProtectionDialogMode === 'restore' ? (
             t(
               'The automatic daily budget and protected reserve checks will resume on the next guard run (within about one minute).'
             )
@@ -548,11 +557,11 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           )
         }
         confirmText={quotaProtectionConfirmText}
-        destructive={!quotaProtection?.active}
+        destructive={quotaProtectionDialogMode !== 'restore'}
         isLoading={isUpdatingQuotaProtection}
         handleConfirm={handleQuotaProtectionConfirm}
       >
-        {!quotaProtection?.active && (
+        {quotaProtectionDialogMode !== 'restore' && (
           <div className='space-y-2'>
             <div className='text-muted-foreground flex items-center gap-1.5 text-xs font-medium'>
               <CalendarClock className='size-3.5' />

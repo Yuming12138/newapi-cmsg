@@ -1856,6 +1856,8 @@
     "Force format response to OpenAI standard (OpenAI channel only)": "强制将响应格式化为 OpenAI 标准（仅限 OpenAI 渠道）",
     "Force unlock channel 12 quota protection": "强制解除渠道 12 额度保护",
     "Force unlock channel 12 quota protection?": "强制解除渠道 12 额度保护？",
+    "Adjust channel 12 quota unlock expiry": "调整渠道 12 解除限制截止时间",
+    "Adjust channel 12 quota unlock expiry?": "调整渠道 12 解除限制截止时间？",
     "Force unlock until reset": "解除限制直到刷新",
     "Force unlock until selected time": "解除限制直到所选时间",
     "Unlocked until {{time}}": "解除限制至 {{time}}",
