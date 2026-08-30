@@ -2,6 +2,7 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -53,6 +54,52 @@ func TestCliproxyCPAQuotaForceUnlockBoundaryRequiresCycleSignature(t *testing.T)
 	_, _, err := cliproxyCPAQuotaForceUnlockBoundary(health, now)
 
 	require.ErrorContains(t, err, "cycle signature is unavailable")
+}
+
+func TestCliproxyCPAQuotaForceUnlockTargetAcceptsCustomTimeWithinWindow(t *testing.T) {
+	now := int64(1_800_000_000)
+	requestedUntil := now + int64(3*time.Hour/time.Second)
+	health := map[string]interface{}{
+		"dynamic_daily_budget": map[string]interface{}{
+			"planning_signature": "cycle-custom",
+		},
+	}
+
+	until, signature, err := cliproxyCPAQuotaForceUnlockTarget(health, now, &requestedUntil)
+
+	require.NoError(t, err)
+	require.Equal(t, requestedUntil, until)
+	require.Equal(t, "cycle-custom", signature)
+}
+
+func TestCliproxyCPAQuotaForceUnlockTargetRejectsCustomTimeOutsideWindow(t *testing.T) {
+	now := int64(1_800_000_000)
+	health := map[string]interface{}{
+		"dynamic_daily_budget": map[string]interface{}{
+			"planning_signature": "cycle-custom",
+		},
+	}
+
+	tooSoon := now + int64(30*time.Second/time.Second)
+	_, _, err := cliproxyCPAQuotaForceUnlockTarget(health, now, &tooSoon)
+	require.ErrorContains(t, err, "at least 1 minute")
+
+	tooLate := now + int64((cliproxyCPAQuotaForceUnlockMaxWindow+time.Second)/time.Second)
+	_, _, err = cliproxyCPAQuotaForceUnlockTarget(health, now, &tooLate)
+	require.ErrorContains(t, err, "more than 8 days")
+}
+
+func TestCliproxyCPAQuotaForceUnlockTargetRejectsPastCustomTime(t *testing.T) {
+	now := int64(1_800_000_000)
+	requestedUntil := now
+	health := map[string]interface{}{
+		"dynamic_daily_budget": map[string]interface{}{
+			"planning_signature": "cycle-custom",
+		},
+	}
+
+	_, _, err := cliproxyCPAQuotaForceUnlockTarget(health, now, &requestedUntil)
+	require.ErrorContains(t, err, "must be in the future")
 }
 
 func TestCliproxyCPAQuotaForceUnlockEligibleRequiresSchedulableBalance(t *testing.T) {
