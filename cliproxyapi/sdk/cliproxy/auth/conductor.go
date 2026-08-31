@@ -5180,9 +5180,13 @@ type homeErrorEnvelope struct {
 }
 
 type homeErrorDetail struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
-	Code    string `json:"code,omitempty"`
+	Type         string `json:"type"`
+	Message      string `json:"message"`
+	Code         string `json:"code,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Provider     string `json:"provider,omitempty"`
+	ResetSeconds *int   `json:"reset_seconds,omitempty"`
+	ResetTime    string `json:"reset_time,omitempty"`
 }
 
 const (
@@ -5250,6 +5254,91 @@ func homeDispatcherHeartbeatOK(client homeAuthDispatcher) bool {
 		return graceful.HeartbeatOKWithin(home.DefaultHeartbeatGrace)
 	}
 	return client.HeartbeatOK()
+}
+
+// decodeHomeDispatchError normalizes both the current Home error envelope and
+// the legacy envelope that wrapped a structured JSON error inside
+// error.message. Older Home releases used the latter for model cooldowns.
+func decodeHomeDispatchError(detail *homeErrorDetail) (code, message, model, provider string, resetIn time.Duration) {
+	if detail == nil {
+		return "error", "home returned error", "", "", 0
+	}
+
+	code = strings.TrimSpace(detail.Type)
+	if code == "" {
+		code = strings.TrimSpace(detail.Code)
+	}
+	message = strings.TrimSpace(detail.Message)
+	model = strings.TrimSpace(detail.Model)
+	provider = strings.TrimSpace(detail.Provider)
+	resetIn = homeDispatchErrorResetDuration(detail)
+
+	// Legacy Home encoded modelCooldownError.Error() as a JSON string in the
+	// outer error.message field. Decode one nested envelope and preserve its
+	// structured status fields.
+	var nested homeErrorEnvelope
+	if message != "" && json.Unmarshal([]byte(message), &nested) == nil && nested.Error != nil {
+		nestedCode := strings.TrimSpace(nested.Error.Type)
+		if nestedCode == "" {
+			nestedCode = strings.TrimSpace(nested.Error.Code)
+		}
+		if nestedCode != "" && (code == "" || strings.EqualFold(code, "error") || strings.EqualFold(code, "internal_error")) {
+			code = nestedCode
+		}
+		if nestedMessage := strings.TrimSpace(nested.Error.Message); nestedMessage != "" {
+			message = nestedMessage
+		}
+		if model == "" {
+			model = strings.TrimSpace(nested.Error.Model)
+		}
+		if provider == "" {
+			provider = strings.TrimSpace(nested.Error.Provider)
+		}
+		if resetIn <= 0 {
+			resetIn = homeDispatchErrorResetDuration(nested.Error)
+		}
+	}
+
+	if code == "" {
+		code = "error"
+	}
+	if message == "" {
+		message = "home returned error"
+	}
+	return code, message, model, provider, resetIn
+}
+
+func homeDispatchErrorResetDuration(detail *homeErrorDetail) time.Duration {
+	if detail == nil {
+		return 0
+	}
+	if detail.ResetSeconds != nil && *detail.ResetSeconds > 0 {
+		seconds := int64(*detail.ResetSeconds)
+		maxSeconds := int64((time.Duration(1<<63 - 1)) / time.Second)
+		if seconds > maxSeconds {
+			seconds = maxSeconds
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if raw := strings.TrimSpace(detail.ResetTime); raw != "" {
+		if parsed, errParse := time.ParseDuration(raw); errParse == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return 0
+}
+
+func homeDispatchErrorStatusCode(code string) int {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "model_not_found":
+		return http.StatusNotFound
+	case "authentication_error", "unauthorized", "no_credentials", "invalid_credential":
+		return http.StatusUnauthorized
+	case "model_cooldown", "rate_limit", "rate_limit_exceeded", "rate_limited", "usage_limit_reached":
+		return http.StatusTooManyRequests
+	default:
+		return http.StatusBadGateway
+	}
 }
 
 var currentHomeDispatcher = func() homeAuthDispatcher {
@@ -5474,22 +5563,20 @@ func (m *Manager) pickNextViaHome(ctx context.Context, model string, opts clipro
 
 	var env homeErrorEnvelope
 	if errUnmarshal := json.Unmarshal(raw, &env); errUnmarshal == nil && env.Error != nil {
-		code := strings.TrimSpace(env.Error.Type)
-		if code == "" {
-			code = strings.TrimSpace(env.Error.Code)
+		code, msg, cooldownModel, cooldownProvider, resetIn := decodeHomeDispatchError(env.Error)
+		if strings.EqualFold(code, "model_cooldown") {
+			if cooldownModel == "" {
+				cooldownModel = requestedModel
+			}
+			return nil, nil, "", newModelCooldownError(cooldownModel, cooldownProvider, resetIn)
 		}
-		msg := strings.TrimSpace(env.Error.Message)
-		if msg == "" {
-			msg = "home returned error"
+		status := homeDispatchErrorStatusCode(code)
+		return nil, nil, "", &Error{
+			Code:       code,
+			Message:    msg,
+			Retryable:  status == http.StatusTooManyRequests,
+			HTTPStatus: status,
 		}
-		status := http.StatusBadGateway
-		switch strings.ToLower(code) {
-		case "model_not_found":
-			status = http.StatusNotFound
-		case "authentication_error", "unauthorized", "no_credentials", "invalid_credential":
-			status = http.StatusUnauthorized
-		}
-		return nil, nil, "", &Error{Code: code, Message: msg, HTTPStatus: status}
 	}
 
 	var dispatch homeAuthDispatchResponse
