@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -17,6 +18,12 @@ var group2model2channels map[string]map[string][]int // enabled channel
 var channelsIDM map[int]*Channel                     // all channels include disabled
 var channel2advancedCustomConfig map[int]*dto.AdvancedCustomConfig
 var channelSyncLock sync.RWMutex
+
+// Out-of-band guards (for example the CPA quota guard) update the channels and
+// abilities tables directly.  Keep a small single-flight refresh gate so a
+// request that observes a stale in-memory cache can repair it without making a
+// database query on every concurrent retry.
+var channelCacheRefreshInFlight atomic.Bool
 
 func InitChannelCache() {
 	if !common.MemoryCacheEnabled {
@@ -105,8 +112,6 @@ func GetRandomSatisfiedChannelForRequestPath(group string, model string, retry i
 	}
 
 	channelSyncLock.RLock()
-	defer channelSyncLock.RUnlock()
-
 	// First, try to find channels with the exact model name.
 	channels := filterChannelIDsByRequestPath(group2model2channels[group][model], requestPath)
 
@@ -117,8 +122,18 @@ func GetRandomSatisfiedChannelForRequestPath(group string, model string, retry i
 	}
 
 	if len(channels) == 0 {
-		return nil, nil
+		channelSyncLock.RUnlock()
+		// The quota/ability guards may have changed the database between cache
+		// sync ticks.  Re-check the authoritative tables before reporting 503;
+		// this closes the short stale-cache window that otherwise makes an
+		// already-restored channel look unavailable.
+		selected, err := getAuthoritativeChannelForRequestPath(group, model, retry, requestPath, excludedIDs...)
+		if selected != nil {
+			refreshChannelCacheAsync()
+		}
+		return selected, err
 	}
+	defer channelSyncLock.RUnlock()
 
 	excluded := normalizeExcludedChannelIDs(excludedIDs)
 
@@ -169,6 +184,47 @@ func GetRandomSatisfiedChannelForRequestPath(group string, model string, retry i
 	}
 
 	return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s", group, model))
+}
+
+// getAuthoritativeChannelForRequestPath is used only when the in-memory
+// ability cache has no entry.  Querying the enabled-ability count first keeps
+// the normal "no ability" result as (nil, nil) instead of surfacing the
+// database helper's historical consistency error, and also mirrors the cache
+// path's normalized-model lookup.
+func getAuthoritativeChannelForRequestPath(group string, modelName string, retry int, requestPath string, excludedIDs ...map[int]struct{}) (*Channel, error) {
+	if DB == nil {
+		return nil, nil
+	}
+	models := []string{modelName}
+	if normalized := ratio_setting.FormatMatchingModelName(modelName); normalized != "" && normalized != modelName {
+		models = append(models, normalized)
+	}
+	for _, candidateModel := range models {
+		var count int64
+		if err := DB.Model(&Ability{}).
+			Where(commonGroupCol+" = ? AND model = ? AND enabled = ?", group, candidateModel, true).
+			Count(&count).Error; err != nil {
+			return nil, err
+		}
+		if count == 0 {
+			continue
+		}
+		selected, err := GetChannelForRequestPath(group, candidateModel, retry, requestPath, excludedIDs...)
+		if err != nil || selected != nil {
+			return selected, err
+		}
+	}
+	return nil, nil
+}
+
+func refreshChannelCacheAsync() {
+	if !common.MemoryCacheEnabled || !channelCacheRefreshInFlight.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer channelCacheRefreshInFlight.Store(false)
+		InitChannelCache()
+	}()
 }
 
 func filterChannelIDsByRequestPath(channels []int, requestPath string) []int {

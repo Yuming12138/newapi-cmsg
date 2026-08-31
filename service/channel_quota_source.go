@@ -5,6 +5,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -125,6 +126,8 @@ type DailyQuotaPoolGroup struct {
 	ReserveBucketRemainingUSD   float64 `json:"reserve_bucket_remaining_usd,omitempty"`
 	ReserveTotalQuota           int64   `json:"reserve_total_quota,omitempty"`
 	ReserveBucketRemainingQuota int64   `json:"reserve_bucket_remaining_quota,omitempty"`
+	ForceUnlockActive           bool    `json:"force_unlock_active,omitempty"`
+	ForceUnlockRemainingUSD     float64 `json:"force_unlock_remaining_usd,omitempty"`
 }
 
 func GetDailyQuotaPoolSnapshot(ctx context.Context) (DailyQuotaPoolSummary, bool, error) {
@@ -312,18 +315,53 @@ func cliproxyCPADailyQuotaPoolGroup(channel *model.Channel) (DailyQuotaPoolGroup
 		}
 		reserveRemainingUSD = math.Max(reserveRemainingUnits, 0) * rate
 	}
+
+	// A force unlock deliberately bypasses the locally planned daily bucket and
+	// protected reserve.  The CPA guard publishes the upstream balance in
+	// health.usable_balance_units while the override is active.  Include that
+	// balance in the shared daily pool as well, otherwise the channel can route
+	// successfully while the user-quota guard still reduces every user to the
+	// unrelated ASXS remainder.
+	forceUnlockActive := false
+	forceUnlockRemainingUSD := 0.0
+	if active, activeOK := guardObjectBool(daily, "manual_force_unlock_active"); activeOK && active {
+		if until, untilOK := guardObjectInt64(daily, "manual_force_unlock_until"); untilOK && until > time.Now().Unix() {
+			healthOK, healthOKExists := guardObjectBool(health, "ok")
+			stale, staleExists := guardObjectBool(health, "quota_observation_stale")
+			if (!healthOKExists || healthOK) && (!staleExists || !stale) && channel.Status == common.ChannelStatusEnabled && !failed {
+				// Prefer the plan-weighted estimate so mixed CPA plans use their
+				// correct USD conversion.  Fall back to the raw units for older
+				// guard snapshots that do not carry account details.
+				if _, usableEstimate, estimateOK := cliproxyCPAPlanWeightedEstimate(health); estimateOK {
+					forceUnlockRemainingUSD = math.Max(usableEstimate, 0)
+				}
+				if forceUnlockRemainingUSD <= 0 {
+					if units, unitsOK := guardObjectFloat(health, "usable_balance_units"); unitsOK {
+						forceUnlockRemainingUSD = math.Max(units, 0) * rate
+					}
+				}
+				forceUnlockActive = true
+			}
+		}
+	}
+
+	// Keep total = used + remaining even while the override exposes the
+	// previously unspendable weekly balance.  Normal* fields retain the
+	// original planned daily bucket for the UI breakdown.
+	totalUSD := normalTotalUSD + forceUnlockRemainingUSD
+	remainingUSD := normalRemainingUSD + reserveRemainingUSD + forceUnlockRemainingUSD
 	return DailyQuotaPoolGroup{
 		Source:                      "cliproxy_cpa_dynamic_daily_budget",
 		Group:                       groupName,
 		ChannelCount:                1,
-		TotalUSD:                    normalTotalUSD,
+		TotalUSD:                    totalUSD,
 		UsedUSD:                     normalUsedUSD,
-		RemainingUSD:                normalRemainingUSD + reserveRemainingUSD,
+		RemainingUSD:                remainingUSD,
 		NormalTotalUSD:              normalTotalUSD,
 		NormalUsedUSD:               normalUsedUSD,
 		NormalRemainingUSD:          normalRemainingUSD,
 		UpdatedAt:                   updatedAt,
-		Available:                   channel.Status == common.ChannelStatusEnabled && !failed && (remainingPercent > 0 || reserveRemainingUSD > 0 || reserveBucketRemainingUSD > 0),
+		Available:                   channel.Status == common.ChannelStatusEnabled && !failed && (remainingPercent > 0 || reserveRemainingUSD > 0 || reserveBucketRemainingUSD > 0 || forceUnlockRemainingUSD > 0),
 		Estimated:                   true,
 		Partial:                     failed,
 		ReserveConfigured:           reserveConfigured,
@@ -335,6 +373,8 @@ func cliproxyCPADailyQuotaPoolGroup(channel *model.Channel) (DailyQuotaPoolGroup
 		ReserveBucketRemainingUSD:   reserveBucketRemainingUSD,
 		ReserveTotalQuota:           int64(math.Round(reserveTotalUSD * common.QuotaPerUnit)),
 		ReserveBucketRemainingQuota: int64(math.Round(reserveBucketRemainingUSD * common.QuotaPerUnit)),
+		ForceUnlockActive:           forceUnlockActive,
+		ForceUnlockRemainingUSD:     forceUnlockRemainingUSD,
 	}, true
 }
 
