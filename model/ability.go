@@ -122,6 +122,12 @@ func GetChannelForRequestPath(group string, model string, retry int, requestPath
 				}
 				return nil, err
 			}
+			// Ability rows can be updated by an external quota guard between
+			// cache refreshes.  Do not let an enabled ability route to a channel
+			// whose authoritative channel status is currently disabled.
+			if channel.Status != common.ChannelStatusEnabled {
+				continue
+			}
 			if !channelSupportsRequestPath(&channel, requestPath) {
 				continue
 			}

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -304,6 +305,87 @@ func TestCliproxyDailyQuotaPoolIgnoresExplicitlyUnconfiguredReserve(t *testing.T
 	}
 	if group.ReserveConfigured || group.ReserveActive || group.ReserveTotalUSD != 0 || group.ReserveBucketRemainingUSD != 0 || group.Available {
 		t.Fatalf("explicitly unconfigured reserve must not be spendable: %+v", group)
+	}
+}
+
+func TestCliproxyDailyQuotaPoolIncludesActiveForceUnlockBalance(t *testing.T) {
+	channel := &model.Channel{
+		Id:                 12,
+		Group:              "cliproxy-codex",
+		Status:             common.ChannelStatusEnabled,
+		Balance:            84,
+		BalanceUpdatedTime: 202,
+		OtherInfo: fmt.Sprintf(`{
+  "cliproxy_cpa_quota_guard": {
+    "updated_at": 202,
+    "health": {
+      "ok": true,
+      "usable_balance_units": 84,
+      "dynamic_daily_budget": {
+        "applied": true,
+        "daily_limit_percent": 12.857143,
+        "consumed_today_percent": 15,
+        "remaining_today_percent": 0,
+        "manual_force_unlock_active": true,
+        "manual_force_unlock_until": %d,
+        "baseline_account_plans": [
+          {"plan_type":"Pro 20x","remaining_percent":84,"days_remaining":7}
+        ]
+      }
+    }
+  }
+}`, time.Now().Unix()+3600),
+	}
+
+	group, ok := cliproxyCPADailyQuotaPoolGroup(channel)
+	if !ok {
+		t.Fatal("expected a daily quota group")
+	}
+	wantForceUnlockUSD := 84 * cliproxyCPAProUSDPerPercent
+	wantNormalUSD := 12.857143 * cliproxyCPAProUSDPerPercent
+	if !group.ForceUnlockActive || math.Abs(group.ForceUnlockRemainingUSD-wantForceUnlockUSD) > 0.000001 {
+		t.Fatalf("force unlock balance = %+v, want %.6f", group, wantForceUnlockUSD)
+	}
+	if math.Abs(group.RemainingUSD-wantForceUnlockUSD) > 0.000001 {
+		t.Fatalf("force unlock remaining = %.6f, want %.6f", group.RemainingUSD, wantForceUnlockUSD)
+	}
+	if math.Abs(group.TotalUSD-(wantNormalUSD+wantForceUnlockUSD)) > 0.000001 || !group.Available {
+		t.Fatalf("force unlock total/availability = %+v", group)
+	}
+}
+
+func TestCliproxyDailyQuotaPoolIgnoresExpiredForceUnlockBalance(t *testing.T) {
+	channel := &model.Channel{
+		Id:     12,
+		Group:  "cliproxy-codex",
+		Status: common.ChannelStatusEnabled,
+		OtherInfo: fmt.Sprintf(`{
+  "cliproxy_cpa_quota_guard": {
+    "health": {
+      "ok": true,
+      "usable_balance_units": 84,
+      "dynamic_daily_budget": {
+        "applied": true,
+        "daily_limit_percent": 12.857143,
+        "consumed_today_percent": 15,
+        "remaining_today_percent": 0,
+        "manual_force_unlock_active": true,
+        "manual_force_unlock_until": %d,
+        "baseline_account_plans": [
+          {"plan_type":"Pro 20x","remaining_percent":84,"days_remaining":7}
+        ]
+      }
+    }
+  }
+}`, time.Now().Unix()-1),
+	}
+
+	group, ok := cliproxyCPADailyQuotaPoolGroup(channel)
+	if !ok {
+		t.Fatal("expected a daily quota group")
+	}
+	if group.ForceUnlockActive || group.ForceUnlockRemainingUSD != 0 || group.Available {
+		t.Fatalf("expired force unlock must not add spendable balance: %+v", group)
 	}
 }
 
