@@ -2,88 +2,69 @@ package model
 
 import (
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetRandomSatisfiedChannelForRequestPathAdminAllowsBudgetAutoDisabledOnly(t *testing.T) {
+func TestGetRandomSatisfiedChannelForRequestPathAdminBypassesLocalChannelGates(t *testing.T) {
 	truncateTables(t)
 
-	priority := int64(10)
-	budgetInfo, err := common.Marshal(map[string]interface{}{
-		"status_reason": "channel_budget_exhausted: daily limit",
-		"budget_guard": map[string]interface{}{
-			"managed":           true,
-			"reason":            "budget_exhausted",
-			"disabled_by_guard": true,
-		},
-	})
-	require.NoError(t, err)
-	upstreamInfo, err := common.Marshal(map[string]interface{}{"status_reason": "upstream authentication failed"})
-	require.NoError(t, err)
-
+	priorities := []int64{30, 20, 10}
 	channels := []*Channel{
-		{Id: 901, Name: "budget", Key: "test", Group: "admin-group", Models: "admin-model", Status: common.ChannelStatusAutoDisabled, OtherInfo: string(budgetInfo), Priority: &priority},
-		{Id: 902, Name: "upstream-failure", Key: "test", Group: "admin-group", Models: "admin-model", Status: common.ChannelStatusAutoDisabled, OtherInfo: string(upstreamInfo), Priority: &priority},
-		{Id: 903, Name: "manual", Key: "test", Group: "admin-group", Models: "admin-model", Status: common.ChannelStatusManuallyDisabled, Priority: &priority},
+		{Id: 901, Name: "auto-disabled", Key: "test", Group: "admin-group", Models: "admin-model", Status: common.ChannelStatusAutoDisabled, Priority: &priorities[0]},
+		{Id: 902, Name: "manual-disabled", Key: "test", Group: "admin-group", Models: "admin-model", Status: common.ChannelStatusManuallyDisabled, Priority: &priorities[1]},
+		{Id: 903, Name: "ability-disabled", Key: "test", Group: "admin-group", Models: "admin-model", Status: common.ChannelStatusEnabled, Priority: &priorities[2]},
 	}
 	require.NoError(t, DB.Create(&channels).Error)
 	abilities := []*Ability{
-		{Group: "admin-group", Model: "admin-model", ChannelId: 901, Enabled: false, Priority: &priority},
-		{Group: "admin-group", Model: "admin-model", ChannelId: 902, Enabled: false, Priority: &priority},
-		{Group: "admin-group", Model: "admin-model", ChannelId: 903, Enabled: false, Priority: &priority},
+		{Group: "admin-group", Model: "admin-model", ChannelId: 901, Enabled: false, Priority: &priorities[0]},
+		{Group: "admin-group", Model: "admin-model", ChannelId: 902, Enabled: false, Priority: &priorities[1]},
+		{Group: "admin-group", Model: "admin-model", ChannelId: 903, Enabled: false, Priority: &priorities[2]},
 	}
 	require.NoError(t, DB.Create(&abilities).Error)
 
-	selected, err := GetRandomSatisfiedChannelForRequestPathAdmin("admin-group", "admin-model", 0, "")
-	require.NoError(t, err)
-	require.NotNil(t, selected)
-	require.Equal(t, 901, selected.Id)
+	// A scheduler cooldown is a normal-user routing guard, not an administrator
+	// permission boundary. The admin selector must still consider this channel.
+	require.NoError(t, MarkChannelTemporarilyUnschedulable(901, time.Minute, ChannelTemporaryUnschedulable{Reason: "rate_limit"}))
+	t.Cleanup(func() { ClearChannelTemporarilyUnschedulable(901) })
 
-	// Removing the budget marker must not turn an unrelated auto-disabled
-	// channel into an administrator candidate.
-	require.NoError(t, DB.Model(&Channel{}).Where("id = ?", 901).Update("other_info", "{}").Error)
-	selected, err = GetRandomSatisfiedChannelForRequestPathAdmin("admin-group", "admin-model", 0, "")
-	require.NoError(t, err)
-	require.Nil(t, selected)
+	for _, wantID := range []int{901, 902, 903} {
+		excluded := map[int]struct{}{}
+		for _, id := range []int{901, 902, 903} {
+			if id != wantID {
+				excluded[id] = struct{}{}
+			}
+		}
+		selected, err := GetRandomSatisfiedChannelForRequestPathAdmin("admin-group", "admin-model", 0, "", excluded)
+		require.NoError(t, err)
+		require.NotNil(t, selected)
+		require.Equal(t, wantID, selected.Id)
+	}
 }
 
-func TestIsChannelAvailableForAdminGroupModelHonorsAbilityAndStatus(t *testing.T) {
+func TestIsChannelAvailableForAdminGroupModelIgnoresLocalChannelGates(t *testing.T) {
 	truncateTables(t)
 
 	priority := int64(1)
-	budgetInfo, err := common.Marshal(map[string]interface{}{
-		"status_reason": "channel_budget_exhausted: daily limit",
-		"budget_guard": map[string]interface{}{
-			"reason":            "budget_exhausted",
-			"disabled_by_guard": true,
-		},
-	})
-	require.NoError(t, err)
-	staleInfo, err := common.Marshal(map[string]interface{}{
-		"budget_guard": map[string]interface{}{
-			"reason":            "budget_exhausted",
-			"disabled_by_guard": false,
-		},
-	})
-	require.NoError(t, err)
 	channels := []*Channel{
-		{Id: 911, Name: "budget", Key: "test", Status: common.ChannelStatusAutoDisabled, OtherInfo: string(budgetInfo), Priority: &priority},
-		{Id: 912, Name: "stale", Key: "test", Status: common.ChannelStatusAutoDisabled, OtherInfo: string(staleInfo), Priority: &priority},
-		{Id: 913, Name: "manual", Key: "test", Status: common.ChannelStatusManuallyDisabled, Priority: &priority},
+		{Id: 911, Name: "auto", Key: "test", Status: common.ChannelStatusAutoDisabled, Priority: &priority},
+		{Id: 912, Name: "manual", Key: "test", Status: common.ChannelStatusManuallyDisabled, Priority: &priority},
+		{Id: 913, Name: "ability-disabled", Key: "test", Status: common.ChannelStatusEnabled, Priority: &priority},
 	}
 	require.NoError(t, DB.Create(&channels).Error)
 	abilities := []*Ability{
 		{Group: "admin-group", Model: "admin-model", ChannelId: 911, Enabled: false, Priority: &priority},
 		{Group: "admin-group", Model: "admin-model", ChannelId: 912, Enabled: false, Priority: &priority},
-		{Group: "admin-group", Model: "admin-model", ChannelId: 913, Enabled: true, Priority: &priority},
+		{Group: "admin-group", Model: "admin-model", ChannelId: 913, Enabled: false, Priority: &priority},
 	}
 	require.NoError(t, DB.Create(&abilities).Error)
 
 	require.True(t, IsChannelAvailableForAdminGroupModel(channels[0], "admin-group", "admin-model"))
-	require.False(t, IsChannelAvailableForAdminGroupModel(channels[1], "admin-group", "admin-model"))
-	require.False(t, IsChannelAvailableForAdminGroupModel(channels[2], "admin-group", "admin-model"))
+	require.True(t, IsChannelAvailableForAdminGroupModel(channels[1], "admin-group", "admin-model"))
+	require.True(t, IsChannelAvailableForAdminGroupModel(channels[2], "admin-group", "admin-model"))
+	require.False(t, IsChannelAvailableForAdminGroupModel(channels[0], "other-group", "admin-model"))
 }
 
 func TestIsChannelAutoDisabledByBudgetGuardRejectsStaleOrNegativeMarkers(t *testing.T) {

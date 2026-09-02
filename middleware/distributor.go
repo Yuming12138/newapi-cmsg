@@ -56,11 +56,11 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 			}
-			if channel.Status != common.ChannelStatusEnabled && !(adminUnlimited && model.IsChannelAutoDisabledByBudgetGuard(channel)) {
+			if !adminUnlimited && channel.Status != common.ChannelStatusEnabled {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
 				return
 			}
-			if blocked, state := model.IsChannelTemporarilyUnschedulable(channel.Id); blocked {
+			if blocked, state := model.IsChannelTemporarilyUnschedulable(channel.Id); !adminUnlimited && blocked {
 				reason := "temporarily unschedulable"
 				if state != nil && strings.TrimSpace(state.Reason) != "" {
 					reason = state.Reason
@@ -157,10 +157,10 @@ func Distribute() func(c *gin.Context) {
 					if err != nil || preferred == nil {
 						service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer exists", preferredChannelID))
 					} else {
-						if preferred.Status != common.ChannelStatusEnabled && !(adminUnlimited && model.IsChannelAutoDisabledByBudgetGuard(preferred)) {
+						if !adminUnlimited && preferred.Status != common.ChannelStatusEnabled {
 							service.ExcludeChannelForRequest(c, preferred.Id, "preferred affinity channel disabled")
 							service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d is disabled", preferred.Id))
-						} else if blocked, state := model.IsChannelTemporarilyUnschedulable(preferred.Id); blocked {
+						} else if blocked, state := model.IsChannelTemporarilyUnschedulable(preferred.Id); !adminUnlimited && blocked {
 							reason := "temporarily unschedulable"
 							if state != nil && strings.TrimSpace(state.Reason) != "" {
 								reason = state.Reason
@@ -177,7 +177,7 @@ func Distribute() func(c *gin.Context) {
 							matched := false
 							for _, g := range autoGroups {
 								configured := model.IsChannelEnabledForGroupModel(g, selectionModel, preferred.Id)
-								if adminUnlimited && model.IsChannelAutoDisabledByBudgetGuard(preferred) {
+								if adminUnlimited {
 									configured = model.IsChannelAvailableForAdminGroupModel(preferred, g, selectionModel)
 								}
 								if configured {
@@ -192,7 +192,7 @@ func Distribute() func(c *gin.Context) {
 							if !matched {
 								service.HandleUnusableChannelAffinityForRequest(c, fmt.Sprintf("preferred channel #%d no longer satisfies auto group/model", preferred.Id))
 							}
-						} else if (adminUnlimited && model.IsChannelAutoDisabledByBudgetGuard(preferred) && model.IsChannelAvailableForAdminGroupModel(preferred, affinityGroup, selectionModel)) || model.IsChannelEnabledForGroupModel(affinityGroup, selectionModel, preferred.Id) {
+						} else if (adminUnlimited && model.IsChannelAvailableForAdminGroupModel(preferred, affinityGroup, selectionModel)) || (!adminUnlimited && model.IsChannelEnabledForGroupModel(affinityGroup, selectionModel, preferred.Id)) {
 							channel = preferred
 							selectGroup = affinityGroup
 							if hasModelRoute {
