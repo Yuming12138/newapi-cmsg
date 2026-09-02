@@ -9,9 +9,10 @@ import (
 )
 
 // IsChannelAutoDisabledByBudgetGuard reports whether an auto-disabled channel
-// carries the explicit metadata written by the channel budget guard.  Other
-// auto-disabled states (upstream failures, exhausted keys, etc.) remain
-// unavailable to administrator requests.
+// carries the explicit metadata written by the channel budget guard.  It is
+// retained for diagnostics and guard-state accounting; administrator channel
+// selection no longer depends on this classification because administrators
+// are allowed to bypass local status and quota gates.
 func IsChannelAutoDisabledByBudgetGuard(channel *Channel) bool {
 	if channel == nil || channel.Status != common.ChannelStatusAutoDisabled {
 		return false
@@ -274,16 +275,14 @@ func isChannelBudgetExhaustedReason(reason string) bool {
 
 // IsChannelAvailableForAdminGroupModel reports whether a channel has an
 // explicitly configured ability for a group/model pair and may therefore be
-// used by an administrator.  Normal enabled channels still require an
-// enabled ability; a channel auto-disabled by the budget guard is the one
-// deliberate exception, because the guard's false ability flag is what keeps
-// ordinary traffic away.  Manual/upstream/unknown disabled states are never
-// admitted.
+// used by an administrator.  Administrator requests deliberately bypass the
+// local channel/ability gates (status, quota guard, and temporary scheduler
+// state); the ability row is retained as the configuration boundary so an
+// arbitrary channel cannot be used for a model that was never configured for
+// it.  The upstream request may still fail if its credentials or endpoint are
+// genuinely unavailable.
 func IsChannelAvailableForAdminGroupModel(channel *Channel, group string, modelName string) bool {
 	if channel == nil || strings.TrimSpace(group) == "" || strings.TrimSpace(modelName) == "" {
-		return false
-	}
-	if channel.Status != common.ChannelStatusEnabled && !IsChannelAutoDisabledByBudgetGuard(channel) {
 		return false
 	}
 	if DB == nil {
@@ -295,19 +294,18 @@ func IsChannelAvailableForAdminGroupModel(channel *Channel, group string, modelN
 		models = append(models, normalized)
 	}
 	query := DB.Model(&Ability{}).Where(commonGroupCol+" = ? AND channel_id = ? AND model IN ?", group, channel.Id, models)
-	if channel.Status == common.ChannelStatusEnabled {
-		query = query.Where("enabled = ?", true)
-	}
 	var count int64
 	return query.Count(&count).Error == nil && count > 0
 }
 
 // GetRandomSatisfiedChannelForRequestPathAdmin selects a channel for an
 // administrator request.  It is intentionally separate from the normal
-// enabled-channel cache: budget protection disables an ability in that cache,
-// while an administrator may still use the configured channel for measurement.
-// Manual disables, unrelated auto-disables, temporary scheduler blocks,
-// request-path incompatibility, and missing abilities are still respected.
+// enabled-channel cache: administrator traffic may use a configured channel
+// even when local quota protection, an ability flag, a manual/automatic status,
+// or a temporary scheduler block has excluded it from ordinary traffic.  The
+// request-path compatibility check and per-request exclusions remain in force
+// because they describe protocol correctness and retry safety rather than a
+// user quota policy.
 func GetRandomSatisfiedChannelForRequestPathAdmin(group string, modelName string, retry int, requestPath string, excludedIDs ...map[int]struct{}) (*Channel, error) {
 	if DB == nil || strings.TrimSpace(group) == "" || strings.TrimSpace(modelName) == "" {
 		return nil, nil
@@ -363,26 +361,7 @@ func GetRandomSatisfiedChannelForRequestPathAdmin(group string, modelName string
 		if _, blocked := excluded[channel.Id]; blocked {
 			continue
 		}
-		if blocked, _ := IsChannelTemporarilyUnschedulable(channel.Id); blocked {
-			continue
-		}
 		if !channelSupportsRequestPath(channel, requestPath) {
-			continue
-		}
-
-		budgetAutoDisabled := IsChannelAutoDisabledByBudgetGuard(channel)
-		switch channel.Status {
-		case common.ChannelStatusEnabled:
-			if !ability.Enabled {
-				continue
-			}
-		case common.ChannelStatusAutoDisabled:
-			if !budgetAutoDisabled {
-				continue
-			}
-		case common.ChannelStatusManuallyDisabled:
-			continue
-		default:
 			continue
 		}
 
