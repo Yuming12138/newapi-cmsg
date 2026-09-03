@@ -117,6 +117,8 @@ utls-pool-size: 1
 #   controller-secret-file: "/app/secrets/mihomo-controller"
 #   group: "OpenAI稳定"
 #   hosts: ["chatgpt.com"]
+#   probe-url: "https://chatgpt.com/cdn-cgi/trace"
+#   probe-timeout-ms: 4000
 #   h2-error-window: "2m"
 #   h2-error-threshold: 2
 #   node-cooldown: "15m"

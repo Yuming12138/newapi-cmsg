@@ -12,6 +12,8 @@ proxy-route-recovery:
   controller-secret-file: /app/secrets/mihomo-controller
   group: OpenAI稳定
   hosts: [chatgpt.com]
+  probe-url: https://chatgpt.com/cdn-cgi/trace
+  probe-timeout-ms: 4000
   h2-error-window: 30s
   h2-error-threshold: 2
   node-cooldown: 15m
@@ -28,6 +30,9 @@ proxy-route-recovery:
 	}
 	if recovery.Group != "OpenAI稳定" || len(recovery.Hosts) != 1 || recovery.Hosts[0] != "chatgpt.com" {
 		t.Fatalf("proxy route recovery target = %#v", recovery)
+	}
+	if recovery.ProbeURL != "https://chatgpt.com/cdn-cgi/trace" || recovery.ProbeTimeoutMs != 4000 {
+		t.Fatalf("proxy route recovery probe = %#v", recovery)
 	}
 	if recovery.H2ErrorWindow != "30s" || recovery.H2ErrorThreshold != 2 || recovery.MaxReplays != 1 {
 		t.Fatalf("proxy route recovery policy = %#v", recovery)

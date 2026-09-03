@@ -68,17 +68,24 @@ type SDKConfig struct {
 // ProxyRouteRecoveryConfig controls active Mihomo route recovery. Duration
 // fields accept Go duration strings such as "30s", "15m", and "10m".
 type ProxyRouteRecoveryConfig struct {
-	Enabled                 bool     `yaml:"enabled" json:"enabled"`
-	ControllerURL           string   `yaml:"controller-url,omitempty" json:"controller-url,omitempty"`
-	ControllerSecretFile    string   `yaml:"controller-secret-file,omitempty" json:"controller-secret-file,omitempty"`
-	Group                   string   `yaml:"group,omitempty" json:"group,omitempty"`
-	Hosts                   []string `yaml:"hosts,omitempty" json:"hosts,omitempty"`
-	H2ErrorWindow           string   `yaml:"h2-error-window,omitempty" json:"h2-error-window,omitempty"`
-	H2ErrorThreshold        int      `yaml:"h2-error-threshold,omitempty" json:"h2-error-threshold,omitempty"`
-	NodeCooldown            string   `yaml:"node-cooldown,omitempty" json:"node-cooldown,omitempty"`
-	RepeatedFailureCooldown string   `yaml:"repeated-failure-cooldown,omitempty" json:"repeated-failure-cooldown,omitempty"`
-	RouteHold               string   `yaml:"route-hold,omitempty" json:"route-hold,omitempty"`
-	MaxReplays              int      `yaml:"max-replays,omitempty" json:"max-replays,omitempty"`
+	Enabled              bool     `yaml:"enabled" json:"enabled"`
+	ControllerURL        string   `yaml:"controller-url,omitempty" json:"controller-url,omitempty"`
+	ControllerSecretFile string   `yaml:"controller-secret-file,omitempty" json:"controller-secret-file,omitempty"`
+	Group                string   `yaml:"group,omitempty" json:"group,omitempty"`
+	Hosts                []string `yaml:"hosts,omitempty" json:"hosts,omitempty"`
+	// ProbeURL is an endpoint on the protected upstream used to verify that a
+	// candidate Mihomo node can reach the actual service, not just that the
+	// proxy process reports the node as alive.
+	ProbeURL string `yaml:"probe-url,omitempty" json:"probe-url,omitempty"`
+	// ProbeTimeoutMs bounds the Mihomo delay probe. Keep it below the route
+	// controller timeout so a failed candidate cannot hold recovery open.
+	ProbeTimeoutMs          int    `yaml:"probe-timeout-ms,omitempty" json:"probe-timeout-ms,omitempty"`
+	H2ErrorWindow           string `yaml:"h2-error-window,omitempty" json:"h2-error-window,omitempty"`
+	H2ErrorThreshold        int    `yaml:"h2-error-threshold,omitempty" json:"h2-error-threshold,omitempty"`
+	NodeCooldown            string `yaml:"node-cooldown,omitempty" json:"node-cooldown,omitempty"`
+	RepeatedFailureCooldown string `yaml:"repeated-failure-cooldown,omitempty" json:"repeated-failure-cooldown,omitempty"`
+	RouteHold               string `yaml:"route-hold,omitempty" json:"route-hold,omitempty"`
+	MaxReplays              int    `yaml:"max-replays,omitempty" json:"max-replays,omitempty"`
 }
 
 // StreamingConfig holds server streaming behavior configuration.
