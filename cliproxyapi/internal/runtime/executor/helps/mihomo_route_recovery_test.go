@@ -35,6 +35,14 @@ func TestMihomoRouteControllerReadsGroupAndSelectsAuthenticatedNode(t *testing.T
 			_, _ = w.Write([]byte(`{"name":"OpenAI稳定","now":"新加坡1","all":["新加坡1","美国1","日本1"]}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/proxies/美国1":
 			_, _ = w.Write([]byte(`{"alive":true}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/proxies/美国1/delay":
+			if got := r.URL.Query().Get("url"); got != "https://chatgpt.com/cdn-cgi/trace" {
+				t.Errorf("probe url = %q, want ChatGPT endpoint", got)
+			}
+			if got := r.URL.Query().Get("timeout"); got != "4000" {
+				t.Errorf("probe timeout = %q, want 4000 ms", got)
+			}
+			_, _ = w.Write([]byte(`{"delay":123}`))
 		case r.Method == http.MethodPut && r.URL.Path == "/proxies/OpenAI稳定":
 			body := make([]byte, r.ContentLength)
 			_, _ = r.Body.Read(body)
@@ -61,6 +69,10 @@ func TestMihomoRouteControllerReadsGroupAndSelectsAuthenticatedNode(t *testing.T
 	alive, errAlive := controller.NodeAlive(context.Background(), "美国1")
 	if errAlive != nil || !alive {
 		t.Fatalf("NodeAlive() = %t, %v", alive, errAlive)
+	}
+	delay, errDelay := controller.NodeDelay(context.Background(), "美国1", "https://chatgpt.com/cdn-cgi/trace", 4*time.Second)
+	if errDelay != nil || delay != 123*time.Millisecond {
+		t.Fatalf("NodeDelay() = %s, %v", delay, errDelay)
 	}
 	if errSelect := controller.SelectNode(context.Background(), "美国1"); errSelect != nil {
 		t.Fatalf("SelectNode() error = %v", errSelect)
@@ -105,6 +117,22 @@ func TestTransportRecoveryConcurrentFailuresIssueOneControllerPut(t *testing.T) 
 	}
 	if got := rt.hostGeneration("chatgpt.com"); got != 1 {
 		t.Fatalf("pool generation = %d, want 1", got)
+	}
+}
+
+func TestRouteRecoverySkipsAliveCandidateWhenUpstreamProbeFails(t *testing.T) {
+	t.Parallel()
+
+	controller := newFakeProxyRouteController("新加坡1", []string{"新加坡1", "美国1", "日本1"})
+	controller.probeErr = map[string]error{"美国1": errors.New("chatgpt probe failed")}
+	coordinator := newProxyRouteRecoveryCoordinator(routeRecoveryTestSettings(), controller)
+
+	result := coordinator.recover("chatgpt.com")
+	if result.Err != nil || !result.Switched {
+		t.Fatalf("recovery result = %#v, want successful switch", result)
+	}
+	if result.SelectedNode != "日本1" {
+		t.Fatalf("selected node = %q, want probed Japanese candidate", result.SelectedNode)
 	}
 }
 
@@ -364,6 +392,8 @@ func routeRecoveryTestSettings() proxyRouteRecoverySettings {
 		controllerSecretFile:    "/tmp/test-secret",
 		group:                   "OpenAI稳定",
 		hosts:                   map[string]struct{}{"chatgpt.com": {}},
+		probeURL:                defaultRouteRecoveryProbeURL,
+		probeTimeout:            defaultRouteRecoveryProbeTimeout,
 		h2ErrorWindow:           2 * time.Minute,
 		h2ErrorThreshold:        2,
 		nodeCooldown:            15 * time.Minute,
@@ -401,6 +431,7 @@ type fakeProxyRouteController struct {
 	groupStarted chan struct{}
 	groupRelease chan struct{}
 	selectDelay  time.Duration
+	probeErr     map[string]error
 	groupCalls   atomic.Int32
 	selectCalls  atomic.Int32
 }
@@ -430,6 +461,18 @@ func (c *fakeProxyRouteController) NodeAlive(_ context.Context, node string) (bo
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.alive[node], nil
+}
+
+func (c *fakeProxyRouteController) NodeDelay(_ context.Context, node, _ string, _ time.Duration) (time.Duration, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.probeErr[node]; err != nil {
+		return 0, err
+	}
+	if !c.alive[node] {
+		return 0, errors.New("node is not alive")
+	}
+	return 50 * time.Millisecond, nil
 }
 
 func (c *fakeProxyRouteController) SelectNode(_ context.Context, node string) error {

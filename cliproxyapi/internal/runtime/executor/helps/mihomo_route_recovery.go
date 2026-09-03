@@ -25,6 +25,8 @@ const (
 	defaultRouteRecoveryNodeCooldown      = 15 * time.Minute
 	defaultRouteRecoveryRepeatCooldown    = 30 * time.Minute
 	defaultRouteRecoveryMaxReplays        = 1
+	defaultRouteRecoveryProbeURL          = "https://chatgpt.com/cdn-cgi/trace"
+	defaultRouteRecoveryProbeTimeout      = 4 * time.Second
 )
 
 type proxyRouteRecoverySettings struct {
@@ -33,6 +35,8 @@ type proxyRouteRecoverySettings struct {
 	controllerSecretFile    string
 	group                   string
 	hosts                   map[string]struct{}
+	probeURL                string
+	probeTimeout            time.Duration
 	h2ErrorWindow           time.Duration
 	h2ErrorThreshold        int
 	nodeCooldown            time.Duration
@@ -42,11 +46,21 @@ type proxyRouteRecoverySettings struct {
 }
 
 func normalizeProxyRouteRecoverySettings(raw config.ProxyRouteRecoveryConfig, proxyURL string) proxyRouteRecoverySettings {
+	probeURL := strings.TrimSpace(raw.ProbeURL)
+	if probeURL == "" && len(raw.Hosts) == 1 && strings.EqualFold(strings.TrimSpace(raw.Hosts[0]), "chatgpt.com") {
+		probeURL = defaultRouteRecoveryProbeURL
+	}
+	probeTimeout := time.Duration(raw.ProbeTimeoutMs) * time.Millisecond
+	if probeTimeout <= 0 || probeTimeout >= defaultRouteRecoveryControllerTimeout {
+		probeTimeout = defaultRouteRecoveryProbeTimeout
+	}
 	settings := proxyRouteRecoverySettings{
 		controllerURL:           strings.TrimRight(strings.TrimSpace(raw.ControllerURL), "/"),
 		controllerSecretFile:    strings.TrimSpace(raw.ControllerSecretFile),
 		group:                   strings.TrimSpace(raw.Group),
 		hosts:                   make(map[string]struct{}),
+		probeURL:                probeURL,
+		probeTimeout:            probeTimeout,
 		h2ErrorWindow:           parsePositiveDuration(raw.H2ErrorWindow, transportShadowH2ErrorWindow),
 		h2ErrorThreshold:        raw.H2ErrorThreshold,
 		nodeCooldown:            parsePositiveDuration(raw.NodeCooldown, defaultRouteRecoveryNodeCooldown),
@@ -117,6 +131,8 @@ func proxyRouteRecoveryCacheKey(raw config.ProxyRouteRecoveryConfig) string {
 		strings.TrimSpace(raw.ControllerSecretFile),
 		strings.TrimSpace(raw.Group),
 		strings.Join(hosts, ","),
+		strings.TrimSpace(raw.ProbeURL),
+		strconv.Itoa(raw.ProbeTimeoutMs),
 		strings.TrimSpace(raw.H2ErrorWindow),
 		strconv.Itoa(raw.H2ErrorThreshold),
 		strings.TrimSpace(raw.NodeCooldown),
@@ -136,9 +152,14 @@ type mihomoProxyState struct {
 	Alive *bool `json:"alive"`
 }
 
+type mihomoProxyDelay struct {
+	Delay int `json:"delay"`
+}
+
 type proxyRouteController interface {
 	Group(context.Context) (mihomoProxyGroup, error)
 	NodeAlive(context.Context, string) (bool, error)
+	NodeDelay(context.Context, string, string, time.Duration) (time.Duration, error)
 	SelectNode(context.Context, string) error
 }
 
@@ -180,6 +201,29 @@ func (c *mihomoRouteController) NodeAlive(ctx context.Context, node string) (boo
 		return true, nil
 	}
 	return *state.Alive, nil
+}
+
+func (c *mihomoRouteController) NodeDelay(ctx context.Context, node, probeURL string, timeout time.Duration) (time.Duration, error) {
+	probeURL = strings.TrimSpace(probeURL)
+	if probeURL == "" {
+		return 0, errors.New("Mihomo probe URL is empty")
+	}
+	probeTimeoutMs := int(timeout / time.Millisecond)
+	if probeTimeoutMs <= 0 {
+		probeTimeoutMs = int(defaultRouteRecoveryProbeTimeout / time.Millisecond)
+	}
+	query := url.Values{}
+	query.Set("url", probeURL)
+	query.Set("timeout", strconv.Itoa(probeTimeoutMs))
+	endpoint := c.proxyEndpoint(node) + "/delay?" + query.Encode()
+	var delay mihomoProxyDelay
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, nil, &delay); err != nil {
+		return 0, fmt.Errorf("Mihomo delay probe for node %q: %w", node, err)
+	}
+	if delay.Delay <= 0 {
+		return 0, fmt.Errorf("Mihomo delay probe for node %q returned %d ms", node, delay.Delay)
+	}
+	return time.Duration(delay.Delay) * time.Millisecond, nil
 }
 
 func (c *mihomoRouteController) SelectNode(ctx context.Context, node string) error {
@@ -394,6 +438,18 @@ func (c *proxyRouteRecoveryCoordinator) selectCandidate(ctx context.Context, gro
 			continue
 		}
 		if alive {
+			if c.settings.probeURL != "" {
+				delay, errDelay := c.controller.NodeDelay(ctx, candidate, c.settings.probeURL, c.settings.probeTimeout)
+				if errDelay != nil {
+					log.WithError(errDelay).WithField("candidate_node", candidate).Debug("transport route recovery: upstream probe failed")
+					continue
+				}
+				log.WithFields(log.Fields{
+					"candidate_node": candidate,
+					"probe_url":      c.settings.probeURL,
+					"probe_delay":    delay,
+				}).Debug("transport route recovery: upstream probe passed")
+			}
 			return candidate, nil
 		}
 	}
