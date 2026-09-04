@@ -31,7 +31,8 @@ var defaultCacheRatio = map[string]float64{
 	"gpt-4.1-nano":                 0.25,
 	"gpt-image-1.5":                0.25,
 	"gpt-image-2":                  0.25,
-	// OpenAI cached input is 10% of input price for these GPT-5-family models.
+	// OpenAI cached input is 10% of input price for these GPT-5/GPT-6 models.
+	"gpt-6-astra":                         0.1,
 	"gpt-5.5":                             0.1,
 	"gpt-5.6-sol":                         0.1,
 	"gpt-5.6-terra":                       0.1,
@@ -95,7 +96,8 @@ var defaultCacheRatio = map[string]float64{
 }
 
 var defaultCreateCacheRatio = map[string]float64{
-	// OpenAI GPT-5.6 cache write pricing is 1.25x input pricing.
+	// OpenAI GPT-5.6/GPT-6 cache write pricing is 1.25x input pricing.
+	"gpt-6-astra":                         1.25,
 	"gpt-5.6-sol":                         1.25,
 	"gpt-5.6-terra":                       1.25,
 	"gpt-5.6-luna":                        1.25,

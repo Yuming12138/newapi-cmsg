@@ -1,15 +1,23 @@
 package ratio_setting
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
-func TestGPT56OfficialPricingRatios(t *testing.T) {
+func TestGPT56AndGPT6OfficialPricingRatios(t *testing.T) {
 	tests := []struct {
-		model      string
-		modelRatio float64
+		model            string
+		inputPrice       float64
+		cachedInputPrice float64
+		outputPrice      float64
+		modelRatio       float64
+		completionRatio  float64
 	}{
-		{model: "gpt-5.6-sol", modelRatio: 2.5},
-		{model: "gpt-5.6-terra", modelRatio: 1.0},
-		{model: "gpt-5.6-luna", modelRatio: 0.1},
+		{model: "gpt-6-astra", inputPrice: 10, cachedInputPrice: 1, outputPrice: 50, modelRatio: 5.0, completionRatio: 5},
+		{model: "gpt-5.6-sol", inputPrice: 4, cachedInputPrice: 0.4, outputPrice: 20, modelRatio: 2.0, completionRatio: 5},
+		{model: "gpt-5.6-terra", inputPrice: 2, cachedInputPrice: 0.2, outputPrice: 12, modelRatio: 1.0, completionRatio: 6},
+		{model: "gpt-5.6-luna", inputPrice: 0.2, cachedInputPrice: 0.02, outputPrice: 1.2, modelRatio: 0.1, completionRatio: 6},
 	}
 
 	for _, tt := range tests {
@@ -19,16 +27,23 @@ func TestGPT56OfficialPricingRatios(t *testing.T) {
 				t.Fatalf("model ratio = %v, want %v", modelRatio, tt.modelRatio)
 			}
 
-			if completionRatio := GetCompletionRatio(tt.model); completionRatio != 6 {
-				t.Fatalf("completion ratio = %v, want 6", completionRatio)
+			if completionRatio := GetCompletionRatio(tt.model); completionRatio != tt.completionRatio {
+				t.Fatalf("completion ratio = %v, want %v", completionRatio, tt.completionRatio)
+			}
+
+			if got := modelRatio * 2; math.Abs(got-tt.inputPrice) > 1e-9 {
+				t.Fatalf("input price = %v, want %v", got, tt.inputPrice)
+			}
+			if got := modelRatio * tt.completionRatio * 2; math.Abs(got-tt.outputPrice) > 1e-9 {
+				t.Fatalf("output price = %v, want %v", got, tt.outputPrice)
 			}
 
 			cacheRatio, ok := defaultCacheRatio[tt.model]
 			if !ok {
 				t.Fatalf("expected cache ratio for %s", tt.model)
 			}
-			if cacheRatio != 0.1 {
-				t.Fatalf("cache ratio = %v, want 0.1", cacheRatio)
+			if got := modelRatio * cacheRatio * 2; math.Abs(got-tt.cachedInputPrice) > 1e-9 {
+				t.Fatalf("cached input price = %v, want %v", got, tt.cachedInputPrice)
 			}
 
 			createCacheRatio, ok := defaultCreateCacheRatio[tt.model]
