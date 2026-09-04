@@ -101,7 +101,8 @@ var defaultModelRatio = map[string]float64{
 	// OpenAI GPT-5.2+ Standard pricing. Model ratio is input price / ($2 per 1M tokens).
 	"gpt-5.5":               2.5,   // $5 / 1M input tokens; long-context input is $10 / 1M.
 	"gpt-5.5-pro":           15.0,  // $30 / 1M input tokens; long-context input is $60 / 1M.
-	"gpt-5.6-sol":           2.5,   // $5 / 1M input tokens.
+	"gpt-6-astra":           5.0,   // $10 / 1M input tokens.
+	"gpt-5.6-sol":           2.0,   // $4 / 1M input tokens.
 	"gpt-5.6-terra":         1.0,   // $2 / 1M input tokens.
 	"gpt-5.6-luna":          0.1,   // $0.20 / 1M input tokens.
 	"gpt-5.4":               1.25,  // $2.5 / 1M input tokens
@@ -368,6 +369,7 @@ var defaultCompletionRatio = map[string]float64{
 	"gpt-image-1":       8,
 	"gpt-image-1.5":     2,
 	"gpt-image-2":       2,
+	"gpt-6-astra":       5,
 	"deepseek-v4-flash": 2,
 	"deepseek-v4-pro":   2,
 }
@@ -537,6 +539,9 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 	}
 
 	if strings.HasPrefix(name, "gpt-") {
+		if name == "gpt-6-astra" {
+			return 5, true
+		}
 		if strings.HasPrefix(name, "gpt-4o") {
 			if name == "gpt-4o-2024-05-13" {
 				return 3, true
@@ -548,6 +553,9 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 		}
 		// gpt-5 匹配
 		if strings.HasPrefix(name, "gpt-5") {
+			if name == "gpt-5.6-sol" {
+				return 5, true
+			}
 			if strings.HasPrefix(name, "gpt-5.5") {
 				return 6, true
 			}

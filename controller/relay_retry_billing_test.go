@@ -98,7 +98,7 @@ func TestPrepareBillingForSelectedChannelReservesMoreForExpensiveMapping(t *test
 	require.Nil(t, prepareBillingForSelectedChannel(c, info, 1000, meta))
 
 	require.Equal(t, "gpt-5.6-sol", info.GetBillingModelName())
-	require.Equal(t, 2.5, info.PriceData.ModelRatio)
+	require.Equal(t, 2.0, info.PriceData.ModelRatio)
 	require.Equal(t, []int{info.PriceData.QuotaToPreConsume}, billing.reserveTargets)
 	require.Equal(t, info.PriceData.QuotaToPreConsume, info.FinalPreConsumedQuota)
 }
@@ -120,5 +120,5 @@ func TestPrepareBillingForSelectedChannelClearsPreviousMappedBillingModel(t *tes
 	require.Nil(t, prepareBillingForSelectedChannel(c, info, 1000, meta))
 
 	require.Equal(t, "gpt-5.6-sol", info.GetBillingModelName())
-	require.Equal(t, 2.5, info.PriceData.ModelRatio)
+	require.Equal(t, 2.0, info.PriceData.ModelRatio)
 }
