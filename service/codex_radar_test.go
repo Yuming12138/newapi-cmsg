@@ -140,10 +140,10 @@ func TestCodexRadarProviderAcceptsExpandedPayload(t *testing.T) {
 	payload := strings.Replace(
 		codexRadarTestPayload,
 		"{",
-		`{"padding":"`+strings.Repeat("x", (2<<20)+1)+`",`,
+		`{"padding":"`+strings.Repeat("x", (4<<20)+1)+`",`,
 		1,
 	)
-	if len(payload) <= 2<<20 || len(payload) > codexRadarMaxBodyBytes {
+	if len(payload) <= 4<<20 || len(payload) > codexRadarMaxBodyBytes {
 		t.Fatalf("expanded payload size = %d, want above previous limit and within current limit", len(payload))
 	}
 
