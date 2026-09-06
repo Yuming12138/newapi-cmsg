@@ -21,8 +21,11 @@ const (
 	codexRadarSourceURL      = "https://codexradar.com/"
 	codexRadarCacheTTL       = 10 * time.Minute
 	codexRadarStaleTTL       = 24 * time.Hour
-	codexRadarHTTPTimeout    = 15 * time.Second
-	codexRadarMaxBodyBytes   = 4 << 20
+	// The published dataset is currently over 4 MiB and can take a few seconds
+	// to arrive from the CDN. Keep enough headroom for growth without allowing
+	// an unexpectedly large response to consume unbounded memory.
+	codexRadarHTTPTimeout  = 30 * time.Second
+	codexRadarMaxBodyBytes = 8 << 20
 )
 
 type CodexRadarMetric struct {
