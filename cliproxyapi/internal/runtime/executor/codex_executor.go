@@ -1965,6 +1965,12 @@ func isCodexModelCapacityError(errorBody []byte) bool {
 	if len(errorBody) == 0 {
 		return false
 	}
+	for _, path := range []string{"error.code", "error.type", "code", "type"} {
+		code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(errorBody, path).String()))
+		if code == "server_is_overloaded" || code == "server_overloaded" {
+			return true
+		}
+	}
 	candidates := []string{
 		gjson.GetBytes(errorBody, "error.message").String(),
 		gjson.GetBytes(errorBody, "message").String(),

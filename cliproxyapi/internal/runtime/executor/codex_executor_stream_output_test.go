@@ -249,6 +249,49 @@ func TestCodexExecutorExecuteStreamBuffersCapacityFailureBeforeFirstPayload(t *t
 	}
 }
 
+func TestCodexExecutorExecuteStreamBuffersServerOverloadedBeforeFirstPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress","model":"gpt-5.6-sol"}}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"type":"response.completed","response":{"id":"resp_1","status":"failed","error":{"code":"server_is_overloaded","message":"The server is overloaded."}}}` + "\n\n"))
+	}))
+	defer server.Close()
+
+	executor := NewCodexExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{
+		"base_url": server.URL,
+		"api_key":  "test",
+	}}
+
+	result, err := executor.ExecuteStream(context.Background(), auth, cliproxyexecutor.Request{
+		Model:   "gpt-5.6-sol",
+		Payload: []byte(`{"model":"gpt-5.6-sol","input":"hello"}`),
+	}, cliproxyexecutor.Options{
+		SourceFormat: sdktranslator.FromString("openai-response"),
+		Stream:       true,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteStream error: %v", err)
+	}
+
+	var streamErr error
+	for chunk := range result.Chunks {
+		if len(bytes.TrimSpace(chunk.Payload)) > 0 {
+			t.Fatalf("server overloaded failure committed downstream payload before retry: %q", string(chunk.Payload))
+		}
+		if chunk.Err != nil {
+			streamErr = chunk.Err
+			break
+		}
+	}
+	if streamErr == nil {
+		t.Fatal("missing stream server overloaded error")
+	}
+	if got := statusCodeFromTestError(t, streamErr); got != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want %d; err=%v", got, http.StatusTooManyRequests, streamErr)
+	}
+}
+
 func TestCodexTerminalStreamContextLengthErrFromResponseFailed(t *testing.T) {
 	err, ok := codexTerminalStreamContextLengthErr([]byte(`{"type":"response.failed","response":{"id":"resp_1","status":"failed","error":{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model. Please adjust your input and try again."}}}`))
 	if !ok {
