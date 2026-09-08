@@ -137,10 +137,13 @@ def yaml_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+# Health-check interval for the codex egress group. Keep this short: a Fallback
+# group only notices a dead node on its next probe, so interval=120 left traffic
+# stranded on a broken node for up to two minutes (observed 2026-09-08, 22:12).
 openai_group_line = (
     "    - { name: OpenAI稳定, type: fallback, proxies: ["
     + ", ".join(yaml_quote(node) for node in openai_nodes)
-    + "], url: 'https://chatgpt.com/backend-api/codex/responses', interval: 120, lazy: false }"
+    + "], url: 'https://chatgpt.com/backend-api/codex/responses', interval: 30, lazy: false }"
 )
 asxs_group_line = (
     "    - { name: ASXS余额故障转移, type: fallback, proxies: ["
