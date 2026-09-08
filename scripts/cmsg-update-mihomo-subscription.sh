@@ -149,6 +149,7 @@ asxs_group_line = (
 )
 rule_lines = [
     "    - 'DOMAIN,api.asxs.top,ASXS余额故障转移'",
+    "    - 'DOMAIN-SUFFIX,itygk.sbs,ASXS余额故障转移'",
     "    - 'DOMAIN-SUFFIX,chatgpt.com,OpenAI稳定'",
     "    - 'DOMAIN-SUFFIX,openai.com,OpenAI稳定'",
     "    - 'DOMAIN-SUFFIX,oaistatic.com,OpenAI稳定'",
