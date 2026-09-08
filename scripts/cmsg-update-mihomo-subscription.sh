@@ -145,10 +145,14 @@ openai_group_line = (
     + ", ".join(yaml_quote(node) for node in openai_nodes)
     + "], url: 'https://chatgpt.com/backend-api/codex/responses', interval: 30, lazy: false }"
 )
+# Probe the domain this group actually carries. It used to probe api.asxs.top,
+# which stopped resolving (2026-09-08: DNS now points at a dead range, request
+# returns 000) — every member was then judged unhealthy and the group flapped
+# with no real signal, while asxs traffic had already moved to api.itygk.sbs.
 asxs_group_line = (
     "    - { name: ASXS余额故障转移, type: fallback, proxies: ["
     + ", ".join(yaml_quote(node) for node in asxs_nodes)
-    + "], url: 'https://api.asxs.top/', interval: 300, lazy: false }"
+    + "], url: 'https://api.itygk.sbs/', interval: 30, lazy: false }"
 )
 rule_lines = [
     "    - 'DOMAIN,api.asxs.top,ASXS余额故障转移'",
