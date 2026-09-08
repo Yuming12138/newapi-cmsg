@@ -91,6 +91,31 @@ func TestNewCodexStatusErrTreatsCapacityAsRetryableRateLimit(t *testing.T) {
 	}
 }
 
+func TestNewCodexStatusErrTreatsServerOverloadedAsCapacity(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "error code",
+			body: `{"error":{"code":"server_is_overloaded","message":"The server is overloaded."}}`,
+		},
+		{
+			name: "error type",
+			body: `{"error":{"type":"server_overloaded","message":"The server is overloaded."}}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := newCodexStatusErr(http.StatusBadRequest, []byte(tc.body))
+			if got := err.StatusCode(); got != http.StatusTooManyRequests {
+				t.Fatalf("status code = %d, want %d; err=%v", got, http.StatusTooManyRequests, err)
+			}
+		})
+	}
+}
+
 func TestNewCodexStatusErrTreatsUsageLimitAsRetryableRateLimit(t *testing.T) {
 	body := []byte(`{"error":{"type":"usage_limit_reached","message":"You've hit your usage limit.","resets_in_seconds":120}}`)
 
