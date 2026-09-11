@@ -30,6 +30,41 @@ func TestGetRequestURLUsesNativeResponsesEndpoint(t *testing.T) {
 	require.Equal(t, "https://api.deepseek.com/responses", url)
 }
 
+func TestOfficialFlashResponsesUsesNativeEndpoint(t *testing.T) {
+	info := testRelayInfo("deepseek-flash")
+	info.RelayMode = relayconstant.RelayModeResponses
+	request := dto.OpenAIResponsesRequest{
+		Model: "deepseek-flash",
+		Input: json.RawMessage(`"use the native Responses API"`),
+	}
+
+	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, request)
+
+	require.NoError(t, err)
+	_, ok := converted.(dto.OpenAIResponsesRequest)
+	require.True(t, ok)
+	require.Equal(t, "deepseek-flash", info.UpstreamModelName)
+
+	url, err := (&Adaptor{}).GetRequestURL(info)
+	require.NoError(t, err)
+	require.Equal(t, "https://api.deepseek.com/responses", url)
+}
+
+func TestOfficialFlashThinkingSuffixUsesNativeEndpoint(t *testing.T) {
+	info := testRelayInfo("deepseek-flash-max")
+	info.RelayMode = relayconstant.RelayModeResponses
+	request := dto.OpenAIResponsesRequest{Model: "deepseek-flash-max"}
+
+	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, request)
+
+	require.NoError(t, err)
+	got := converted.(dto.OpenAIResponsesRequest)
+	require.Equal(t, "deepseek-flash", got.Model)
+	require.NotNil(t, got.Reasoning)
+	require.Equal(t, "max", got.Reasoning.Effort)
+	require.Equal(t, "deepseek-flash", info.UpstreamModelName)
+}
+
 func TestProResponsesUsesNativeEndpoint(t *testing.T) {
 	info := testRelayInfo("deepseek-v4-pro")
 	info.RelayMode = relayconstant.RelayModeResponses
