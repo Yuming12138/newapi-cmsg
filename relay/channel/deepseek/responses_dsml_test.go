@@ -69,6 +69,56 @@ func TestConvertDSMLTextEscapedLineSeparators(t *testing.T) {
 	require.Equal(t, "const results = await Promise.all([\n  tools.exec_command({cmd: \"Get-Item\"})\n]);\n", common.JsonRawMessageToString(result.Tools[0].Input))
 }
 
+func TestConvertDSMLTextScreenshotPayload(t *testing.T) {
+	toolMap := buildNativeResponsesToolMap([]map[string]any{{
+		"type": "additional_tools",
+		"tools": []any{map[string]any{
+			"type":  "namespace",
+			"name":  "container",
+			"tools": []any{map[string]any{"type": "custom", "name": "exec"}},
+		}},
+	}})
+	text := `理解，这个 correction 很关键。我先不生成图，先看现有网页里“展示图”会落在哪个位置、当前素材尺寸和文字压图关系，再给具体建议。之前的图形探索里，适合展示图的方向和适合 Logo 的方向应该分开看待。
+<｜｜DSML｜｜ calls>\
+<｜｜DSML｜｜ invoke name="exec">\
+<｜｜DSML｜｜ parameter name="input" string="true">const r = await tools.exec_command({cmd:"$p=Join-Path $env:TEMP 'cmsg-home-2.html'; C:\Windows\System32\curl.exe -L -sS --max-time 25 '[https://www.comates.group/](https://www.comates.group/)' -o $p; $html=Get-Content -LiteralPath $p -Raw; 'IMAGES:'; [regex]::Matches($html,'\<img[^>]+src="([^"]+)"','IgnoreCase') | ForEach-Object { $*.Groups[1].Value } | Select-Object -Unique; 'SECTIONS:'; [regex]::Matches($html,'\<h[12][^>]>(.?)\</h[12]>','IgnoreCase,Singleline') | ForEach-Object { ($*.Groups[1].Value -replace '<[^>]+>','' -replace '\s+',' ').Trim() } | Where-Object { $\_ } | Select-Object -First 30",yield_time_ms:30000,max_output_tokens:6000}); text(r.output);\
+</｜｜DSML｜｜ parameter>\
+</｜｜DSML｜｜ invoke>\
+</｜｜DSML｜｜ calls>`
+
+	result := convertDSMLText(text, toolMap)
+
+	require.Equal(t, "理解，这个 correction 很关键。我先不生成图，先看现有网页里“展示图”会落在哪个位置、当前素材尺寸和文字压图关系，再给具体建议。之前的图形探索里，适合展示图的方向和适合 Logo 的方向应该分开看待。", result.Text)
+	require.Len(t, result.Tools, 1)
+	require.Equal(t, "custom_tool_call", result.Tools[0].Type)
+	require.Equal(t, "exec", result.Tools[0].Name)
+	require.Contains(t, common.JsonRawMessageToString(result.Tools[0].Input), "tools.exec_command")
+}
+
+func TestConvertDSMLTextInfersUnknownCustomTool(t *testing.T) {
+	text := `<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name="exec"><｜｜DSML｜｜ parameter name="input" string="true">text("ok")</｜｜DSML｜｜ parameter></｜｜DSML｜｜ invoke></｜｜DSML｜｜ calls>`
+
+	result := convertDSMLText(text, nil)
+
+	require.Empty(t, result.Text)
+	require.Len(t, result.Tools, 1)
+	require.Equal(t, "custom_tool_call", result.Tools[0].Type)
+	require.Equal(t, "exec", result.Tools[0].Name)
+	require.Equal(t, `text("ok")`, common.JsonRawMessageToString(result.Tools[0].Input))
+}
+
+func TestSetNativeResponsesToolMapForRequestIncludesAdditionalToolsInput(t *testing.T) {
+	request := dto.OpenAIResponsesRequest{
+		Input: []byte(`[{"type":"additional_tools","tools":[{"type":"namespace","name":"container","tools":[{"type":"custom","name":"exec"}]}]}]`),
+	}
+	c, _ := gin.CreateTestContext(nil)
+	setNativeResponsesToolMapForRequest(c, request)
+
+	toolMap := getNativeResponsesToolMap(c)
+	require.Contains(t, toolMap, "exec")
+	require.Equal(t, "custom", toolMap["exec"].Type)
+}
+
 func TestConvertDSMLTextFunctionParametersAndMultipleInvokes(t *testing.T) {
 	toolMap := buildNativeResponsesToolMap([]map[string]any{
 		{"type": "function", "name": "lookup"},

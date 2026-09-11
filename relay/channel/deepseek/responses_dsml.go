@@ -1,6 +1,7 @@
 package deepseek
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"regexp"
@@ -57,6 +58,15 @@ func setNativeResponsesToolMap(c *gin.Context, tools []map[string]any) {
 	c.Set(nativeResponsesToolMapKey, buildNativeResponsesToolMap(tools))
 }
 
+func setNativeResponsesToolMapForRequest(c *gin.Context, request dto.OpenAIResponsesRequest) {
+	if c == nil {
+		return
+	}
+	toolMap := buildNativeResponsesToolMap(request.GetToolsMap())
+	appendNativeResponsesInputTools(toolMap, request.Input)
+	c.Set(nativeResponsesToolMapKey, toolMap)
+}
+
 func getNativeResponsesToolMap(c *gin.Context) map[string]nativeResponseTool {
 	if c == nil {
 		return nil
@@ -72,41 +82,81 @@ func getNativeResponsesToolMap(c *gin.Context) map[string]nativeResponseTool {
 func buildNativeResponsesToolMap(tools []map[string]any) map[string]nativeResponseTool {
 	toolMap := make(map[string]nativeResponseTool)
 	for _, tool := range tools {
-		toolType := strings.TrimSpace(common.Interface2String(tool["type"]))
-		switch toolType {
-		case "function":
-			name := responseToolName(tool)
-			if name != "" {
-				toolMap[name] = nativeResponseTool{Type: "function", Name: name}
-			}
-		case "namespace":
-			namespace := strings.TrimSpace(common.Interface2String(tool["name"]))
-			children := mapSlice(tool["tools"])
-			for _, child := range children {
-				if common.Interface2String(child["type"]) != "function" {
-					continue
-				}
-				name := strings.TrimSpace(common.Interface2String(child["name"]))
-				flatName := namespacedToolName(namespace, name)
-				if name != "" {
-					restore := nativeResponseTool{Type: "function", Name: name, Namespace: namespace}
-					toolMap[flatName] = restore
-					toolMap[namespace+"__"+name] = restore
-				}
-			}
-		case "web_search", "web_search_preview", "file_search", "image_generation", "computer_use_preview":
-			continue
-		default:
-			name := strings.TrimSpace(common.Interface2String(tool["name"]))
-			if name == "" {
-				name = toolType
-			}
-			if name != "" {
-				toolMap[name] = nativeResponseTool{Type: "custom", Name: name}
-			}
-		}
+		addNativeResponsesTool(toolMap, tool, "")
 	}
 	return toolMap
+}
+
+func addNativeResponsesTool(toolMap map[string]nativeResponseTool, tool map[string]any, namespace string) {
+	toolType := strings.TrimSpace(common.Interface2String(tool["type"]))
+	switch toolType {
+	case "function", "custom":
+		name := strings.TrimSpace(common.Interface2String(tool["name"]))
+		if name == "" {
+			name = responseToolName(tool)
+		}
+		if name == "" {
+			return
+		}
+		restoreType := "function"
+		if toolType == "custom" {
+			restoreType = "custom"
+		}
+		restore := nativeResponseTool{Type: restoreType, Name: name, Namespace: namespace}
+		if namespace == "" {
+			toolMap[name] = restore
+			return
+		}
+		toolMap[namespacedToolName(namespace, name)] = restore
+		toolMap[namespace+"__"+name] = restore
+		// DeepSeek DSML commonly emits the bare custom-tool name even when
+		// Codex supplied it inside an additional_tools namespace.
+		if restoreType == "custom" {
+			if _, exists := toolMap[name]; !exists {
+				toolMap[name] = restore
+			}
+		}
+	case "namespace":
+		childNamespace := strings.TrimSpace(common.Interface2String(tool["name"]))
+		if childNamespace == "" {
+			childNamespace = namespace
+		}
+		for _, child := range mapSlice(tool["tools"]) {
+			addNativeResponsesTool(toolMap, child, childNamespace)
+		}
+	case "additional_tools":
+		for _, child := range mapSlice(tool["tools"]) {
+			addNativeResponsesTool(toolMap, child, namespace)
+		}
+	case "web_search", "web_search_preview", "file_search", "image_generation", "computer_use_preview", "tool_search":
+		return
+	default:
+		name := strings.TrimSpace(common.Interface2String(tool["name"]))
+		if name == "" {
+			name = toolType
+		}
+		if name != "" {
+			toolMap[name] = nativeResponseTool{Type: "custom", Name: name, Namespace: namespace}
+		}
+	}
+}
+
+func appendNativeResponsesInputTools(toolMap map[string]nativeResponseTool, input json.RawMessage) {
+	if len(strings.TrimSpace(string(input))) == 0 {
+		return
+	}
+	var items []map[string]any
+	if err := common.Unmarshal(input, &items); err != nil {
+		return
+	}
+	for _, item := range items {
+		if common.Interface2String(item["type"]) != "additional_tools" {
+			continue
+		}
+		for _, tool := range mapSlice(item["tools"]) {
+			addNativeResponsesTool(toolMap, tool, "")
+		}
+	}
 }
 
 func responseToolName(tool map[string]any) string {
@@ -469,6 +519,18 @@ func convertDSMLText(text string, toolMap map[string]nativeResponseTool) dsmlCon
 	for _, invocation := range invocations {
 		tool, exists := toolMap[invocation.Name]
 		if !exists {
+			// DeepSeek may emit Codex custom tools even when the request
+			// arrived through pass-through mode and no tool definitions were
+			// stored in the request context. A single `input` parameter is
+			// the unambiguous DSML shape for a custom tool call.
+			if isKnownCodexCustomTool(invocation.Name) && len(invocation.Parameters) == 1 {
+				if _, hasInput := invocation.Parameters["input"]; hasInput {
+					tool = nativeResponseTool{Type: "custom", Name: invocation.Name}
+					exists = true
+				}
+			}
+		}
+		if !exists {
 			return dsmlConversion{Text: text}
 		}
 		callID := "call_" + common.GetUUID()
@@ -489,6 +551,15 @@ func convertDSMLText(text string, toolMap map[string]nativeResponseTool) dsmlCon
 	prefix := strings.TrimRightFunc(text[:start], isDSMLSeparatorRune)
 	suffix := strings.TrimLeftFunc(text[end:], isDSMLSeparatorRune)
 	return dsmlConversion{Text: strings.TrimSpace(prefix + suffix), Tools: tools}
+}
+
+func isKnownCodexCustomTool(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "exec", "apply_patch":
+		return true
+	default:
+		return false
+	}
 }
 
 func invocationCustomInput(parameters map[string]any) (string, bool) {
