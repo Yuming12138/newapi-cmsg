@@ -168,7 +168,16 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		return convertResponsesRequest(c, info, request)
 	}
 	applyDeepSeekV4ResponsesThinkingSuffix(info, &request)
+	request, err := prepareNativeResponsesRequest(info, request)
+	if err != nil {
+		return nil, err
+	}
 	setNativeResponsesToolMapForRequest(c, request)
+	setNativeResponsesRequest(c, request)
+	request, err = normalizeNativeResponsesInputForUpstream(request)
+	if err != nil {
+		return nil, err
+	}
 	return request, nil
 }
 
