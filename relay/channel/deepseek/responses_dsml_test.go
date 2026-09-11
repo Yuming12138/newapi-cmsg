@@ -34,6 +34,23 @@ text(answer);</｜｜DSML｜｜parameter>
 	require.NotEmpty(t, tool.CallId)
 }
 
+func TestConvertDSMLTextCallsAliasWithSpacedMarker(t *testing.T) {
+	toolMap := buildNativeResponsesToolMap([]map[string]any{{"type": "custom", "name": "exec"}})
+	text := `before< | | DSML | | calls>
+< | | DSML | | invoke name="exec">
+< | | DSML | | parameter name="input" string="true">inspect the current page</ | | DSML | | parameter>
+</ | | DSML | | invoke>
+</ | | DSML | | calls>`
+
+	result := convertDSMLText(text, toolMap)
+
+	require.Equal(t, "before", result.Text)
+	require.Len(t, result.Tools, 1)
+	require.Equal(t, "custom_tool_call", result.Tools[0].Type)
+	require.Equal(t, "exec", result.Tools[0].Name)
+	require.Equal(t, "inspect the current page", common.JsonRawMessageToString(result.Tools[0].Input))
+}
+
 func TestConvertDSMLTextFunctionParametersAndMultipleInvokes(t *testing.T) {
 	toolMap := buildNativeResponsesToolMap([]map[string]any{
 		{"type": "function", "name": "lookup"},
@@ -94,6 +111,16 @@ func TestNativeResponsesStreamBuffersDSMLStartSplitAcrossChunks(t *testing.T) {
 	require.Contains(t, state.buffer.String(), "tool_calls")
 }
 
+func TestNativeResponsesStreamRecognizesSpacedCallsAlias(t *testing.T) {
+	state := &nativeResponsesStreamState{toolMap: buildNativeResponsesToolMap([]map[string]any{{"type": "custom", "name": "exec"}})}
+	consumed, output := state.consumeTextDelta("plain< | | DSML | | calls>")
+
+	require.True(t, consumed)
+	require.Equal(t, "plain", output)
+	require.True(t, state.buffering)
+	require.Contains(t, state.buffer.String(), "calls")
+}
+
 func TestConvertNativeResponsesOutputPreservesMessageOrder(t *testing.T) {
 	toolMap := buildNativeResponsesToolMap([]map[string]any{{"type": "custom", "name": "exec"}})
 	dsml := `<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="exec"><｜｜DSML｜｜parameter name="input" string="true">text("ok")</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>`
@@ -117,11 +144,11 @@ func TestNativeResponsesStreamConvertsSplitDSMLAndCompletedOutput(t *testing.T) 
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	setNativeResponsesToolMap(c, []map[string]any{{"type": "custom", "name": "exec"}})
-	dsml := `<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke name="exec"><｜｜DSML｜｜parameter name="input" string="true">text("ok")</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>`
+	dsml := `< | | DSML | | calls>< | | DSML | | invoke name="exec">< | | DSML | | parameter name="input" string="true">text("ok")</ | | DSML | | parameter></ | | DSML | | invoke></ | | DSML | | calls>`
 	parts := []string{
-		`<｜｜DSML｜｜tool_`,
-		`calls><｜｜DSML｜｜invoke name="exec"><｜｜DSML｜｜parameter name="input" string="true">`,
-		`text("ok")</｜｜DSML｜｜parameter></｜｜DSML｜｜invoke></｜｜DSML｜｜tool_calls>`,
+		`< | | DSML | | ca`,
+		`lls>< | | DSML | | invoke name="exec">< | | DSML | | parameter name="input" string="true">`,
+		`text("ok")</ | | DSML | | parameter></ | | DSML | | invoke></ | | DSML | | calls>`,
 	}
 	events := []map[string]any{
 		{"type": "response.created", "response": map[string]any{"id": "resp_1"}},
