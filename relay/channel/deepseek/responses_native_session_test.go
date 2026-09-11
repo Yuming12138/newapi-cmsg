@@ -97,6 +97,19 @@ func TestNormalizeNativeResponsesInputConvertsUnsupportedCustomToolPair(t *testi
 	require.Equal(t, "custom_tool_call_output", items[3]["type"])
 }
 
+func TestNormalizeNativeResponsesInputConvertsOutputForReplayedFunctionCall(t *testing.T) {
+	request := dto.OpenAIResponsesRequest{Input: json.RawMessage(`[
+		{"type":"function_call","call_id":"call_exec","name":"exec","arguments":"{\"input\":\"x\"}"},
+		{"type":"custom_tool_call_output","call_id":"call_exec","output":"ok"}
+	]`)}
+
+	got, err := normalizeNativeResponsesInputForUpstream(request)
+	require.NoError(t, err)
+	items, err := normalizeResponsesInput(got.Input)
+	require.NoError(t, err)
+	require.Equal(t, "function_call_output", items[1]["type"])
+}
+
 func TestNormalizeNativeResponsesInputLeavesUnchangedRequestShape(t *testing.T) {
 	request := dto.OpenAIResponsesRequest{Input: json.RawMessage(`"inspect the repository"`)}
 

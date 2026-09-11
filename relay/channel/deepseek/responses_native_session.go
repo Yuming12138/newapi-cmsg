@@ -113,7 +113,14 @@ func normalizeNativeResponsesInputForUpstream(request dto.OpenAIResponsesRequest
 	changed := false
 	functionCallIDs := make(map[string]struct{})
 	for _, item := range inputItems {
-		if common.Interface2String(item["type"]) != "custom_tool_call" {
+		itemType := common.Interface2String(item["type"])
+		if itemType == "function_call" {
+			if callID := toolCallID(item); callID != "" {
+				functionCallIDs[callID] = struct{}{}
+			}
+			continue
+		}
+		if itemType != "custom_tool_call" {
 			continue
 		}
 		if common.Interface2String(item["name"]) == "apply_patch" {
@@ -139,6 +146,7 @@ func normalizeNativeResponsesInputForUpstream(request dto.OpenAIResponsesRequest
 		}
 		if _, ok := functionCallIDs[toolCallID(item)]; ok {
 			item["type"] = "function_call_output"
+			changed = true
 		}
 	}
 	if !changed {
