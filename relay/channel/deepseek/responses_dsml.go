@@ -22,6 +22,7 @@ const nativeResponsesToolMapKey = "deepseek_native_responses_tool_map"
 var dsmlParameterOpenPattern = regexp.MustCompile(`(?is)<\s*([^<>]*?DSML[^<>]*?)\s*parameter\b([^>]*)>`)
 var dsmlNameAttributePattern = regexp.MustCompile(`(?is)\bname\s*=\s*(?:"([^"]*)"|'([^']*)')`)
 var dsmlStringAttributePattern = regexp.MustCompile(`(?is)\bstring\s*=\s*(?:"([^"]*)"|'([^']*)')`)
+var dsmlLineContinuationPattern = regexp.MustCompile(`\\[ \t]*(?:\r\n|\n|\r)`)
 
 type nativeResponseTool struct {
 	Type      string
@@ -44,6 +45,7 @@ type nativeResponsesStreamState struct {
 	buffer         strings.Builder
 	buffering      bool
 	pendingText    string
+	lastText       string
 	nextOutput     int
 	completedTools []dto.ResponsesOutput
 }
@@ -189,13 +191,33 @@ func handleNativeResponsesStream(c *gin.Context, resp *http.Response, info *rela
 				return
 			}
 		}
-		if state.buffering && isNativeResponsesTerminalEvent(event.Type) {
-			terminalType := event.Type
-			if err := state.flushBufferedText(c); err != nil {
+		if event.Type == "response.output_text.done" {
+			if state.buffering {
+				if err := state.flushBufferedText(c); err != nil {
+					sr.Stop(err)
+					return
+				}
+				event.Text = state.lastText
+			} else if event.Text != "" {
+				converted := convertDSMLText(event.Text, state.toolMap)
+				if len(converted.Tools) > 0 {
+					if err := state.emitConversion(c, converted); err != nil {
+						sr.Stop(err)
+						return
+					}
+					event.Text = converted.Text
+				}
+			}
+			dataBytes, err := common.Marshal(event)
+			if err != nil {
 				sr.Stop(err)
 				return
 			}
-			if terminalType == "response.output_text.done" && len(state.completedTools) > 0 {
+			data = string(dataBytes)
+		}
+		if state.buffering && isNativeResponsesTerminalEvent(event.Type) {
+			if err := state.flushBufferedText(c); err != nil {
+				sr.Stop(err)
 				return
 			}
 		}
@@ -275,12 +297,18 @@ func (s *nativeResponsesStreamState) flushBufferedText(c *gin.Context) error {
 		}
 		pending := s.pendingText
 		s.pendingText = ""
+		s.lastText = pending
 		return writeNativeResponsesSSE(c, "response.output_text.delta", dto.ResponsesStreamResponse{Type: "response.output_text.delta", Delta: pending})
 	}
 	text := s.buffer.String()
 	s.buffer.Reset()
 	s.buffering = false
 	converted := convertDSMLText(text, s.toolMap)
+	s.lastText = converted.Text
+	return s.emitConversion(c, converted)
+}
+
+func (s *nativeResponsesStreamState) emitConversion(c *gin.Context, converted dsmlConversion) error {
 	if converted.Text != "" {
 		if err := writeNativeResponsesSSE(c, "response.output_text.delta", dto.ResponsesStreamResponse{Type: "response.output_text.delta", Delta: converted.Text}); err != nil {
 			return err
@@ -458,7 +486,9 @@ func convertDSMLText(text string, toolMap map[string]nativeResponseTool) dsmlCon
 		}
 		tools = append(tools, dto.ResponsesOutput{Type: "function_call", ID: callID, Status: "completed", CallId: callID, Name: tool.Name, Namespace: tool.Namespace, Arguments: rawString(string(arguments))})
 	}
-	return dsmlConversion{Text: strings.TrimSpace(text[:start] + text[end:]), Tools: tools}
+	prefix := strings.TrimRightFunc(text[:start], isDSMLSeparatorRune)
+	suffix := strings.TrimLeftFunc(text[end:], isDSMLSeparatorRune)
+	return dsmlConversion{Text: strings.TrimSpace(prefix + suffix), Tools: tools}
 }
 
 func invocationCustomInput(parameters map[string]any) (string, bool) {
@@ -494,7 +524,7 @@ func parseDSMLInvocations(text string) ([]dsmlInvocation, int, int, bool) {
 		if !found {
 			break
 		}
-		if strings.TrimSpace(body[position:invokeStart]) != "" {
+		if trimDSMLSeparators(body[position:invokeStart]) != "" {
 			return nil, 0, 0, false
 		}
 		name := attributeValue(body[invokeStart:invokeOpenEnd], dsmlNameAttributePattern)
@@ -508,7 +538,7 @@ func parseDSMLInvocations(text string) ([]dsmlInvocation, int, int, bool) {
 		invocations = append(invocations, dsmlInvocation{Name: name, Parameters: parameters})
 		position = invokeCloseEnd
 	}
-	if len(invocations) == 0 || strings.TrimSpace(body[position:]) != "" {
+	if len(invocations) == 0 || trimDSMLSeparators(body[position:]) != "" {
 		return nil, 0, 0, false
 	}
 	return invocations, start, closeEnd, true
@@ -525,7 +555,7 @@ func parseDSMLParameters(body string) (map[string]any, bool) {
 		}
 		openStart := position + location[0]
 		openEnd := position + location[1]
-		if strings.TrimSpace(body[position:openStart]) != "" {
+		if trimDSMLSeparators(body[position:openStart]) != "" {
 			return nil, false
 		}
 		openTag := body[openStart:openEnd]
@@ -542,7 +572,7 @@ func parseDSMLParameters(body string) (map[string]any, bool) {
 		if !ok {
 			return nil, false
 		}
-		value := body[openEnd:closeStart]
+		value := normalizeDSMLParameterValue(body[openEnd:closeStart])
 		stringValue := strings.EqualFold(attributeValue(openTag, dsmlStringAttributePattern), "true")
 		if stringValue {
 			parameters[name] = value
@@ -555,10 +585,22 @@ func parseDSMLParameters(body string) (map[string]any, bool) {
 		}
 		position = closeEnd
 	}
-	if strings.TrimSpace(body[position:]) != "" {
+	if trimDSMLSeparators(body[position:]) != "" {
 		return nil, false
 	}
 	return parameters, true
+}
+
+func normalizeDSMLParameterValue(value string) string {
+	return dsmlLineContinuationPattern.ReplaceAllString(value, "\n")
+}
+
+func trimDSMLSeparators(value string) string {
+	return strings.TrimFunc(value, isDSMLSeparatorRune)
+}
+
+func isDSMLSeparatorRune(r rune) bool {
+	return unicode.IsSpace(r) || r == '\\'
 }
 
 func firstRegexpGroup(text string, indexes []int, group int) string {

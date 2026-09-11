@@ -51,6 +51,24 @@ func TestConvertDSMLTextCallsAliasWithSpacedMarker(t *testing.T) {
 	require.Equal(t, "inspect the current page", common.JsonRawMessageToString(result.Tools[0].Input))
 }
 
+func TestConvertDSMLTextEscapedLineSeparators(t *testing.T) {
+	toolMap := buildNativeResponsesToolMap([]map[string]any{{"type": "custom", "name": "exec"}})
+	text := "before<｜｜DSML｜｜ calls>\\\n" +
+		"<｜｜DSML｜｜ invoke name=\"exec\">\\\n" +
+		"<｜｜DSML｜｜ parameter name=\"input\" string=\"true\">const results = await Promise.all([\\\n" +
+		"  tools.exec_command({cmd: \"Get-Item\"})\\\n" +
+		"]);\\\n" +
+		"</｜｜DSML｜｜ parameter>\\\n" +
+		"</｜｜DSML｜｜ invoke>\\\n" +
+		"</｜｜DSML｜｜ calls>"
+
+	result := convertDSMLText(text, toolMap)
+
+	require.Equal(t, "before", result.Text)
+	require.Len(t, result.Tools, 1)
+	require.Equal(t, "const results = await Promise.all([\n  tools.exec_command({cmd: \"Get-Item\"})\n]);\n", common.JsonRawMessageToString(result.Tools[0].Input))
+}
+
 func TestConvertDSMLTextFunctionParametersAndMultipleInvokes(t *testing.T) {
 	toolMap := buildNativeResponsesToolMap([]map[string]any{
 		{"type": "function", "name": "lookup"},
@@ -189,4 +207,47 @@ func TestNativeResponsesStreamConvertsSplitDSMLAndCompletedOutput(t *testing.T) 
 	require.NotContains(t, body, `response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"<`)
 	require.Contains(t, body, `"output":[{"type":"message"`)
 	require.Contains(t, body, `"type":"custom_tool_call"`)
+}
+
+func TestNativeResponsesStreamConvertsOutputTextDoneDSML(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	setNativeResponsesToolMap(c, []map[string]any{{"type": "custom", "name": "exec"}})
+	dsml := `<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name="exec"><｜｜DSML｜｜ parameter name="input" string="true">text("ok")</｜｜DSML｜｜ parameter></｜｜DSML｜｜ invoke></｜｜DSML｜｜ calls>`
+	events := []map[string]any{
+		{"type": "response.created", "response": map[string]any{"id": "resp_2"}},
+		{"type": "response.output_text.done", "text": "prefix " + dsml},
+		{"type": "response.completed", "response": map[string]any{
+			"id": "resp_2", "status": "completed",
+			"output": []any{map[string]any{
+				"type": "message", "id": "msg_2", "role": "assistant", "status": "completed",
+				"content": []any{map[string]any{"type": "output_text", "text": "prefix " + dsml}},
+			}},
+			"usage": map[string]any{"input_tokens": 4, "output_tokens": 5, "total_tokens": 9},
+		}},
+	}
+	var upstream bytes.Buffer
+	for _, event := range events {
+		data, err := common.Marshal(event)
+		require.NoError(t, err)
+		upstream.WriteString("data: ")
+		upstream.Write(data)
+		upstream.WriteString("\n\n")
+	}
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(upstream.String()))}
+	info := testRelayInfo("deepseek-v4-flash")
+	info.IsStream = true
+
+	usage, apiErr := handleNativeResponsesStream(c, resp, info)
+
+	require.Nil(t, apiErr)
+	require.Equal(t, 4, usage.PromptTokens)
+	require.Equal(t, 5, usage.CompletionTokens)
+	body := recorder.Body.String()
+	require.Contains(t, body, `event: response.custom_tool_call_input.delta`)
+	require.Contains(t, body, `"type":"custom_tool_call"`)
+	require.Contains(t, body, `"name":"exec"`)
+	require.NotContains(t, body, `<｜｜DSML｜｜`)
 }
