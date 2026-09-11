@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -472,9 +473,15 @@ func invocationCustomInput(parameters map[string]any) (string, bool) {
 }
 
 func parseDSMLInvocations(text string) ([]dsmlInvocation, int, int, bool) {
-	start, openEnd, closeStart, closeEnd, ok := findDSMLBlock(text, "tool_calls", 0)
-	if !ok {
-		start, openEnd, closeStart, closeEnd, ok = findDSMLBlock(text, "function_calls", 0)
+	var (
+		start, openEnd, closeStart, closeEnd int
+		ok                                   bool
+	)
+	for _, tag := range []string{"tool_calls", "function_calls", "calls"} {
+		start, openEnd, closeStart, closeEnd, ok = findDSMLBlock(text, tag, 0)
+		if ok {
+			break
+		}
 	}
 	if !ok {
 		return nil, 0, 0, false
@@ -611,11 +618,7 @@ func parseDSMLTag(raw string) (string, string, bool, bool) {
 	if closing {
 		inner = strings.TrimSpace(strings.TrimPrefix(inner, "/"))
 	}
-	fields := strings.Fields(inner)
-	if len(fields) == 0 {
-		return "", "", false, false
-	}
-	marker, tag, ok := splitDSMLMarkerTag(fields[0])
+	marker, tag, ok := splitDSMLMarkerTag(inner)
 	if !ok {
 		return "", "", false, false
 	}
@@ -629,11 +632,17 @@ func splitDSMLMarkerTag(token string) (string, string, bool) {
 		return "", "", false
 	}
 	marker := normalizeDSMLMarker(token[:index+len("DSML")])
-	tag := strings.ToLower(strings.Trim(strings.TrimSpace(token[index+len("DSML"):]), "|"))
-	if marker == "" || tag == "" {
+	if marker == "" {
 		return "", "", false
 	}
-	return marker, tag, true
+	tagText := strings.TrimLeftFunc(token[index+len("DSML"):], func(r rune) bool {
+		return r == '|' || unicode.IsSpace(r)
+	})
+	fields := strings.Fields(tagText)
+	if len(fields) == 0 {
+		return "", "", false
+	}
+	return marker, strings.ToLower(fields[0]), true
 }
 
 func normalizeDSMLMarker(marker string) string {
@@ -642,7 +651,13 @@ func normalizeDSMLMarker(marker string) string {
 	if index < 0 {
 		return ""
 	}
-	return strings.ToUpper(strings.TrimSpace(marker[:index+len("DSML")]))
+	prefix := strings.TrimFunc(marker[:index], func(r rune) bool {
+		return r == '|' || unicode.IsSpace(r)
+	})
+	if prefix != "" {
+		return ""
+	}
+	return "DSML"
 }
 
 func normalizeDSMLPipes(value string) string {
@@ -673,7 +688,7 @@ func dsmlStartIndex(text string) int {
 		}
 		end += start + 1
 		_, tag, closing, ok := parseDSMLTag(text[start:end])
-		if ok && !closing && (tag == "tool_calls" || tag == "function_calls") {
+		if ok && !closing && (tag == "tool_calls" || tag == "function_calls" || tag == "calls") {
 			return start
 		}
 		cursor = end
