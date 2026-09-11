@@ -49,6 +49,8 @@ type nativeResponsesStreamState struct {
 	lastText       string
 	nextOutput     int
 	completedTools []dto.ResponsesOutput
+	request        *dto.OpenAIResponsesRequest
+	sessionErr     error
 }
 
 func setNativeResponsesToolMap(c *gin.Context, tools []map[string]any) {
@@ -207,6 +209,11 @@ func handleNativeResponsesResponse(c *gin.Context, resp *http.Response, info *re
 			return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 		}
 	}
+	if request, ok := getNativeResponsesRequest(c); ok {
+		if err := commitNativeResponsesSession(info, request, &response); err != nil {
+			return nil, types.NewOpenAIError(err, types.ErrorCodeUpdateDataError, http.StatusInternalServerError)
+		}
+	}
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 	return nativeResponsesUsage(&response, info), nil
 }
@@ -215,6 +222,9 @@ func handleNativeResponsesStream(c *gin.Context, resp *http.Response, info *rela
 	defer service.CloseResponseBodyGracefully(resp)
 	usage := &dto.Usage{}
 	state := &nativeResponsesStreamState{toolMap: getNativeResponsesToolMap(c)}
+	if request, ok := getNativeResponsesRequest(c); ok {
+		state.request = &request
+	}
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		var event dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(data, &event); err != nil {
@@ -296,6 +306,13 @@ func handleNativeResponsesStream(c *gin.Context, resp *http.Response, info *rela
 				event.Response.Output = converted
 			}
 			event.Response.Output = mergeNativeResponseTools(event.Response.Output, state.completedTools)
+			if state.request != nil {
+				if err := commitNativeResponsesSession(info, *state.request, event.Response); err != nil {
+					state.sessionErr = err
+					sr.Stop(err)
+					return
+				}
+			}
 			dataBytes, err := common.Marshal(event)
 			if err != nil {
 				sr.Stop(err)
@@ -310,6 +327,9 @@ func handleNativeResponsesStream(c *gin.Context, resp *http.Response, info *rela
 		info.StreamStatus.RecordWrite()
 		info.SendResponseCount++
 	})
+	if state.sessionErr != nil {
+		return nil, types.NewOpenAIError(state.sessionErr, types.ErrorCodeUpdateDataError, http.StatusInternalServerError)
+	}
 	if usage.PromptTokens == 0 && usage.CompletionTokens != 0 {
 		usage.PromptTokens = info.GetEstimatePromptTokens()
 	}
