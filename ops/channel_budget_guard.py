@@ -32,6 +32,7 @@ STATUS_ENABLED = 1
 STATUS_MANUALLY_DISABLED = 2
 STATUS_AUTO_DISABLED = 3
 OPS_DIR = Path(__file__).resolve().parent
+SHARED_BALANCE_LINKS: dict[int, list[int]] = {}
 
 
 @dataclass
@@ -232,15 +233,17 @@ def update_channel(
     # Channels 1 and 27 consume the same upstream balance. Channel 1 is the
     # authoritative usage probe; mirror only automatic protection transitions
     # to channel 27 and never override a manual disable.
-    if cid == 1 and status in (STATUS_AUTO_DISABLED, STATUS_ENABLED):
+    for linked_id in SHARED_BALANCE_LINKS.get(cid, []):
+        if status not in (STATUS_AUTO_DISABLED, STATUS_ENABLED):
+            continue
         if status == STATUS_AUTO_DISABLED:
-            statements.append("update channels set status = 3 where id = 27 and status = 1;")
+            statements.append(f"update channels set status = 3 where id = {linked_id} and status = 1;")
             if abilities_enabled is not None:
-                statements.append(f"update abilities set enabled = {enabled_sql} where channel_id = 27;")
+                statements.append(f"update abilities set enabled = {enabled_sql} where channel_id = {linked_id};")
         elif status == STATUS_ENABLED:
-            statements.append("update channels set status = 1 where id = 27 and status = 3;")
+            statements.append(f"update channels set status = 1 where id = {linked_id} and status = 3;")
             if abilities_enabled is not None:
-                statements.append(f"update abilities set enabled = {enabled_sql} where channel_id = 27;")
+                statements.append(f"update abilities set enabled = {enabled_sql} where channel_id = {linked_id};")
     statements.append("commit;")
     sql = "\n".join(statements)
     if dry_run:
@@ -386,6 +389,12 @@ def run_guard(config_path: Path, state_path: Path, dry_run: bool, reset_now: boo
     config = load_json(config_path, None)
     if not isinstance(config, dict):
         raise RuntimeError(f"invalid config: {config_path}")
+
+    global SHARED_BALANCE_LINKS
+    SHARED_BALANCE_LINKS = {
+        int(source): [int(item) for item in linked]
+        for source, linked in config.get("shared_balance_links", {"1": [27]}).items()
+    }
 
     quota_per_usd = float(config.get("quota_per_usd", 500000))
     now_ts = int(time.time())
