@@ -229,6 +229,18 @@ def update_channel(
     if abilities_enabled is not None:
         enabled_sql = "true" if abilities_enabled else "false"
         statements.append(f"update abilities set enabled = {enabled_sql} where channel_id = {cid};")
+    # Channels 1 and 27 consume the same upstream balance. Channel 1 is the
+    # authoritative usage probe; mirror only automatic protection transitions
+    # to channel 27 and never override a manual disable.
+    if cid == 1 and status in (STATUS_AUTO_DISABLED, STATUS_ENABLED):
+        if status == STATUS_AUTO_DISABLED:
+            statements.append("update channels set status = 3 where id = 27 and status = 1;")
+            if abilities_enabled is not None:
+                statements.append(f"update abilities set enabled = {enabled_sql} where channel_id = 27;")
+        elif status == STATUS_ENABLED:
+            statements.append("update channels set status = 1 where id = 27 and status = 3;")
+            if abilities_enabled is not None:
+                statements.append(f"update abilities set enabled = {enabled_sql} where channel_id = 27;")
     statements.append("commit;")
     sql = "\n".join(statements)
     if dry_run:
