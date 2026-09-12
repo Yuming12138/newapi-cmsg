@@ -38,6 +38,7 @@ const (
 	codexDirectImagesGenerations = "/images/generations"
 	codexDirectImagesEdit        = "/images/edits"
 	codexGPTImage15Model         = "gpt-image-1.5"
+	codexGPTImage25Model         = "gpt-image-2.5"
 	codexOpenAIImagesMainModel   = "gpt-5.4-mini"
 )
 
