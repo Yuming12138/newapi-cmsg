@@ -1,6 +1,7 @@
 package ratio_setting
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -395,7 +396,22 @@ func ModelPrice2JSONString() string {
 }
 
 func UpdateModelPriceByJSONString(jsonStr string) error {
-	return types.LoadFromJsonStringWithCallback(modelPriceMap, jsonStr, InvalidateExposedDataCache)
+	// Management clients often send a partial price document when adding a
+	// newly registered model. Merge it into the current map so unrelated model
+	// prices are not cleared accidentally.
+	patch := make(map[string]float64)
+	if err := json.Unmarshal([]byte(jsonStr), &patch); err != nil {
+		return err
+	}
+	merged := modelPriceMap.ReadAll()
+	for model, price := range patch {
+		merged[model] = price
+	}
+	data, err := json.Marshal(merged)
+	if err != nil {
+		return err
+	}
+	return types.LoadFromJsonStringWithCallback(modelPriceMap, string(data), InvalidateExposedDataCache)
 }
 
 // GetModelPrice 返回模型的价格，如果模型不存在则返回-1，false
