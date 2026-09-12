@@ -241,7 +241,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	useChannel := c.GetStringSlice("use_channel")
 	if len(useChannel) > 1 {
-		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
+		retryLogStr := fmt.Sprintf("重试：group=%s model=%s channels=%s reason=%s code=%s status=%d",
+			relayInfo.TokenGroup, relayInfo.OriginModelName,
+			strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"),
+			common.LocalLogPreview(relayInfo.LastError.Error()), relayInfo.LastError.GetErrorCode(), relayInfo.LastError.StatusCode)
 		logger.LogInfo(c, retryLogStr)
 	}
 	if newAPIError != nil {
