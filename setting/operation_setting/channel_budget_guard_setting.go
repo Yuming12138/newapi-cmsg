@@ -33,6 +33,14 @@ type ChannelBudgetGuardAutoDiscoverySetting struct {
 	ASXS    ChannelBudgetGuardASXSDiscoverySetting `json:"asxs"`
 }
 
+// ChannelBudgetGuardSharedPool describes channels that consume one upstream
+// balance. When the source is exhausted, members are temporarily disabled as
+// well; recovery only re-enables members disabled by this guard.
+type ChannelBudgetGuardSharedPool struct {
+	SourceChannelID  int   `json:"source_channel_id"`
+	MemberChannelIDs []int `json:"member_channel_ids"`
+}
+
 type ChannelBudgetGuardSetting struct {
 	Enabled             bool                                   `json:"enabled"`
 	TickIntervalMinutes int                                    `json:"tick_interval_minutes"`
@@ -41,6 +49,7 @@ type ChannelBudgetGuardSetting struct {
 	UsageTimeoutSecond  int                                    `json:"usage_timeout_sec"`
 	AutoDiscovery       ChannelBudgetGuardAutoDiscoverySetting `json:"auto_discovery"`
 	Channels            []ChannelBudgetGuardChannelSetting     `json:"channels"`
+	SharedBalancePools  []ChannelBudgetGuardSharedPool         `json:"shared_balance_pools"`
 }
 
 var channelBudgetGuardSetting = ChannelBudgetGuardSetting{
@@ -63,6 +72,9 @@ var channelBudgetGuardSetting = ChannelBudgetGuardSetting{
 		},
 	},
 	Channels: []ChannelBudgetGuardChannelSetting{},
+	SharedBalancePools: []ChannelBudgetGuardSharedPool{
+		{SourceChannelID: 1, MemberChannelIDs: []int{27}},
+	},
 }
 
 func init() {

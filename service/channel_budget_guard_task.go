@@ -214,6 +214,14 @@ func runChannelBudgetGuardOnce() {
 			cacheRefreshNeeded = true
 		}
 	}
+	poolUpdated, poolStatusChanged := applySharedBalancePools(cfg, channels, &state, nowTs)
+	if poolUpdated {
+		updated++
+		stateChanged = true
+	}
+	if poolStatusChanged {
+		cacheRefreshNeeded = true
+	}
 
 	asxsManaged := filterASXSChannelBudgetGuardChannels(managed)
 	failed += refreshUsageBalanceFallbackChannels(ctx, discoverASXSBalanceFallbackChannels(cfg, channels, asxsManaged), channelBudgetGuardTimeout(cfg, operation_setting.ChannelBudgetGuardChannelSetting{}))
@@ -231,6 +239,61 @@ func runChannelBudgetGuardOnce() {
 	} else if common.DebugEnabled {
 		logger.LogDebug(ctx, "channel budget guard: managed=%d updated=%d failed=%d", len(managed), updated, failed)
 	}
+}
+
+// applySharedBalancePools mirrors a shared upstream balance across channels.
+// It deliberately uses the source channel's explicit guard exhaustion marker,
+// rather than a zero balance alone, so manual disables never cascade.
+func applySharedBalancePools(cfg *operation_setting.ChannelBudgetGuardSetting, channels []*model.Channel, state *channelBudgetGuardState, nowTs int64) (bool, bool) {
+	if cfg == nil || state == nil || len(cfg.SharedBalancePools) == 0 {
+		return false, false
+	}
+	byID := make(map[int]*model.Channel, len(channels))
+	for _, channel := range channels {
+		if channel != nil {
+			byID[channel.Id] = channel
+		}
+	}
+	updated, statusChanged := false, false
+	for _, pool := range cfg.SharedBalancePools {
+		source := byID[pool.SourceChannelID]
+		if source == nil {
+			continue
+		}
+		sourceExhausted := wasDisabledByChannelBudgetGuard(state.Channels[strconv.Itoa(source.Id)], source.OtherInfo)
+		for _, memberID := range pool.MemberChannelIDs {
+			member := byID[memberID]
+			if member == nil || member.Id == source.Id {
+				continue
+			}
+			key := strconv.Itoa(member.Id)
+			memberState := state.Channels[key]
+			info := parseGuardObject(member.OtherInfo)
+			shared, _ := info["shared_balance_guard"].(map[string]interface{})
+			if member.Status == common.ChannelStatusManuallyDisabled {
+				continue
+			}
+			if sourceExhausted && member.Status == common.ChannelStatusEnabled {
+				info["shared_balance_guard"] = map[string]interface{}{"source_channel_id": source.Id, "disabled_by_guard": true, "updated_at": nowTs}
+				info["status_reason"] = fmt.Sprintf("channel_budget_exhausted: shared source channel %d", source.Id)
+				info["status_time"] = nowTs
+				if err := updateChannelBudgetGuardChannel(member, channelBudgetChannelUpdate{Status: intPtr(common.ChannelStatusAutoDisabled), AbilitiesEnabled: boolPtr(false), OtherInfo: info}, nowTs); err == nil {
+					memberState.DisabledByGuard = true
+					state.Channels[key] = memberState
+					updated, statusChanged = true, true
+				}
+				continue
+			}
+			if !sourceExhausted && memberState.DisabledByGuard && member.Status == common.ChannelStatusAutoDisabled && shared != nil {
+				if err := updateChannelBudgetGuardChannel(member, channelBudgetChannelUpdate{Status: intPtr(common.ChannelStatusEnabled), AbilitiesEnabled: boolPtr(true)}, nowTs); err == nil {
+					memberState.DisabledByGuard = false
+					state.Channels[key] = memberState
+					updated, statusChanged = true, true
+				}
+			}
+		}
+	}
+	return updated, statusChanged
 }
 
 func UpdateChannelBudgetGuardBalance(ctx context.Context, channel *model.Channel) (float64, bool, error) {

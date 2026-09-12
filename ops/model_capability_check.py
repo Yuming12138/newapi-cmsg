@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import urllib.request
+from typing import Any
 
 
 def get_json(base: str, token: str, user_id: str, path: str):
@@ -22,6 +23,24 @@ def get_json(base: str, token: str, user_id: str, path: str):
         return json.load(response)
 
 
+def unwrap_items(payload: Any) -> list[dict[str, Any]]:
+    """Accept both New API's flat and paginated management responses."""
+    value = payload.get("data", payload) if isinstance(payload, dict) else payload
+    if isinstance(value, dict):
+        for key in ("items", "data", "list", "channels", "options"):
+            if isinstance(value.get(key), list):
+                value = value[key]
+                break
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def channel_models(channel: dict[str, Any]) -> set[str]:
+    raw = channel.get("models", "")
+    if isinstance(raw, list):
+        return {str(item).strip() for item in raw if str(item).strip()}
+    return {item.strip() for item in str(raw).split(",") if item.strip()}
+
+
 def main() -> int:
     base = os.environ.get("NEWAPI_BASE_URL", "https://api.cmsg666.xyz")
     token = os.environ.get("NEWAPI_ACCESS_TOKEN", "")
@@ -30,8 +49,8 @@ def main() -> int:
         print("NEWAPI_ACCESS_TOKEN and NEWAPI_USER_ID are required", file=sys.stderr)
         return 2
 
-    channels = get_json(base, token, user_id, "/api/channel").get("data", [])
-    options = get_json(base, token, user_id, "/api/option/").get("data", [])
+    channels = unwrap_items(get_json(base, token, user_id, "/api/channel"))
+    options = unwrap_items(get_json(base, token, user_id, "/api/option/"))
     prices = {}
     for option in options:
         if option.get("key") not in {"ModelRatio", "CompletionRatio", "ModelPrice"}:
@@ -45,15 +64,15 @@ def main() -> int:
     wanted = sorted({
         model.strip()
         for channel in channels
-        for model in str(channel.get("models", "")).split(",")
+        for model in channel_models(channel)
         if model.strip()
     })
     for model in wanted:
         bound = [
             str(channel.get("id"))
             for channel in channels
-            if model in {item.strip() for item in str(channel.get("models", "")).split(",")}
-            and int(channel.get("status", 0)) == 1
+            if model in channel_models(channel)
+            and str(channel.get("status", "")).lower() in {"1", "enabled", "true"}
         ]
         ratio = prices.get("ModelRatio", {}).get(model)
         fixed = prices.get("ModelPrice", {}).get(model)
