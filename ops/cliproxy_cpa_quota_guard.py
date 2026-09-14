@@ -468,8 +468,40 @@ def codex_auth_entries(auth_files_payload: dict[str, Any]) -> list[dict[str, Any
     return codex
 
 
+def auth_is_disabled(entry: dict[str, Any]) -> bool:
+    status = str(
+        first_non_empty(
+            entry.get("credential_status"),
+            entry.get("status"),
+        )
+        or ""
+    ).strip().lower()
+    return bool(entry.get("disabled")) or status == "disabled"
+
+
 def auth_is_unavailable(entry: dict[str, Any]) -> bool:
-    return bool(entry.get("disabled") or entry.get("unavailable"))
+    return auth_is_disabled(entry) or bool(entry.get("unavailable"))
+
+
+def account_is_active(account: Any) -> bool:
+    """Return whether an account belongs to the active channel pool."""
+    if not isinstance(account, dict):
+        return False
+    status = str(
+        first_non_empty(
+            account.get("credential_status"),
+            account.get("status"),
+        )
+        or ""
+    ).strip().lower()
+    state = str(account.get("state") or "").strip().lower()
+    reason = str(account.get("reason") or "").strip().lower()
+    return not (
+        bool(account.get("disabled"))
+        or status == "disabled"
+        or state == "manual_disabled"
+        or reason == "auth_disabled"
+    )
 
 
 def normalize_bucket(value: Any) -> str:
@@ -603,6 +635,10 @@ def call_wham_usages(config: dict[str, Any], env: dict[str, str]) -> list[dict[s
     quota_feature_mode = bool(str(config.get("quota_feature") or "").strip())
 
     for auth_entry in entries:
+        # Disabled credentials are retained in CPA's inventory for
+        # administration, but must not become quota accounts for this channel.
+        if auth_is_disabled(auth_entry):
+            continue
         auth_index, _, account_id_hash = account_identity(auth_entry)
         bucket = classify_account_bucket(config, auth_entry, None, account_id_hash, auth_index)
         plan_type = plan_type_from_entry(auth_entry)
@@ -612,19 +648,10 @@ def call_wham_usages(config: dict[str, Any], env: dict[str, str]) -> list[dict[s
             "account_label": account_label_from_entry(auth_entry),
             "plan_type": plan_type,
             "bucket": bucket,
-            "disabled": bool(auth_entry.get("disabled")),
+            "disabled": False,
             "unavailable": bool(auth_entry.get("unavailable")),
             "reset_credits_available": None,
         }
-        if bool(auth_entry.get("disabled")):
-            accounts.append({
-                **base_account,
-                "ok": False,
-                "schedulable": False,
-                "skipped": True,
-                "reason": "auth_disabled",
-            })
-            continue
         if (
             quota_feature_mode
             and quota_feature_plan_is_known(plan_type)
@@ -673,6 +700,8 @@ def call_wham_usages(config: dict[str, Any], env: dict[str, str]) -> list[dict[s
         for item in accounts
     ):
         return accounts
+    if successful == 0 and not accounts:
+        return []
     if successful == 0:
         errors = [str(item.get("error") or item.get("reason") or "unknown") for item in accounts]
         raise QuotaProbeFailure(
@@ -700,6 +729,9 @@ def probe_runtime_auth_state(config: dict[str, Any], env: dict[str, str]) -> dic
     unavailable = 0
     quota_feature_mode = bool(str(config.get("quota_feature") or "").strip())
     for entry in entries:
+        if auth_is_disabled(entry):
+            disabled += 1
+            continue
         plan_type = plan_type_from_entry(entry)
         if (
             quota_feature_mode
@@ -709,11 +741,8 @@ def probe_runtime_auth_state(config: dict[str, Any], env: dict[str, str]) -> dic
             continue
         considered += 1
         status = str(entry.get("status") or "").strip().lower()
-        is_disabled = bool(entry.get("disabled")) or status == "disabled"
         is_unavailable = bool(entry.get("unavailable")) or status in {"cooldown", "unavailable"}
-        if is_disabled:
-            disabled += 1
-        elif is_unavailable:
+        if is_unavailable:
             unavailable += 1
         else:
             active += 1
@@ -979,6 +1008,8 @@ def call_home_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[
         plan_type = home_snapshot_plan_type(item)
         identity_hash = hashlib.sha256(("home:" + credential_id).encode("utf-8")).hexdigest()[:12] if credential_id else ""
         credential_status = str(item.get("credential_status") or "unknown").strip().lower()
+        if credential_status == "disabled" or bool(item.get("disabled")):
+            continue
         base_account = {
             "auth_index": auth_index,
             "account_id_hash": identity_hash,
@@ -995,15 +1026,6 @@ def call_home_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[
             "unavailable": credential_status in {"cooldown", "unavailable"},
             "reset_credits_available": None,
         }
-        if credential_status == "disabled":
-            accounts.append({
-                **base_account,
-                "ok": False,
-                "schedulable": False,
-                "skipped": True,
-                "reason": "auth_disabled",
-            })
-            continue
         if not credential_id:
             accounts.append({
                 **base_account,
@@ -1581,6 +1603,10 @@ def account_summary(account: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def presentation_account_is_disabled(account: Any) -> bool:
+    return not account_is_active(account)
+
+
 PRESENTATION_SCALAR_KEYS = (
     "guard_mode",
     "quota_feature",
@@ -1679,12 +1705,12 @@ def merge_presentation_accounts(
     current_accounts = [
         account_summary(account)
         for account in (current if isinstance(current, list) else [])
-        if isinstance(account, dict)
+        if isinstance(account, dict) and not presentation_account_is_disabled(account)
     ]
     previous_accounts = [
         account_summary(account)
         for account in (previous if isinstance(previous, list) else [])
-        if isinstance(account, dict)
+        if isinstance(account, dict) and not presentation_account_is_disabled(account)
     ]
     previous_by_key = {
         presentation_account_key(account, index): account
@@ -1861,6 +1887,7 @@ def restore_presentation_after_probe_failure(
 
 
 def bucket_summary(config: dict[str, Any], bucket_key: str, accounts: list[dict[str, Any]]) -> dict[str, Any]:
+    accounts = [account for account in accounts if account_is_active(account)]
     summary = empty_bucket(bucket_key, config)
     summary["account_count"] = len(accounts)
     ok_accounts = [account for account in accounts if account.get("ok")]
@@ -1900,6 +1927,9 @@ def bucket_summary(config: dict[str, Any], bucket_key: str, accounts: list[dict[
 
 
 def evaluate_quota(config: dict[str, Any], accounts: list[dict[str, Any]]) -> dict[str, Any]:
+    # Legacy snapshots may still contain manually disabled credentials. Keep
+    # quota totals and policy based only on the active channel pool.
+    accounts = [account for account in accounts if account_is_active(account)]
     enabled = bool_value(config.get("enabled"), True)
     buckets: dict[str, dict[str, Any]] = {}
     for key in ("personal", "protected"):
@@ -3124,7 +3154,7 @@ def probe_failure_account_summaries(exc: Exception) -> list[dict[str, Any]]:
     return [
         account_summary(account)
         for account in accounts
-        if isinstance(account, dict)
+        if isinstance(account, dict) and account_is_active(account)
     ]
 
 

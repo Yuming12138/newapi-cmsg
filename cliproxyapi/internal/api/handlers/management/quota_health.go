@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
@@ -49,17 +50,13 @@ func (h *Handler) GetQuotaHealth(c *gin.Context) {
 			continue
 		}
 		auth.EnsureIndex()
-		base := h.quotaHealthBaseAccount(auth, cfg, nil)
+		// Disabled credentials are administrative inventory, not active CPA
+		// accounts. Exclude them at the source so totals, buckets, and quota
+		// policy all describe the accounts that can actually participate.
 		if auth.Disabled {
-			base["ok"] = false
-			base["schedulable"] = false
-			base["skipped"] = true
-			base["reason"] = "auth_disabled"
-			base["state"] = authScheduleStateManualDisabled
-			base["retryable"] = false
-			accounts = append(accounts, base)
 			continue
 		}
+		base := h.quotaHealthBaseAccount(auth, cfg, nil)
 
 		usage, errUsage := h.fetchCodexWhamUsage(c.Request.Context(), auth)
 		if errUsage != nil {
@@ -267,7 +264,11 @@ func (h *Handler) fetchCodexWhamJSON(ctx context.Context, auth *coreauth.Auth, e
 	req.Header.Set("OAI-Product-Sku", "CODEX")
 	req.Header.Set("User-Agent", codexResetCreditUserAgent)
 
-	client := &http.Client{Transport: h.apiCallTransport(auth)}
+	// Quota/WHAM requests must use the same uTLS + Mihomo route-recovery
+	// transport as normal Codex executor requests. The management API's generic
+	// transport intentionally has no route recovery and would pin this probe to
+	// a dead node, leaving the account snapshot stale indefinitely.
+	client := helps.NewUtlsHTTPClient(ctx, h.cfg, auth, defaultAPICallTimeout)
 	resp, errDo := client.Do(req)
 	if errDo != nil {
 		return nil, errDo

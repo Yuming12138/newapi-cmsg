@@ -485,6 +485,34 @@ class ManagementAuthBackoffTest(unittest.TestCase):
         self.assertEqual("HTTP 502", presentation["accounts"][0]["error"])
         self.assertEqual(85.0, presentation["windows"]["7d"]["remaining_percent"])
 
+    def test_presentation_merge_drops_disabled_accounts(self) -> None:
+        merged = guard.merge_presentation_accounts(
+            [
+                {
+                    "auth_index": "active-auth",
+                    "account_label": "active-account",
+                    "ok": True,
+                    "schedulable": True,
+                }
+            ],
+            [
+                {
+                    "auth_index": "disabled-auth",
+                    "account_label": "disabled-account",
+                    "disabled": True,
+                    "reason": "auth_disabled",
+                },
+                {
+                    "auth_index": "active-auth",
+                    "account_label": "active-account",
+                    "ok": True,
+                    "schedulable": True,
+                },
+            ],
+        )
+
+        self.assertEqual(["active-auth"], [account["auth_index"] for account in merged])
+
     def test_transient_probe_failure_uses_recent_success_grace(self) -> None:
         now = 1_800_000_000
         state = {"last_success_at": now - 60}
@@ -827,7 +855,7 @@ class QuotaFeatureTest(unittest.TestCase):
                     {"CPA_MANAGEMENT_KEY": "test-management-key"},
                 )
 
-    def test_intentionally_disabled_accounts_still_report_zero_quota(self) -> None:
+    def test_disabled_accounts_are_excluded_from_quota_pool(self) -> None:
         entries = [{
             "provider": "codex",
             "auth_index": "pro-auth",
@@ -841,9 +869,35 @@ class QuotaFeatureTest(unittest.TestCase):
                 {"CPA_MANAGEMENT_KEY": "test-management-key"},
             )
 
-        self.assertEqual(1, len(accounts))
-        self.assertTrue(accounts[0]["skipped"])
-        self.assertEqual("auth_disabled", accounts[0]["reason"])
+        self.assertEqual([], accounts)
+
+    def test_evaluate_quota_filters_legacy_disabled_accounts(self) -> None:
+        active = guard.evaluate_account_quota(
+            self.config,
+            {"auth_index": "active-auth", "account_id": "active-account"},
+            {
+                **weekly_only_usage(10.0, "pro"),
+                "_guard_auth": {
+                    "auth_index": "active-auth",
+                    "account_id_hash": "active-hash",
+                },
+            },
+        )
+        disabled = {
+            "auth_index": "disabled-auth",
+            "account_label": "disabled-account",
+            "bucket": "protected",
+            "disabled": True,
+            "ok": False,
+            "schedulable": False,
+            "reason": "auth_disabled",
+        }
+
+        result = guard.evaluate_quota(self.config, [disabled, active])
+
+        self.assertEqual(1, result["account_count"])
+        self.assertEqual(1, result["available_account_count"])
+        self.assertEqual(["active-auth"], [account["auth_index"] for account in result["accounts"]])
 
     def test_feature_quota_source_uses_percent_units(self) -> None:
         account = guard.evaluate_quota_feature_account(self.config, {}, spark_usage(25.0))

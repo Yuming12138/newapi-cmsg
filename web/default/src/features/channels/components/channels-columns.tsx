@@ -440,6 +440,17 @@ function parseCliproxyCPAQuotaAccounts(
   return value
     .map(parseCliproxyCPAQuotaAccount)
     .filter((item): item is CliproxyCPAQuotaAccount => item != null)
+    .filter(isCliproxyCPAAccountActive)
+}
+
+function isCliproxyCPAAccountActive(
+  account: CliproxyCPAQuotaAccount
+): boolean {
+  return (
+    account.disabled !== true &&
+    account.state !== 'manual_disabled' &&
+    account.reason !== 'auth_disabled'
+  )
 }
 
 function parseCliproxyCPAQuotaBuckets(
@@ -483,13 +494,26 @@ function parseCliproxyCPAQuotaMeta(
       timestampValue(presentation?.updated_at) ??
       timestampValue(quotaSource?.updated_at) ??
       timestampValue(guard.updated_at)
+    const rawAccounts = presentation?.accounts ?? health.accounts
+    const accountsSourcePresent = Array.isArray(rawAccounts)
+    const accounts = parseCliproxyCPAQuotaAccounts(rawAccounts)
     const buckets = parseCliproxyCPAQuotaBuckets(
       presentation?.buckets ?? health.buckets,
       updatedAt
-    )
-    const accounts = parseCliproxyCPAQuotaAccounts(
-      presentation?.accounts ?? health.accounts
-    )
+    ).map((bucket) => {
+      if (!accountsSourcePresent) return bucket
+      const bucketAccounts = accounts.filter((account) => {
+        if (account.bucket && account.bucket === bucket.key) return true
+        return account.bucket == null && account.canExhaust === bucket.canExhaust
+      })
+      return {
+        ...bucket,
+        accountCount: bucketAccounts.length,
+        availableAccountCount: bucketAccounts.filter(
+          isCliproxyCPAAccountAvailable
+        ).length,
+      }
+    })
 
     const shareLimitPercent =
       numberValue(health.share_limit_percent) ??
@@ -583,17 +607,17 @@ function parseCliproxyCPAQuotaMeta(
       totalBalanceUnits:
         numberValue(health.total_balance_units) ??
         numberValue(presentation?.total_balance_units),
-      accountCount:
-        numberValue(health.account_count) ??
-        numberValue(presentation?.account_count) ??
-        (accounts.length > 0 ? accounts.length : null),
-      availableAccountCount:
-        numberValue(health.available_account_count) ??
-        numberValue(presentation?.available_account_count) ??
-        (accounts.length > 0
-          ? accounts.filter((account) => isCliproxyCPAAccountAvailable(account))
-              .length
-          : null),
+      accountCount: accountsSourcePresent
+        ? accounts.length
+        : numberValue(health.account_count) ??
+          numberValue(presentation?.account_count) ??
+          null,
+      availableAccountCount: accountsSourcePresent
+        ? accounts.filter((account) => isCliproxyCPAAccountAvailable(account))
+            .length
+        : numberValue(health.available_account_count) ??
+          numberValue(presentation?.available_account_count) ??
+          null,
       updatedAt,
       fiveHour,
       weekly,

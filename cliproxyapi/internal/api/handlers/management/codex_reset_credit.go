@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	codexauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
@@ -196,7 +197,7 @@ func (h *Handler) postCodexResetCredit(ctx context.Context, auth *coreauth.Auth,
 		req.Header.Set("Chatgpt-Account-Id", accountID)
 	}
 
-	httpClient := &http.Client{Transport: h.apiCallTransport(auth)}
+	httpClient := helps.NewUtlsHTTPClient(ctx, h.cfg, auth, defaultAPICallTimeout)
 	resp, errDo := httpClient.Do(req)
 	if errDo != nil {
 		return fmt.Errorf("codex reset credit request failed: %w", errDo)
