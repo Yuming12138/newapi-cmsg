@@ -186,6 +186,7 @@ type CliproxyCPAQuotaMeta = {
   nextResetAt: number | null
   manualForceUnlockActive: boolean
   manualForceUnlockUntil: number | null
+  presentationStale: boolean
   buckets: CliproxyCPAQuotaBucket[]
   accounts: CliproxyCPAQuotaAccount[]
 }
@@ -464,25 +465,50 @@ function parseCliproxyCPAQuotaMeta(
     const quotaSourceWindows = quotaSourceWindowsByName(quotaSource?.windows)
     const guard = asObject(parsed?.cliproxy_cpa_quota_guard)
     const health = asObject(guard?.health)
+    const presentation = asObject(health?.presentation)
+    const presentationQuotaBlock = asObject(presentation?.quota_block)
     const windows = asObject(health?.windows)
+    const presentationWindows = asObject(presentation?.windows)
     const dynamicDailyBudget = asObject(health?.dynamic_daily_budget)
+    const presentationDynamicDailyBudget = asObject(
+      presentation?.dynamic_daily_budget
+    )
     if (!guard || !health) return null
+    const presentationStale =
+      booleanValue(presentation?.stale) ??
+      booleanValue(health.presentation_stale) ??
+      booleanValue(health.quota_observation_stale) ??
+      false
     const updatedAt =
+      timestampValue(presentation?.updated_at) ??
       timestampValue(quotaSource?.updated_at) ??
       timestampValue(guard.updated_at)
-    const buckets = parseCliproxyCPAQuotaBuckets(health.buckets, updatedAt)
-    const accounts = parseCliproxyCPAQuotaAccounts(health.accounts)
+    const buckets = parseCliproxyCPAQuotaBuckets(
+      presentation?.buckets ?? health.buckets,
+      updatedAt
+    )
+    const accounts = parseCliproxyCPAQuotaAccounts(
+      presentation?.accounts ?? health.accounts
+    )
 
-    const shareLimitPercent = numberValue(health.share_limit_percent)
+    const shareLimitPercent =
+      numberValue(health.share_limit_percent) ??
+      numberValue(presentation?.share_limit_percent)
     const fiveHour = parseCliproxyCPAQuotaWindow(
-      quotaSourceWindows['5h'] ?? windows?.['5h'],
+      presentationWindows?.['5h'] ??
+        quotaSourceWindows['5h'] ??
+        windows?.['5h'],
       shareLimitPercent
     )
     const weekly = parseCliproxyCPAQuotaWindow(
-      quotaSourceWindows['7d'] ?? windows?.['7d'],
+      presentationWindows?.['7d'] ??
+        quotaSourceWindows['7d'] ??
+        windows?.['7d'],
       shareLimitPercent
     )
-    if (!fiveHour && !weekly && buckets.length === 0) return null
+    if (!fiveHour && !weekly && buckets.length === 0 && accounts.length === 0) {
+      return null
+    }
     const topNextResetAfterSeconds = getCliproxyCPAResetAfter(fiveHour, weekly)
     const topNextResetAt = getCliproxyCPANextResetAt(
       fiveHour,
@@ -498,13 +524,17 @@ function parseCliproxyCPAQuotaMeta(
     const manualOverride =
       asObject(health.manual_force_unlock) ??
       asObject(dynamicDailyBudget?.manual_force_unlock) ??
+      asObject(presentation?.manual_force_unlock) ??
+      asObject(presentationDynamicDailyBudget?.manual_force_unlock) ??
       asObject(guard.manual_force_unlock)
     const manualForceUnlockUntil =
       timestampValue(manualOverride?.until) ??
-      timestampValue(dynamicDailyBudget?.manual_force_unlock_until)
+      timestampValue(dynamicDailyBudget?.manual_force_unlock_until) ??
+      timestampValue(presentation?.manual_force_unlock_until)
     const manualForceUnlockRequested =
       booleanValue(manualOverride?.active) ??
       booleanValue(dynamicDailyBudget?.manual_force_unlock_active) ??
+      booleanValue(presentation?.manual_force_unlock_active) ??
       false
     const manualForceUnlockActive =
       manualForceUnlockRequested &&
@@ -517,28 +547,53 @@ function parseCliproxyCPAQuotaMeta(
           ? quotaSource.source_type
           : null,
       unit: typeof quotaSource?.unit === 'string' ? quotaSource.unit : null,
-      blockKind: typeof quotaBlock?.kind === 'string' ? quotaBlock.kind : null,
-      blockAllowedModels: stringListValue(quotaBlock?.allowed_models),
+      blockKind:
+        typeof quotaBlock?.kind === 'string'
+          ? quotaBlock.kind
+          : typeof presentationQuotaBlock?.kind === 'string'
+            ? presentationQuotaBlock.kind
+            : null,
+      blockAllowedModels: stringListValue(
+        quotaBlock?.allowed_models ?? presentationQuotaBlock?.allowed_models
+      ),
       quotaFeature:
         typeof health.quota_feature === 'string'
           ? health.quota_feature
           : typeof quotaRawSource?.quota_feature === 'string'
             ? quotaRawSource.quota_feature
-            : null,
+            : typeof presentation?.quota_feature === 'string'
+              ? presentation.quota_feature
+              : null,
       quotaFeatureLimitName:
         typeof health.quota_feature_limit_name === 'string'
           ? health.quota_feature_limit_name
           : typeof quotaRawSource?.quota_feature_limit_name === 'string'
             ? quotaRawSource.quota_feature_limit_name
-            : null,
+            : typeof presentation?.quota_feature_limit_name === 'string'
+              ? presentation.quota_feature_limit_name
+              : null,
       shareLimitPercent,
-      remainingSharePercent: numberValue(health.remaining_share_percent),
+      remainingSharePercent:
+        numberValue(health.remaining_share_percent) ??
+        numberValue(presentation?.remaining_share_percent),
       usableBalanceUnits:
-        numberValue(quotaSource?.balance) ??
-        numberValue(health.usable_balance_units),
-      totalBalanceUnits: numberValue(health.total_balance_units),
-      accountCount: numberValue(health.account_count),
-      availableAccountCount: numberValue(health.available_account_count),
+        numberValue(health.usable_balance_units) ??
+        numberValue(presentation?.usable_balance_units) ??
+        numberValue(quotaSource?.balance),
+      totalBalanceUnits:
+        numberValue(health.total_balance_units) ??
+        numberValue(presentation?.total_balance_units),
+      accountCount:
+        numberValue(health.account_count) ??
+        numberValue(presentation?.account_count) ??
+        (accounts.length > 0 ? accounts.length : null),
+      availableAccountCount:
+        numberValue(health.available_account_count) ??
+        numberValue(presentation?.available_account_count) ??
+        (accounts.length > 0
+          ? accounts.filter((account) => isCliproxyCPAAccountAvailable(account))
+              .length
+          : null),
       updatedAt,
       fiveHour,
       weekly,
@@ -555,7 +610,12 @@ function parseCliproxyCPAQuotaMeta(
       manualForceUnlockActive,
       manualForceUnlockUntil,
       guardMode:
-        typeof health.guard_mode === 'string' ? health.guard_mode : null,
+        typeof health.guard_mode === 'string'
+          ? health.guard_mode
+          : typeof presentation?.guard_mode === 'string'
+            ? presentation.guard_mode
+            : null,
+      presentationStale,
       buckets,
       accounts,
     }
@@ -667,6 +727,16 @@ function getCliproxyCPAModelQuotaPercent(
 
 function getCliproxyCPAModelQuotaLabel(meta: CliproxyCPAQuotaMeta): string {
   return meta.quotaFeatureLimitName || meta.quotaFeature || '模型独立额度'
+}
+
+function CliproxyCPAStaleNotice({ meta }: { meta: CliproxyCPAQuotaMeta }) {
+  if (!meta.presentationStale) return null
+  return (
+    <div className='flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-700 dark:text-amber-300'>
+      <AlertTriangle className='mt-0.5 size-3.5 shrink-0' />
+      <span>当前探测未成功，以下为最近一次可用的 CPA 账号快照。</span>
+    </div>
+  )
 }
 
 function formatResetCreditsAvailable(value: number | null | undefined): string {
@@ -1353,6 +1423,7 @@ function CliproxyCPAModelQuotaDetails({
 
   return (
     <div className='text-foreground w-[320px] max-w-[calc(100vw-2rem)] space-y-2'>
+      <CliproxyCPAStaleNotice meta={meta} />
       <div className='bg-background border-border space-y-3 rounded-md border p-3 shadow-sm'>
         <div className='flex items-start justify-between gap-3'>
           <div className='min-w-0'>
@@ -1416,6 +1487,7 @@ function CliproxyCPAQuotaDetails({
 
   return (
     <div className='text-foreground w-[360px] max-w-[calc(100vw-2rem)] space-y-2'>
+      <CliproxyCPAStaleNotice meta={meta} />
       {meta.manualForceUnlockActive && meta.manualForceUnlockUntil != null && (
         <div className='flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-300'>
           <ShieldOff className='size-3.5 shrink-0' />

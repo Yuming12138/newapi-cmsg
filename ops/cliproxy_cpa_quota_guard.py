@@ -97,6 +97,14 @@ class ManagementAuthError(RuntimeError):
     """Management credentials were rejected by CPA/Home."""
 
 
+class QuotaProbeFailure(RuntimeError):
+    """A quota probe failed after collecting optional account diagnostics."""
+
+    def __init__(self, message: str, accounts: list[dict[str, Any]] | None = None) -> None:
+        super().__init__(message)
+        self.accounts = accounts if isinstance(accounts, list) else []
+
+
 OPTION_CONFIG_MAP = {
     "cliproxy_cpa_quota_guard.enabled": ("enabled", "bool"),
     "cliproxy_cpa_quota_guard.preserve_routability_on_quota_probe_failure": (
@@ -667,7 +675,10 @@ def call_wham_usages(config: dict[str, Any], env: dict[str, str]) -> list[dict[s
         return accounts
     if successful == 0:
         errors = [str(item.get("error") or item.get("reason") or "unknown") for item in accounts]
-        raise RuntimeError("wham_usage_all_accounts_failed: " + "; ".join(errors[:3]))
+        raise QuotaProbeFailure(
+            "wham_usage_all_accounts_failed: " + "; ".join(errors[:3]),
+            accounts=accounts,
+        )
     return accounts
 
 
@@ -741,7 +752,11 @@ def call_cpa_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[s
         raise RuntimeError("cpa_quota_health_incomplete_payload")
     if not bool(payload.get("ok")):
         detail = str(payload.get("error") or payload.get("reason") or "unknown")[:180]
-        raise RuntimeError("cpa_quota_health_probe_failed: " + detail)
+        accounts = payload.get("accounts")
+        raise QuotaProbeFailure(
+            "cpa_quota_health_probe_failed: " + detail,
+            accounts=accounts if isinstance(accounts, list) else [],
+        )
     payload["quota_health_source"] = "cpa_management"
     payload["reset_credit_consume_supported"] = True
     return payload
@@ -833,7 +848,12 @@ def home_snapshot_windows(snapshot: dict[str, Any], detail: dict[str, Any], now:
     return windows
 
 
-def home_snapshot_usage(windows: dict[str, dict[str, Any]], plan_type: str, identity_hash: str) -> dict[str, Any]:
+def home_snapshot_usage(
+    windows: dict[str, dict[str, Any]],
+    plan_type: str,
+    identity_hash: str,
+    auth_index: str = "",
+) -> dict[str, Any]:
     rate_limit: dict[str, Any] = {}
     ordered = [windows[name] for name in ("5h", "7d") if name in windows]
     for field, window in zip(("primary_window", "secondary_window"), ordered):
@@ -847,7 +867,7 @@ def home_snapshot_usage(windows: dict[str, dict[str, Any]], plan_type: str, iden
         "plan_type": plan_type,
         "rate_limit": rate_limit,
         "_guard_auth": {
-            "auth_index": "",
+            "auth_index": str(auth_index or "").strip(),
             "account_id_hash": identity_hash,
             "plan_type_hint": plan_type,
         },
@@ -899,9 +919,10 @@ def home_snapshot_account(
         raise RuntimeError("home_quota_snapshot_not_fresh")
 
     plan_type = home_snapshot_plan_type(snapshot)
+    auth_index = str(snapshot.get("auth_index") or snapshot.get("authIndex") or "").strip()
     identity_hash = hashlib.sha256(("home:" + credential_id).encode("utf-8")).hexdigest()[:12]
     windows = home_snapshot_windows(snapshot, detail, now)
-    usage = home_snapshot_usage(windows, plan_type, identity_hash)
+    usage = home_snapshot_usage(windows, plan_type, identity_hash, auth_index)
     available, credits, reset_credit_error = home_snapshot_reset_credits(detail)
     if available is not None:
         usage["rate_limit_reset_credits"] = {"available_count": available}
@@ -954,15 +975,22 @@ def call_home_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[
         if not isinstance(item, dict):
             continue
         credential_id = str(item.get("credential_id") or "").strip()
+        auth_index = str(item.get("auth_index") or item.get("authIndex") or "").strip()
         plan_type = home_snapshot_plan_type(item)
         identity_hash = hashlib.sha256(("home:" + credential_id).encode("utf-8")).hexdigest()[:12] if credential_id else ""
         credential_status = str(item.get("credential_status") or "unknown").strip().lower()
         base_account = {
-            "auth_index": "",
+            "auth_index": auth_index,
             "account_id_hash": identity_hash,
             "account_label": account_label_from_entry(item),
             "plan_type": plan_type,
-            "bucket": classify_account_bucket(config, {"plan_type": plan_type}, None, identity_hash, ""),
+            "bucket": classify_account_bucket(
+                config,
+                {"plan_type": plan_type},
+                None,
+                identity_hash,
+                auth_index,
+            ),
             "disabled": credential_status == "disabled",
             "unavailable": credential_status in {"cooldown", "unavailable"},
             "reset_credits_available": None,
@@ -986,6 +1014,7 @@ def call_home_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[
                 "error": "home_quota_snapshot_missing_credential_id",
             })
             continue
+        detail: dict[str, Any] = {}
         try:
             detail = request_json(
                 base_url + "/v0/management/quota/credentials/" + urllib.parse.quote(credential_id, safe=""),
@@ -995,6 +1024,15 @@ def call_home_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[
             account = home_snapshot_account(config, item, detail, now)
         except Exception as exc:
             reason = "quota_snapshot_stale" if str(item.get("freshness") or "").lower() != "fresh" else "quota_probe_failed"
+            try:
+                stale_windows = home_snapshot_windows(item, detail, now)
+            except Exception:
+                stale_windows = {}
+            if stale_windows:
+                base_account["windows"] = stale_windows
+            available_credits, _, _ = home_snapshot_reset_credits(detail)
+            if available_credits is not None:
+                base_account["reset_credits_available"] = available_credits
             accounts.append({
                 **base_account,
                 "ok": False,
@@ -1009,7 +1047,10 @@ def call_home_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[
 
     if successful == 0 and not all(item.get("skipped") and not item.get("error") for item in accounts):
         errors = [str(item.get("error") or item.get("reason") or "unknown") for item in accounts]
-        raise RuntimeError("home_quota_snapshot_all_accounts_failed: " + "; ".join(errors[:3]))
+        raise QuotaProbeFailure(
+            "home_quota_snapshot_all_accounts_failed: " + "; ".join(errors[:3]),
+            accounts=accounts,
+        )
 
     result = evaluate_quota(config, accounts)
     result["quota_health_source"] = "home_quota_snapshots"
@@ -1043,11 +1084,18 @@ def call_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[str, 
         return result
 
     endpoint_errors: list[str] = []
+    cpa_probe_accounts: list[dict[str, Any]] = []
+    home_probe_accounts: list[dict[str, Any]] = []
     if bool_value(config.get("prefer_cpa_quota_health_endpoint"), True):
         try:
             return call_cpa_quota_health(config, env)
         except ManagementAuthError:
             raise
+        except QuotaProbeFailure as exc:
+            cpa_probe_accounts = [
+                account for account in exc.accounts if isinstance(account, dict)
+            ]
+            endpoint_errors.append("cpa=" + str(exc)[:180])
         except Exception as exc:
             endpoint_errors.append("cpa=" + str(exc)[:180])
 
@@ -1059,10 +1107,23 @@ def call_quota_health(config: dict[str, Any], env: dict[str, str]) -> dict[str, 
             return result
         except ManagementAuthError:
             raise
+        except QuotaProbeFailure as exc:
+            home_probe_accounts = [
+                account for account in exc.accounts if isinstance(account, dict)
+            ]
+            endpoint_errors.append("home=" + str(exc)[:180])
         except Exception as exc:
             endpoint_errors.append("home=" + str(exc)[:180])
 
-    accounts = call_wham_usages(config, env)
+    try:
+        accounts = call_wham_usages(config, env)
+    except QuotaProbeFailure as exc:
+        diagnostic_accounts = home_probe_accounts or cpa_probe_accounts or [
+            account for account in exc.accounts if isinstance(account, dict)
+        ]
+        if diagnostic_accounts:
+            raise QuotaProbeFailure(str(exc), accounts=diagnostic_accounts) from exc
+        raise
     result = evaluate_quota(config, accounts)
     result["quota_health_source"] = "python_guard_fallback"
     if endpoint_errors:
@@ -1484,6 +1545,7 @@ def account_summary(account: dict[str, Any]) -> dict[str, Any]:
         "account_label",
         "plan_type",
         "bucket",
+        "state",
         "ok",
         "schedulable",
         "runtime_unavailable",
@@ -1494,6 +1556,9 @@ def account_summary(account: dict[str, Any]) -> dict[str, Any]:
         "skipped",
         "reason",
         "error",
+        "retryable",
+        "reset_at",
+        "last_error",
         "balance_units",
         "usable_balance_units",
         "remaining_share_percent",
@@ -1509,7 +1574,290 @@ def account_summary(account: dict[str, Any]) -> dict[str, Any]:
         "allowed",
         "limit_reached",
     ]
-    return {key: account.get(key) for key in keys if key in account}
+    summary = {key: account.get(key) for key in keys if key in account}
+    for key in ("error", "last_error"):
+        if key in summary and summary[key] is not None:
+            summary[key] = sanitize_probe_error(summary[key])
+    return summary
+
+
+PRESENTATION_SCALAR_KEYS = (
+    "guard_mode",
+    "quota_feature",
+    "quota_feature_limit_name",
+    "quota_feature_min_remaining_percent",
+    "share_limit_percent",
+    "remaining_share_percent",
+    "usable_balance_units",
+    "total_balance_units",
+    "account_count",
+    "available_account_count",
+    "min_remaining_percent_5h",
+    "min_remaining_percent_7d",
+    "quota_model_allowlist",
+    "dynamic_daily_budget",
+    "quota_block",
+)
+
+PRESENTATION_WINDOW_KEYS = (
+    "duration_seconds",
+    "used_percent",
+    "remaining_percent",
+    "reset_at",
+    "reset_after_seconds",
+)
+
+PRESENTATION_BUCKET_KEYS = (
+    "bucket",
+    "label",
+    "can_exhaust",
+    "account_count",
+    "available_account_count",
+    "balance_units",
+    "usable_balance_units",
+    "remaining_share_percent",
+    "raw_remaining_percent",
+    "min_remaining_percent_5h",
+    "min_remaining_percent_7d",
+    "reset_credits_available",
+    "reset_credits_earliest_expires_at",
+)
+
+
+def presentation_value_present(value: Any) -> bool:
+    return value is not None and value not in ("", [], {})
+
+
+def presentation_window(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    result = {
+        key: value[key]
+        for key in PRESENTATION_WINDOW_KEYS
+        if key in value and presentation_value_present(value[key])
+    }
+    return result or None
+
+
+def presentation_windows(value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for name, window in value.items():
+        safe = presentation_window(window)
+        if safe:
+            result[str(name)] = safe
+    return result
+
+
+def merge_presentation_windows(
+    current: Any,
+    previous: Any,
+) -> dict[str, dict[str, Any]]:
+    current_windows = presentation_windows(current)
+    previous_windows = presentation_windows(previous)
+    merged = dict(previous_windows)
+    for name, window in current_windows.items():
+        item = dict(merged.get(name, {}))
+        item.update(window)
+        merged[name] = item
+    return merged
+
+
+def presentation_account_key(account: dict[str, Any], fallback: int) -> str:
+    for key in ("auth_index", "account_id_hash", "account_label"):
+        value = str(account.get(key) or "").strip()
+        if value:
+            return value
+    return f"position:{fallback}"
+
+
+def merge_presentation_accounts(
+    current: Any,
+    previous: Any,
+) -> list[dict[str, Any]]:
+    current_accounts = [
+        account_summary(account)
+        for account in (current if isinstance(current, list) else [])
+        if isinstance(account, dict)
+    ]
+    previous_accounts = [
+        account_summary(account)
+        for account in (previous if isinstance(previous, list) else [])
+        if isinstance(account, dict)
+    ]
+    previous_by_key = {
+        presentation_account_key(account, index): account
+        for index, account in enumerate(previous_accounts)
+    }
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, account in enumerate(current_accounts):
+        key = presentation_account_key(account, index)
+        item = dict(previous_by_key.get(key, {}))
+        item.update({
+            field: value
+            for field, value in account.items()
+            if presentation_value_present(value) or field not in item
+        })
+        merged.append(item)
+        seen.add(key)
+    for index, account in enumerate(previous_accounts):
+        key = presentation_account_key(account, index)
+        if key not in seen:
+            merged.append(dict(account))
+    return merged
+
+
+def presentation_bucket(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    result = {
+        key: value[key]
+        for key in PRESENTATION_BUCKET_KEYS
+        if key in value and presentation_value_present(value[key])
+    }
+    windows = presentation_windows(value.get("windows"))
+    if windows:
+        result["windows"] = windows
+    accounts = merge_presentation_accounts(value.get("accounts"), None)
+    if accounts:
+        result["accounts"] = accounts
+    return result or None
+
+
+def presentation_buckets(value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for key, bucket in value.items():
+        safe = presentation_bucket(bucket)
+        if safe:
+            result[str(key)] = safe
+    return result
+
+
+def merge_presentation_buckets(
+    current: Any,
+    previous: Any,
+) -> dict[str, dict[str, Any]]:
+    current_buckets = presentation_buckets(current)
+    previous_buckets = presentation_buckets(previous)
+    merged = dict(previous_buckets)
+    for key, bucket in current_buckets.items():
+        item = dict(merged.get(key, {}))
+        for field, value in bucket.items():
+            if field == "windows":
+                item["windows"] = merge_presentation_windows(
+                    value,
+                    item.get("windows"),
+                )
+            elif field == "accounts":
+                item["accounts"] = merge_presentation_accounts(
+                    value,
+                    item.get("accounts"),
+                )
+            elif presentation_value_present(value) or field not in item:
+                item[field] = value
+        merged[key] = item
+    return merged
+
+
+def presentation_snapshot(source: Any) -> dict[str, Any]:
+    if not isinstance(source, dict):
+        return {}
+    nested = source.get("presentation")
+    nested = nested if isinstance(nested, dict) else {}
+    snapshot: dict[str, Any] = {}
+    for key in PRESENTATION_SCALAR_KEYS:
+        value = source.get(key)
+        if not presentation_value_present(value):
+            value = nested.get(key)
+        if presentation_value_present(value):
+            snapshot[key] = value
+
+    windows = merge_presentation_windows(source.get("windows"), nested.get("windows"))
+    if windows:
+        snapshot["windows"] = windows
+    accounts = merge_presentation_accounts(source.get("accounts"), nested.get("accounts"))
+    if accounts:
+        snapshot["accounts"] = accounts
+    buckets = merge_presentation_buckets(source.get("buckets"), nested.get("buckets"))
+    if buckets:
+        snapshot["buckets"] = buckets
+
+    updated_at = source.get("presentation_updated_at")
+    if not presentation_value_present(updated_at):
+        updated_at = source.get("last_quota_success_at")
+    if not presentation_value_present(updated_at):
+        updated_at = nested.get("updated_at")
+    if presentation_value_present(updated_at):
+        snapshot["updated_at"] = updated_at
+    if bool(source.get("presentation_stale")) or bool(source.get("quota_observation_stale")):
+        snapshot["stale"] = True
+    if bool(nested.get("stale")):
+        snapshot["stale"] = True
+    if "account_count" not in snapshot and accounts:
+        snapshot["account_count"] = len(accounts)
+    if "available_account_count" not in snapshot and accounts:
+        snapshot["available_account_count"] = sum(
+            1 for account in accounts if account.get("schedulable") is True
+        )
+    return snapshot
+
+
+def merge_presentation_snapshots(
+    current: dict[str, Any],
+    previous: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(previous)
+    for key in PRESENTATION_SCALAR_KEYS:
+        value = current.get(key)
+        if presentation_value_present(value) or key not in merged:
+            if presentation_value_present(value):
+                merged[key] = value
+    merged_windows = merge_presentation_windows(
+        current.get("windows"),
+        previous.get("windows"),
+    )
+    if merged_windows:
+        merged["windows"] = merged_windows
+    merged_accounts = merge_presentation_accounts(
+        current.get("accounts"),
+        previous.get("accounts"),
+    )
+    if merged_accounts:
+        merged["accounts"] = merged_accounts
+    merged_buckets = merge_presentation_buckets(
+        current.get("buckets"),
+        previous.get("buckets"),
+    )
+    if merged_buckets:
+        merged["buckets"] = merged_buckets
+    return merged
+
+
+def restore_presentation_after_probe_failure(
+    result: dict[str, Any],
+    previous_health: dict[str, Any],
+    previous_guard_updated_at: Any,
+) -> dict[str, Any]:
+    current = presentation_snapshot(result)
+    previous = presentation_snapshot(previous_health)
+    if not current and not previous:
+        return result
+    merged = merge_presentation_snapshots(current, previous)
+    if presentation_value_present(previous.get("updated_at")):
+        merged["updated_at"] = previous["updated_at"]
+    elif presentation_value_present(previous_guard_updated_at):
+        merged["updated_at"] = previous_guard_updated_at
+    elif presentation_value_present(current.get("updated_at")):
+        merged["updated_at"] = current["updated_at"]
+    merged["stale"] = True
+    merged["stale_reason"] = str(result.get("reason") or "quota_probe_failed")
+    result["presentation"] = merged
+    result["presentation_stale"] = True
+    return result
 
 
 def bucket_summary(config: dict[str, Any], bucket_key: str, accounts: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2769,6 +3117,17 @@ def management_auth_backoff_result(state: dict[str, Any], now: int) -> dict[str,
     }
 
 
+def probe_failure_account_summaries(exc: Exception) -> list[dict[str, Any]]:
+    accounts = getattr(exc, "accounts", None)
+    if not isinstance(accounts, list):
+        return []
+    return [
+        account_summary(account)
+        for account in accounts
+        if isinstance(account, dict)
+    ]
+
+
 def record_probe_failure(
     config: dict[str, Any],
     state: dict[str, Any],
@@ -2795,7 +3154,7 @@ def record_probe_failure(
         backoff = max(60, int(config.get("management_auth_failure_backoff_sec") or 30 * 60))
         retry_at = now + backoff
         state["management_auth_backoff_until"] = retry_at
-    return {
+    result = {
         "ok": False,
         "within_share": False,
         "reason": "quota_probe_failed_stale_grace" if stale_grace else "quota_probe_failed",
@@ -2809,6 +3168,15 @@ def record_probe_failure(
         "retry_at": retry_at or None,
         "retry_after_seconds": retry_at - now if retry_at else None,
     }
+    accounts = probe_failure_account_summaries(exc)
+    if accounts:
+        result["accounts"] = accounts
+        result["account_count"] = len(accounts)
+        result["available_account_count"] = sum(
+            1 for account in accounts if account.get("schedulable") is True
+        )
+        result["presentation_partial"] = True
+    return result
 
 
 def remember_last_success_policy(
@@ -2921,6 +3289,21 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
     manually_disabled = current_status == STATUS_MANUALLY_DISABLED
     other_info = parse_json_object(channel.get("other_info"))
 
+    previous_guard = other_info.get("cliproxy_cpa_quota_guard")
+    previous_guard = previous_guard if isinstance(previous_guard, dict) else {}
+    previous_health = previous_guard.get("health")
+    previous_health = previous_health if isinstance(previous_health, dict) else {}
+    if (
+        not bool(result.get("ok"))
+        or bool(result.get("quota_observation_stale"))
+        or bool(result.get("presentation_partial"))
+    ):
+        result = restore_presentation_after_probe_failure(
+            result,
+            previous_health,
+            previous_guard.get("updated_at"),
+        )
+
     ok = bool(result.get("ok"))
     quota_ok = bool(result.get("quota_ok", result.get("within_share"))) if ok else False
     fail_closed = bool(result.get("fail_closed"))
@@ -2934,6 +3317,7 @@ def apply_result(db: DB, channel: dict[str, Any], result: dict[str, Any], state:
         "manual_status_preserved": manually_disabled,
         "failure_count": int(state.get("failure_count") or 0),
         "quota_observation_stale": quota_observation_stale,
+        "presentation_stale": bool(result.get("presentation_stale")),
         "health": result,
     }
     other_info["cliproxy_cpa_quota_guard"] = guard_info
