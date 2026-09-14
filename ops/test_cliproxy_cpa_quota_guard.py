@@ -343,8 +343,148 @@ class ApplyResultAbilityReconciliationTest(unittest.TestCase):
         self.assertIn('"status": "unknown"', statement)
         self.assertIn("quota_probe_stale_runtime_auth_available", message)
 
+    def test_stale_probe_presentation_is_display_only(self) -> None:
+        db = self.RecordingDB()
+        previous_health = {
+            "ok": True,
+            "quota_ok": True,
+            "usable_balance_units": 42.5,
+            "accounts": [{
+                "auth_index": "auth-a",
+                "account_label": "pro-account",
+                "ok": True,
+                "schedulable": True,
+                "windows": {"7d": {"remaining_percent": 85.0}},
+            }],
+        }
+        channel = {
+            "id": 12,
+            "name": "test-cpa",
+            "status": guard.STATUS_ENABLED,
+            "balance": 42.5,
+            "other_info": guard.json.dumps({
+                "cliproxy_cpa_quota_guard": {
+                    "updated_at": 1_800_000_000,
+                    "health": previous_health,
+                }
+            }),
+        }
+        result = {
+            "ok": True,
+            "quota_ok": True,
+            "quota_observation_stale": True,
+            "usable_balance_units": 42.5,
+            "reason": "quota_probe_stale_runtime_auth_available",
+            "accounts": [{
+                "auth_index": "auth-a",
+                "account_label": "pro-account",
+                "ok": False,
+                "schedulable": False,
+                "reason": "quota_probe_failed",
+                "error": "HTTP 502",
+            }],
+            "presentation_partial": True,
+        }
+
+        guard.apply_result(db, channel, result, {"failure_count": 12})
+
+        statement = db.statements[0]
+        self.assertNotIn("balance = ", statement)
+        self.assertIn("update abilities set enabled = true where channel_id = 12;", statement)
+        self.assertIn('"presentation":', statement)
+        self.assertIn('"remaining_percent": 85.0', statement)
+        self.assertIn('"error": "HTTP 502"', statement)
+
 
 class ManagementAuthBackoffTest(unittest.TestCase):
+    def test_partial_probe_accounts_are_retained_for_diagnostics(self) -> None:
+        now = 1_800_000_000
+        failure = guard.QuotaProbeFailure(
+            "wham_usage_all_accounts_failed: HTTP 502",
+            accounts=[
+                {
+                    "auth_index": "auth-a",
+                    "account_label": "pro-account",
+                    "plan_type": "pro",
+                    "ok": False,
+                    "schedulable": False,
+                    "reason": "quota_probe_failed",
+                    "error": "HTTP 502",
+                }
+            ],
+        )
+
+        result = guard.record_probe_failure({}, {}, failure, now)
+
+        self.assertEqual(1, result["account_count"])
+        self.assertTrue(result["presentation_partial"])
+        self.assertEqual("auth-a", result["accounts"][0]["auth_index"])
+        self.assertEqual("HTTP 502", result["accounts"][0]["error"])
+
+    def test_probe_failure_restores_previous_account_presentation(self) -> None:
+        previous_health = {
+            "ok": True,
+            "quota_ok": True,
+            "usable_balance_units": 42.5,
+            "total_balance_units": 50.0,
+            "account_count": 1,
+            "available_account_count": 1,
+            "windows": {
+                "7d": {
+                    "used_percent": 15.0,
+                    "remaining_percent": 85.0,
+                    "reset_at": 1_800_100_000,
+                }
+            },
+            "accounts": [
+                {
+                    "auth_index": "auth-a",
+                    "account_label": "pro-account",
+                    "plan_type": "pro",
+                    "ok": True,
+                    "schedulable": True,
+                    "windows": {
+                        "7d": {
+                            "used_percent": 15.0,
+                            "remaining_percent": 85.0,
+                            "reset_at": 1_800_100_000,
+                        }
+                    },
+                }
+            ],
+        }
+        failed = {
+            "ok": False,
+            "reason": "quota_probe_failed",
+            "error": "HTTP 502",
+            "accounts": [
+                {
+                    "auth_index": "auth-a",
+                    "account_label": "pro-account",
+                    "plan_type": "pro",
+                    "ok": False,
+                    "schedulable": False,
+                    "reason": "quota_probe_failed",
+                    "error": "HTTP 502",
+                }
+            ],
+            "presentation_partial": True,
+        }
+
+        result = guard.restore_presentation_after_probe_failure(
+            failed,
+            previous_health,
+            1_800_000_000,
+        )
+
+        presentation = result["presentation"]
+        self.assertTrue(result["presentation_stale"])
+        self.assertEqual(1_800_000_000, presentation["updated_at"])
+        self.assertEqual(85.0, presentation["accounts"][0]["windows"]["7d"]["remaining_percent"])
+        self.assertFalse(presentation["accounts"][0]["ok"])
+        self.assertEqual("HTTP 502", presentation["accounts"][0]["error"])
+        self.assertEqual(85.0, presentation["windows"]["7d"]["remaining_percent"])
+
     def test_transient_probe_failure_uses_recent_success_grace(self) -> None:
         now = 1_800_000_000
         state = {"last_success_at": now - 60}
@@ -758,6 +898,67 @@ class QuotaHealthEndpointTest(unittest.TestCase):
                     {"CPA_MANAGEMENT_KEY": "test-management-key"},
                 )
 
+    def test_cpa_probe_failure_keeps_payload_account_diagnostics(self) -> None:
+        payload = {
+            "ok": False,
+            "guard_mode": "bucket_low_watermark",
+            "reason": "quota_probe_failed",
+            "error": "wham_usage_http_502",
+            "accounts": [{
+                "auth_index": "cpa-auth-index",
+                "account_label": "pro-account",
+                "ok": False,
+                "schedulable": False,
+                "reason": "quota_probe_failed",
+                "error": "HTTP 502",
+            }],
+        }
+        with mock.patch.object(guard, "request_json", return_value=payload):
+            with self.assertRaises(guard.QuotaProbeFailure) as captured:
+                guard.call_cpa_quota_health(
+                    {
+                        **guard.DEFAULT_CONFIG,
+                        "cpa_base_url": "http://127.0.0.1:8317",
+                    },
+                    {"CPA_MANAGEMENT_KEY": "test-management-key"},
+                )
+
+        self.assertEqual(1, len(captured.exception.accounts))
+        self.assertEqual("cpa-auth-index", captured.exception.accounts[0]["auth_index"])
+
+    def test_call_quota_health_prefers_home_diagnostics_when_all_probes_fail(self) -> None:
+        home_failure = guard.QuotaProbeFailure(
+            "home_quota_snapshot_all_accounts_failed: stale",
+            accounts=[{
+                "auth_index": "home-auth-index",
+                "account_label": "home-pro-account",
+                "ok": False,
+                "schedulable": False,
+                "reason": "quota_snapshot_stale",
+                "windows": {"7d": {"remaining_percent": 42.0}},
+            }],
+        )
+        wham_failure = guard.QuotaProbeFailure(
+            "wham_usage_all_accounts_failed: HTTP 502",
+            accounts=[{
+                "auth_index": "wham-auth-index",
+                "ok": False,
+                "schedulable": False,
+                "reason": "quota_probe_failed",
+            }],
+        )
+        with (
+            mock.patch.object(guard, "call_cpa_quota_health", side_effect=RuntimeError("http_404")),
+            mock.patch.object(guard, "call_home_quota_health", side_effect=home_failure),
+            mock.patch.object(guard, "call_wham_usages", side_effect=wham_failure),
+        ):
+            with self.assertRaises(guard.QuotaProbeFailure) as captured:
+                guard.call_quota_health(guard.DEFAULT_CONFIG, {})
+
+        self.assertEqual(1, len(captured.exception.accounts))
+        self.assertEqual("home-auth-index", captured.exception.accounts[0]["auth_index"])
+        self.assertEqual(42.0, captured.exception.accounts[0]["windows"]["7d"]["remaining_percent"])
+
     @staticmethod
     def home_payload(now: int, expires_after: int = 12 * 60 * 60) -> tuple[dict, dict]:
         reset_at = guard.dt.datetime.fromtimestamp(
@@ -770,6 +971,7 @@ class QuotaHealthEndpointTest(unittest.TestCase):
         ).isoformat().replace("+00:00", "Z")
         item = {
             "credential_id": "home-pro-credential",
+            "auth_index": "home-pro-auth-index",
             "credential_status": "enabled",
             "quota_status": "healthy",
             "freshness": "fresh",
@@ -854,6 +1056,7 @@ class QuotaHealthEndpointTest(unittest.TestCase):
             result["buckets"]["protected"]["reset_credits_earliest_expires_at"],
         )
         self.assertEqual("home-pro-credential", result["accounts"][0]["credential_id"])
+        self.assertEqual("home-pro-auth-index", result["accounts"][0]["auth_index"])
         self.assertEqual("credit-home-opaque-key", result["accounts"][0]["reset_credits"][0]["id_suffix"])
 
         state: dict = {}
@@ -870,6 +1073,36 @@ class QuotaHealthEndpointTest(unittest.TestCase):
         self.assertTrue(guarded["reset_credit_grace"]["limits_released"])
         self.assertTrue(guarded["dynamic_daily_budget"]["bypassed"])
         self.assertEqual(45.0, guarded["usable_balance_units"])
+
+    def test_stale_home_snapshot_retains_account_diagnostics(self) -> None:
+        now = 1_800_000_000
+        listing, detail = self.home_payload(now)
+        listing["items"][0]["freshness"] = "stale"
+        detail["credential"]["freshness"] = "stale"
+
+        def request(url: str, *_args, **_kwargs) -> dict:
+            if "/quota/credentials?" in url:
+                return listing
+            if "/quota/credentials/home-pro-credential" in url:
+                return detail
+            raise AssertionError(url)
+
+        config = {
+            **guard.DEFAULT_CONFIG,
+            "cpa_base_url": "http://home.internal:8327",
+        }
+        with (
+            mock.patch.object(guard, "request_json", side_effect=request),
+            mock.patch.object(guard.time, "time", return_value=now),
+            self.assertRaises(guard.QuotaProbeFailure) as captured,
+        ):
+            guard.call_home_quota_health(config, {"CPA_MANAGEMENT_KEY": "test-management-key"})
+
+        self.assertEqual(1, len(captured.exception.accounts))
+        account = captured.exception.accounts[0]
+        self.assertEqual("home-pro-auth-index", account["auth_index"])
+        self.assertEqual("quota_snapshot_stale", account["reason"])
+        self.assertEqual(45.0, account["windows"]["7d"]["remaining_percent"])
 
     def test_fresh_home_snapshot_survives_latest_probe_failure(self) -> None:
         now = 1_800_000_000
