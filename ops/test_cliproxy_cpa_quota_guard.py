@@ -1191,6 +1191,43 @@ class QuotaHealthEndpointTest(unittest.TestCase):
             account["reset_credits_earliest_expires_at"],
         )
 
+    def test_fresh_window_observation_survives_stale_optional_reset_probe(self) -> None:
+        now = 1_800_000_000
+        listing, detail = self.home_payload(now)
+        listing["items"][0]["freshness"] = "stale"
+        listing["items"][0]["collection_status"] = "failed"
+        detail["credential"]["freshness"] = "stale"
+        detail["credential"]["collection_status"] = "failed"
+        detail["window_observation"] = {
+            "source": "response_header",
+            "freshness": "fresh",
+            "observed_at": guard.dt.datetime.fromtimestamp(now, guard.dt.timezone.utc).isoformat(),
+            "expires_at": guard.dt.datetime.fromtimestamp(now + 1800, guard.dt.timezone.utc).isoformat(),
+        }
+
+        def request(url: str, *_args, **_kwargs) -> dict:
+            if "/quota/credentials?" in url:
+                return listing
+            if "/quota/credentials/home-pro-credential" in url:
+                return detail
+            if url.endswith("/capabilities"):
+                return {"capabilities": {}}
+            raise AssertionError(url)
+
+        config = {**guard.DEFAULT_CONFIG, "cpa_base_url": "http://home.internal:8327"}
+        with (
+            mock.patch.object(guard, "request_json", side_effect=request),
+            mock.patch.object(guard.time, "time", return_value=now),
+        ):
+            result = guard.call_home_quota_health(config, {"CPA_MANAGEMENT_KEY": "test-management-key"})
+
+        account = result["accounts"][0]
+        self.assertEqual(45.0, account["usable_balance_units"])
+        self.assertEqual("stale", account["home_freshness"])
+        self.assertEqual("fresh", account["home_window_freshness"])
+        self.assertTrue(account["balance_observation_fresh"])
+        self.assertEqual("failed", account["home_collection_status"])
+
     def test_home_snapshot_does_not_call_unsupported_credit_consume(self) -> None:
         now = 1_800_000_000
         listing, detail = self.home_payload(now, expires_after=5 * 60)

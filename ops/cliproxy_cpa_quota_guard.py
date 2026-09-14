@@ -942,9 +942,19 @@ def home_snapshot_account(
     credential_id = str(snapshot.get("credential_id") or "").strip()
     if not credential_id:
         raise RuntimeError("home_quota_snapshot_missing_credential_id")
+    # Home can mark the overall collection stale when only the optional
+    # reset-credit probe failed. Balance control can safely use a fresh window
+    # observation independently; reset credits remain separately degraded.
     freshness = str(snapshot.get("freshness") or "never").strip().lower()
+    window_observation = detail.get("window_observation")
+    if not isinstance(window_observation, dict):
+        window_observation = snapshot.get("window_observation")
+    window_freshness = str(
+        window_observation.get("freshness") if isinstance(window_observation, dict) else ""
+    ).strip().lower()
+    balance_fresh = freshness == "fresh" or window_freshness == "fresh"
     collection_status = str(snapshot.get("collection_status") or "idle").strip().lower()
-    if freshness != "fresh":
+    if not balance_fresh:
         raise RuntimeError("home_quota_snapshot_not_fresh")
 
     plan_type = home_snapshot_plan_type(snapshot)
@@ -966,6 +976,8 @@ def home_snapshot_account(
     account = evaluate_account_quota(config, auth_entry, usage)
     account["credential_id"] = credential_id
     account["home_freshness"] = freshness
+    account["home_window_freshness"] = window_freshness or freshness
+    account["balance_observation_fresh"] = balance_fresh
     account["home_collection_status"] = collection_status
     account["quota_health_source"] = "home_quota_snapshot"
     if credits:
