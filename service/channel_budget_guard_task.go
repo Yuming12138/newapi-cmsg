@@ -270,6 +270,7 @@ func applySharedBalancePools(cfg *operation_setting.ChannelBudgetGuardSetting, c
 			memberState := state.Channels[key]
 			info := parseGuardObject(member.OtherInfo)
 			shared, _ := info["shared_balance_guard"].(map[string]interface{})
+			sharedDisabled := sharedBalanceDisabledByGuard(shared, source.Id)
 			if member.Status == common.ChannelStatusManuallyDisabled {
 				continue
 			}
@@ -277,23 +278,55 @@ func applySharedBalancePools(cfg *operation_setting.ChannelBudgetGuardSetting, c
 				info["shared_balance_guard"] = map[string]interface{}{"source_channel_id": source.Id, "disabled_by_guard": true, "updated_at": nowTs}
 				info["status_reason"] = fmt.Sprintf("channel_budget_exhausted: shared source channel %d", source.Id)
 				info["status_time"] = nowTs
-				if err := updateChannelBudgetGuardChannel(member, channelBudgetChannelUpdate{Status: intPtr(common.ChannelStatusAutoDisabled), AbilitiesEnabled: boolPtr(false), OtherInfo: info}, nowTs); err == nil {
+				if err := updateChannelBudgetGuardChannel(member, channelBudgetChannelUpdate{Balance: float64Ptr(source.Balance), Status: intPtr(common.ChannelStatusAutoDisabled), AbilitiesEnabled: boolPtr(false), OtherInfo: info}, nowTs); err == nil {
 					memberState.DisabledByGuard = true
 					state.Channels[key] = memberState
 					updated, statusChanged = true, true
 				}
 				continue
 			}
-			if !sourceExhausted && memberState.DisabledByGuard && member.Status == common.ChannelStatusAutoDisabled && shared != nil {
-				if err := updateChannelBudgetGuardChannel(member, channelBudgetChannelUpdate{Status: intPtr(common.ChannelStatusEnabled), AbilitiesEnabled: boolPtr(true)}, nowTs); err == nil {
+			if sourceExhausted {
+				continue
+			}
+			if sharedDisabled {
+				shared["disabled_by_guard"] = false
+				shared["updated_at"] = nowTs
+				info["shared_balance_guard"] = shared
+				sharedReason := fmt.Sprintf("channel_budget_exhausted: shared source channel %d", source.Id)
+				if reason, _ := info["status_reason"].(string); strings.TrimSpace(reason) == sharedReason {
+					delete(info, "status_reason")
+					delete(info, "status_time")
+				}
+				update := channelBudgetChannelUpdate{Balance: float64Ptr(source.Balance), OtherInfo: info}
+				if member.Status == common.ChannelStatusAutoDisabled {
+					update.Status = intPtr(common.ChannelStatusEnabled)
+					update.AbilitiesEnabled = boolPtr(true)
+				}
+				if err := updateChannelBudgetGuardChannel(member, update, nowTs); err == nil {
 					memberState.DisabledByGuard = false
 					state.Channels[key] = memberState
-					updated, statusChanged = true, true
+					updated = true
+					statusChanged = statusChanged || update.Status != nil
+				}
+				continue
+			}
+			if member.Status == common.ChannelStatusEnabled && member.Balance != source.Balance {
+				if err := updateChannelBudgetGuardChannel(member, channelBudgetChannelUpdate{Balance: float64Ptr(source.Balance)}, nowTs); err == nil {
+					updated = true
 				}
 			}
 		}
 	}
 	return updated, statusChanged
+}
+
+func sharedBalanceDisabledByGuard(shared map[string]interface{}, sourceChannelID int) bool {
+	if shared == nil {
+		return false
+	}
+	disabled, disabledOK := guardObjectBool(shared, "disabled_by_guard")
+	sourceID, sourceOK := guardObjectInt64(shared, "source_channel_id")
+	return disabledOK && disabled && sourceOK && sourceID == int64(sourceChannelID)
 }
 
 func UpdateChannelBudgetGuardBalance(ctx context.Context, channel *model.Channel) (float64, bool, error) {
