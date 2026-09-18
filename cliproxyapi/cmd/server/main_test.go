@@ -100,11 +100,13 @@ func TestMergeHomeRuntimeConfigPreservesNodeLocalSettings(t *testing.T) {
 		RemoteManagement: config.RemoteManagement{SecretKey: "home-management-secret"},
 	}
 	remoteCfg.ProxyURL = "http://mihomo:7890"
+	remoteCfg.GPTImage2BaseModel = "gpt-5.4-mini"
 	localCfg := &config.Config{
 		Host:             "127.0.0.1",
 		Port:             8317,
 		RemoteManagement: localManagement,
 	}
+	localCfg.GPTImage2BaseModel = "gpt-5.6-sol"
 	homeCfg := config.HomeConfig{Enabled: true}
 
 	got := mergeHomeRuntimeConfig(remoteCfg, localCfg, homeCfg)
@@ -117,6 +119,9 @@ func TestMergeHomeRuntimeConfigPreservesNodeLocalSettings(t *testing.T) {
 	}
 	if got.ProxyURL != remoteCfg.ProxyURL {
 		t.Fatal("expected shared Home proxy configuration to be preserved")
+	}
+	if got.GPTImage2BaseModel != localCfg.GPTImage2BaseModel {
+		t.Fatalf("GPTImage2BaseModel = %q, want node-local value %q", got.GPTImage2BaseModel, localCfg.GPTImage2BaseModel)
 	}
 	if !got.Home.Enabled {
 		t.Fatal("expected Home configuration to be enabled")

@@ -76,6 +76,9 @@ func mergeHomeRuntimeConfig(remoteCfg, localCfg *config.Config, homeCfg config.H
 		}
 		merged.TLS = localCfg.TLS
 		merged.RemoteManagement = localCfg.RemoteManagement
+		if strings.TrimSpace(localCfg.GPTImage2BaseModel) != "" {
+			merged.GPTImage2BaseModel = localCfg.GPTImage2BaseModel
+		}
 	}
 	if merged.Port <= 0 {
 		merged.Port = 8317

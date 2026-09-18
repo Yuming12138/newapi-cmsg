@@ -122,3 +122,35 @@ func TestApplyHomeOverlayForcesUsageStatisticsEnabled(t *testing.T) {
 		t.Fatal("expected home overlay to preserve local remote-management configuration")
 	}
 }
+
+func TestApplyHomeOverlayPreservesLocalImageBaseModelWhenHomeOmitsIt(t *testing.T) {
+	baseCfg := &config.Config{}
+	baseCfg.Home.Enabled = true
+	baseCfg.GPTImage2BaseModel = "gpt-5.6-sol"
+	service := &Service{cfg: baseCfg}
+
+	service.applyHomeOverlay(&config.Config{})
+
+	if service.cfg == nil {
+		t.Fatal("expected home overlay to keep a runtime config")
+	}
+	if got := service.cfg.GPTImage2BaseModel; got != "gpt-5.6-sol" {
+		t.Fatalf("GPTImage2BaseModel = %q, want local override %q", got, "gpt-5.6-sol")
+	}
+}
+
+func TestApplyHomeOverlayKeepsLocalImageBaseModelOverExplicitHomeValue(t *testing.T) {
+	baseCfg := &config.Config{}
+	baseCfg.Home.Enabled = true
+	baseCfg.GPTImage2BaseModel = "gpt-5.6-sol"
+	service := &Service{cfg: baseCfg}
+
+	service.applyHomeOverlay(&config.Config{SDKConfig: config.SDKConfig{GPTImage2BaseModel: "gpt-5.6-terra"}})
+
+	if service.cfg == nil {
+		t.Fatal("expected home overlay to keep a runtime config")
+	}
+	if got := service.cfg.GPTImage2BaseModel; got != "gpt-5.6-sol" {
+		t.Fatalf("GPTImage2BaseModel = %q, want local override %q", got, "gpt-5.6-sol")
+	}
+}

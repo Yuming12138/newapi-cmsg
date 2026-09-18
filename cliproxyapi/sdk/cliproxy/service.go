@@ -1441,6 +1441,12 @@ func (s *Service) applyHomeOverlayContext(ctx context.Context, remoteCfg *config
 	merged.TLS = baseCfg.TLS
 	merged.Home = baseCfg.Home
 	merged.RemoteManagement = baseCfg.RemoteManagement
+	// Keep node-local image orchestration overrides when Home refreshes shared
+	// runtime config. Home controls credential and routing state, while this
+	// executor compatibility choice belongs to the CPA node running the request.
+	if strings.TrimSpace(baseCfg.GPTImage2BaseModel) != "" {
+		merged.GPTImage2BaseModel = baseCfg.GPTImage2BaseModel
+	}
 	forceHomeRuntimeConfig(&merged)
 
 	logHomeConfigChanges(baseCfg, &merged)
