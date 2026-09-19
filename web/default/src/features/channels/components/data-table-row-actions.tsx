@@ -58,6 +58,21 @@ import {
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { DateTimePicker } from '@/components/datetime-picker'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   testChannelCapability,
   cancelChannelQuotaProtectionForceUnlock,
   forceUnlockChannelQuotaProtection,
@@ -173,6 +188,9 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const [isTogglingStatus, setIsTogglingStatus] = useState(false)
   const [isUpdatingQuotaProtection, setIsUpdatingQuotaProtection] =
     useState(false)
+  const [capabilityDialogOpen, setCapabilityDialogOpen] = useState(false)
+  const [capabilityModel, setCapabilityModel] = useState('')
+  const [isCapabilityTesting, setIsCapabilityTesting] = useState(false)
 
   const isEnabled = isChannelEnabled(channel)
   const isMultiKey = isMultiKeyChannel(channel)
@@ -208,9 +226,33 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
     }
   }
 
-  const handleCapabilityTest = async () => {
+  const capabilityModels = channel.models
+    .split(',')
+    .map((model) => model.trim())
+    .filter(Boolean)
+
+  const handleCapabilityTest = () => {
+    const preferred = [
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-5.5',
+    ]
+    const defaultModel =
+      preferred.find((model) => capabilityModels.includes(model)) ??
+      capabilityModels[0] ??
+      ''
+    setCapabilityModel(defaultModel)
+    setCapabilityDialogOpen(true)
+  }
+
+  const runCapabilityTest = async () => {
+    setIsCapabilityTesting(true)
     try {
-      const result = await testChannelCapability(channel.id)
+      const result = await testChannelCapability(
+        channel.id,
+        capabilityModel || undefined
+      )
       if (result.success) {
         toast.success(
           t('Capability test: {{status}} ({{latency}} ms)', {
@@ -223,6 +265,9 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
       }
     } catch {
       toast.error(t('Capability test failed'))
+    } finally {
+      setIsCapabilityTesting(false)
+      setCapabilityDialogOpen(false)
     }
   }
 
@@ -549,6 +594,54 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <Dialog
+        open={capabilityDialogOpen}
+        onOpenChange={(open) => {
+          if (!isCapabilityTesting) setCapabilityDialogOpen(open)
+        }}
+      >
+        <DialogContent className='sm:max-w-md'>
+          <DialogHeader>
+            <DialogTitle>{t('Test Capability')}</DialogTitle>
+            <DialogDescription>
+              {t(
+                'Select a text model to test on this channel. Image models are excluded from this gray test.'
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <Select
+            value={capabilityModel}
+            onValueChange={(value) => setCapabilityModel(value ?? '')}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder={t('Select a model')} />
+            </SelectTrigger>
+            <SelectContent>
+              {capabilityModels.map((model) => (
+                <SelectItem key={model} value={model}>
+                  {model}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <DialogFooter>
+            <Button
+              variant='outline'
+              onClick={() => setCapabilityDialogOpen(false)}
+              disabled={isCapabilityTesting}
+            >
+              {t('Cancel')}
+            </Button>
+            <Button
+              onClick={runCapabilityTest}
+              disabled={isCapabilityTesting || !capabilityModel}
+            >
+              {isCapabilityTesting ? t('Testing') : t('Run test')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <ConfirmDialog
         open={quotaProtectionConfirmOpen}

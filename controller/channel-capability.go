@@ -15,6 +15,28 @@ import (
 
 const candyCapabilityPrompt = "Solve this problem carefully without external tools. A black bag contains candies with three flavors and two shapes. The counts are: apple round 7, apple star 7, peach round 9, peach star 6, watermelon round 8, watermelon star 4. What is the minimum number of candies to draw to guarantee having apple and peach candies of different shapes? End with exactly FINAL_ANSWER: <number> on its own line."
 
+var capabilityModelPreference = []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"}
+
+func selectCapabilityModel(channel *model.Channel, requested string) string {
+	if strings.TrimSpace(requested) != "" {
+		return strings.TrimSpace(requested)
+	}
+	models := channel.GetModels()
+	available := make(map[string]bool, len(models))
+	for _, item := range models {
+		available[strings.TrimSpace(item)] = true
+	}
+	for _, preferred := range capabilityModelPreference {
+		if available[preferred] {
+			return preferred
+		}
+	}
+	if len(models) > 0 {
+		return strings.TrimSpace(models[0])
+	}
+	return "gpt-5.6-sol"
+}
+
 func capabilityAnswerMatches(text string) bool {
 	return strings.HasSuffix(strings.TrimSpace(text), "FINAL_ANSWER: 21")
 }
@@ -33,7 +55,7 @@ func TestChannelCapability(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	name := strings.TrimSpace(c.Query("model"))
+	name := selectCapabilityModel(ch, c.Query("model"))
 	uid, err := resolveChannelTestUserID(c)
 	if err != nil {
 		common.ApiError(c, err)
