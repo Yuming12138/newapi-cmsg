@@ -38,7 +38,31 @@ func selectCapabilityModel(channel *model.Channel, requested string) string {
 }
 
 func capabilityAnswerMatches(text string) bool {
+
 	return strings.HasSuffix(strings.TrimSpace(text), "FINAL_ANSWER: 21")
+}
+
+func capabilityAnswerPreview(text string) string {
+
+	text = strings.TrimSpace(text)
+	runes := []rune(text)
+	if len(runes) > 240 {
+		return string(runes[:240]) + "…"
+	}
+	return text
+}
+
+func capabilityFailureReason(ok bool, text string) string {
+	if ok {
+		return ""
+	}
+	if strings.TrimSpace(text) == "" {
+		return "empty_response"
+	}
+	if !strings.Contains(text, "FINAL_ANSWER:") {
+		return "missing_final_answer_marker"
+	}
+	return "answer_mismatch"
 }
 
 func TestChannelCapability(c *gin.Context) {
@@ -74,9 +98,9 @@ func TestChannelCapability(c *gin.Context) {
 	}
 	if result.localErr != nil {
 		common.SysLog(fmt.Sprintf("capability probe channel=%d model=%s provider=%s status=unhealthy latency_ms=%d reason=%s", id, name, constant.GetChannelTypeName(ch.Type), time.Since(started).Milliseconds(), result.localErr.Error()))
-		c.JSON(http.StatusOK, gin.H{"success": false, "channel_id": id, "requested_model": name, "quality_pass": false, "status": "unhealthy", "reason": result.localErr.Error(), "latency_ms": time.Since(started).Milliseconds()})
+		c.JSON(http.StatusOK, gin.H{"success": false, "channel_id": id, "requested_model": name, "quality_pass": false, "status": "unhealthy", "failure_reason": "upstream_error", "reason": result.localErr.Error(), "latency_ms": time.Since(started).Milliseconds()})
 		return
 	}
 	common.SysLog(fmt.Sprintf("capability probe channel=%d requested_model=%s observed_model=%s provider=%s status=%s quality_pass=%t latency_ms=%d", id, name, result.upstreamModel, constant.GetChannelTypeName(ch.Type), status, ok, time.Since(started).Milliseconds()))
-	c.JSON(http.StatusOK, gin.H{"success": true, "channel_id": id, "requested_model": name, "observed_model": result.upstreamModel, "provider": constant.GetChannelTypeName(ch.Type), "channel_name": ch.Name, "quality_pass": ok, "answer_match": ok, "fallback_used": false, "status": status, "latency_ms": time.Since(started).Milliseconds()})
+	c.JSON(http.StatusOK, gin.H{"success": true, "channel_id": id, "requested_model": name, "observed_model": result.upstreamModel, "provider": constant.GetChannelTypeName(ch.Type), "channel_name": ch.Name, "quality_pass": ok, "answer_match": ok, "fallback_used": false, "status": status, "failure_reason": capabilityFailureReason(ok, text), "answer_preview": capabilityAnswerPreview(text), "latency_ms": time.Since(started).Milliseconds()})
 }

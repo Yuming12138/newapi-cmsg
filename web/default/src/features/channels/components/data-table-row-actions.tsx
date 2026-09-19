@@ -255,9 +255,9 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         capabilityModel || undefined
       )
       if (result.success) {
-        toast.success(
+        (result.quality_pass ? toast.success : toast.error)(
           t('Capability test: {{status}} ({{latency}} ms)', {
-            status: result.status,
+            status: result.failure_reason || result.status,
             latency: result.latency_ms,
           })
         )
