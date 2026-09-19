@@ -191,6 +191,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const [capabilityDialogOpen, setCapabilityDialogOpen] = useState(false)
   const [capabilityModel, setCapabilityModel] = useState('')
   const [isCapabilityTesting, setIsCapabilityTesting] = useState(false)
+  const [capabilityResult, setCapabilityResult] = useState<any>(null)
 
   const isEnabled = isChannelEnabled(channel)
   const isMultiKey = isMultiKeyChannel(channel)
@@ -254,6 +255,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
         channel.id,
         capabilityModel || undefined
       )
+      setCapabilityResult(result)
       if (result.success) {
         (result.quality_pass ? toast.success : toast.error)(
           t('Capability test: {{status}} ({{latency}} ms)', {
@@ -268,7 +270,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
       toast.error(t('Capability test failed'))
     } finally {
       setIsCapabilityTesting(false)
-      setCapabilityDialogOpen(false)
+      setCapabilityDialogOpen(true)
     }
   }
 
@@ -602,7 +604,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
           if (!isCapabilityTesting) setCapabilityDialogOpen(open)
         }}
       >
-        <DialogContent className='sm:max-w-md'>
+        <DialogContent className='sm:max-w-3xl max-h-[85vh] overflow-y-auto'>
           <DialogHeader>
             <DialogTitle>{t('Test Capability')}</DialogTitle>
             <DialogDescription>
@@ -611,6 +613,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
               )}
             </DialogDescription>
           </DialogHeader>
+          <div className="rounded-md border bg-muted/30 p-3 text-sm"><div className="mb-1 font-medium">{t('Prompt')}</div><pre className="max-h-32 overflow-auto whitespace-pre-wrap text-xs">Solve this problem carefully without external tools. A black bag contains candies with three flavors and two shapes. The counts are: apple round 7, apple star 7, peach round 9, peach star 6, watermelon round 8, watermelon star 4. What is the minimum number of candies to draw to guarantee having apple and peach candies of different shapes? End with exactly FINAL_ANSWER: &lt;number&gt; on its own line.</pre></div>
           <Select
             value={capabilityModel}
             onValueChange={(value) => setCapabilityModel(value ?? '')}
@@ -626,6 +629,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
               ))}
             </SelectContent>
           </Select>
+          {capabilityResult && <div className="max-h-64 overflow-auto rounded-md border p-3 text-sm"><div><b>{t('Result')}:</b> {capabilityResult.status}</div><div><b>{t('Failure reason')}:</b> {capabilityResult.failure_reason || t('none')}</div><div><b>{t('Requested model')}:</b> {capabilityResult.requested_model}</div><div><b>{t('Observed model')}:</b> {capabilityResult.observed_model || t('unknown')}</div><pre className="mt-2 whitespace-pre-wrap text-xs">{capabilityResult.answer_preview || capabilityResult.reason || t('No response content')}</pre></div>}
           <DialogFooter>
             <Button
               variant='outline'

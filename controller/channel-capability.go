@@ -46,8 +46,8 @@ func capabilityAnswerPreview(text string) string {
 
 	text = strings.TrimSpace(text)
 	runes := []rune(text)
-	if len(runes) > 240 {
-		return string(runes[:240]) + "…"
+	if len(runes) > 4000 {
+		return string(runes[:4000]) + "…"
 	}
 	return text
 }
