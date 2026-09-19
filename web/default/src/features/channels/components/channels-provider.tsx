@@ -39,6 +39,7 @@ type DialogType =
   | 'edit-tag'
   | 'copy-channel'
   | 'routing-runtime'
+  | 'capability-test'
   | null
 
 type UpstreamUpdateState = ReturnType<typeof useChannelUpstreamUpdates>
