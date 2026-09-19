@@ -15,7 +15,7 @@ import (
 
 const candyCapabilityPrompt = "Solve this problem carefully without external tools. A black bag contains candies with three flavors and two shapes. The counts are: apple round 7, apple star 7, peach round 9, peach star 6, watermelon round 8, watermelon star 4. What is the minimum number of candies to draw to guarantee having apple and peach candies of different shapes? End with exactly FINAL_ANSWER: <number> on its own line."
 
-var capabilityModelPreference = []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"}
+var capabilityModelPreference = []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"}
 
 func selectCapabilityModel(channel *model.Channel, requested string) string {
 	if strings.TrimSpace(requested) != "" {

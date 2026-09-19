@@ -233,6 +233,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
 
   const handleCapabilityTest = () => {
     const preferred = [
+      'gpt-6-astra',
       'gpt-5.6-sol',
       'gpt-5.6-terra',
       'gpt-5.6-luna',
