@@ -290,6 +290,13 @@ export async function testChannel(
   return res.data
 }
 
+export async function testChannelCapability(id: number, model?: string): Promise<any> {
+  const res = await api.get('/api/channel/capability-test/' + id, {
+    params: model ? { model } : undefined,
+  })
+  return res.data
+}
+
 /**
  * Update channel balance
  */

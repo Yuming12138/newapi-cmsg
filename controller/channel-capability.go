@@ -1,0 +1,60 @@
+package controller
+
+import (
+	"fmt"
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const candyCapabilityPrompt = "Solve this problem carefully without external tools. A black bag contains candies with three flavors and two shapes. The counts are: apple round 7, apple star 7, peach round 9, peach star 6, watermelon round 8, watermelon star 4. What is the minimum number of candies to draw to guarantee having apple and peach candies of different shapes? End with exactly FINAL_ANSWER: <number> on its own line."
+
+func capabilityAnswerMatches(text string) bool {
+	return strings.HasSuffix(strings.TrimSpace(text), "FINAL_ANSWER: 21")
+}
+
+func TestChannelCapability(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || (id != 1 && id != 12 && id != 27) {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "capability probe only supports channels 1, 12, and 27"})
+		return
+	}
+	ch, err := model.CacheGetChannel(id)
+	if err != nil {
+		ch, err = model.GetChannelById(id, true)
+	}
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	name := strings.TrimSpace(c.Query("model"))
+	uid, err := resolveChannelTestUserID(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	started := time.Now()
+	result := testChannelWithPrompt(ch, uid, name, "", false, candyCapabilityPrompt)
+	text := gjson.GetBytes(result.responseBody, "choices.0.message.content").String()
+	if text == "" {
+		text = gjson.GetBytes(result.responseBody, "output_text").String()
+	}
+	ok := capabilityAnswerMatches(text)
+	status := "failed"
+	if ok {
+		status = "passed"
+	}
+	if result.localErr != nil {
+		common.SysLog(fmt.Sprintf("capability probe channel=%d model=%s provider=%s status=unhealthy latency_ms=%d reason=%s", id, name, constant.GetChannelTypeName(ch.Type), time.Since(started).Milliseconds(), result.localErr.Error()))
+		c.JSON(http.StatusOK, gin.H{"success": false, "channel_id": id, "requested_model": name, "quality_pass": false, "status": "unhealthy", "reason": result.localErr.Error(), "latency_ms": time.Since(started).Milliseconds()})
+		return
+	}
+	common.SysLog(fmt.Sprintf("capability probe channel=%d requested_model=%s observed_model=%s provider=%s status=%s quality_pass=%t latency_ms=%d", id, name, result.upstreamModel, constant.GetChannelTypeName(ch.Type), status, ok, time.Since(started).Milliseconds()))
+	c.JSON(http.StatusOK, gin.H{"success": true, "channel_id": id, "requested_model": name, "observed_model": result.upstreamModel, "provider": constant.GetChannelTypeName(ch.Type), "channel_name": ch.Name, "quality_pass": ok, "answer_match": ok, "fallback_used": false, "status": status, "latency_ms": time.Since(started).Milliseconds()})
+}

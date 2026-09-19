@@ -38,9 +38,11 @@ import (
 )
 
 type testResult struct {
-	context     *gin.Context
-	localErr    error
-	newAPIError *types.NewAPIError
+	context       *gin.Context
+	localErr      error
+	newAPIError   *types.NewAPIError
+	responseBody  []byte
+	upstreamModel string
 }
 
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
@@ -75,6 +77,10 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 }
 
 func testChannel(channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
+	return testChannelWithPrompt(channel, testUserID, testModel, endpointType, isStream, "")
+}
+
+func testChannelWithPrompt(channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool, probePrompt string) testResult {
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
 		constant.ChannelTypeMidjourney,
@@ -236,7 +242,7 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 		}
 	}
 
-	request := buildTestRequest(testModel, endpointType, channel, isStream)
+	request := buildTestRequest(testModel, endpointType, channel, isStream, probePrompt)
 
 	info, err := relaycommon.GenRelayInfo(c, relayFormat, request, nil)
 
@@ -518,9 +524,11 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 	})
 	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
 	return testResult{
-		context:     c,
-		localErr:    nil,
-		newAPIError: nil,
+		context:       c,
+		localErr:      nil,
+		newAPIError:   nil,
+		responseBody:  respBody,
+		upstreamModel: info.UpstreamModelName,
 	}
 }
 
@@ -698,7 +706,11 @@ func detectErrorMessageFromJSONBytes(jsonBytes []byte) string {
 	return message
 }
 
-func buildTestRequest(model string, endpointType string, channel *model.Channel, isStream bool) dto.Request {
+func buildTestRequest(model string, endpointType string, channel *model.Channel, isStream bool, probePrompt ...string) dto.Request {
+	prompt := "hi"
+	if len(probePrompt) > 0 && strings.TrimSpace(probePrompt[0]) != "" {
+		prompt = probePrompt[0]
+	}
 	testResponsesInput := json.RawMessage(`[{"role":"user","content":"hi"}]`)
 
 	// 根据端点类型构建不同的测试请求
@@ -730,7 +742,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 			// 返回 OpenAIResponsesRequest
 			return &dto.OpenAIResponsesRequest{
 				Model:  model,
-				Input:  json.RawMessage(`[{"role":"user","content":"hi"}]`),
+				Input:  json.RawMessage(fmt.Sprintf(`[{"role":"user","content":%q}]`, prompt)),
 				Stream: lo.ToPtr(isStream),
 			}
 		case constant.EndpointTypeOpenAIResponseCompact:
@@ -751,7 +763,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 				Messages: []dto.Message{
 					{
 						Role:    "user",
-						Content: "hi",
+						Content: prompt,
 					},
 				},
 				MaxTokens: lo.ToPtr(maxTokens),
@@ -808,7 +820,7 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 		Messages: []dto.Message{
 			{
 				Role:    "user",
-				Content: "hi",
+				Content: prompt,
 			},
 		},
 	}

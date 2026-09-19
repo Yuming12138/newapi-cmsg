@@ -58,6 +58,7 @@ import {
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { DateTimePicker } from '@/components/datetime-picker'
 import {
+  testChannelCapability,
   cancelChannelQuotaProtectionForceUnlock,
   forceUnlockChannelQuotaProtection,
 } from '../api'
@@ -204,6 +205,24 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
       })
     } finally {
       setIsTesting(false)
+    }
+  }
+
+  const handleCapabilityTest = async () => {
+    try {
+      const result = await testChannelCapability(channel.id)
+      if (result.success) {
+        toast.success(
+          t('Capability test: {{status}} ({{latency}} ms)', {
+            status: result.status,
+            latency: result.latency_ms,
+          })
+        )
+      } else {
+        toast.error(result.reason || t('Capability test failed'))
+      }
+    } catch {
+      toast.error(t('Capability test failed'))
     }
   }
 
@@ -400,6 +419,13 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             {t('Test Connection')}
             <DropdownMenuShortcut>
               <TestTube size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+
+          <DropdownMenuItem onClick={handleCapabilityTest}>
+            {t('Test Capability')}
+            <DropdownMenuShortcut>
+              <Gauge size={16} />
             </DropdownMenuShortcut>
           </DropdownMenuItem>
 
