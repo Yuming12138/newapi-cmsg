@@ -290,9 +290,16 @@ export async function testChannel(
   return res.data
 }
 
-export async function testChannelCapability(id: number, model?: string): Promise<any> {
+export async function testChannelCapability(
+  id: number,
+  model?: string,
+  reasoningEffort?: string
+): Promise<any> {
   const res = await api.get('/api/channel/capability-test/' + id, {
-    params: model ? { model } : undefined,
+    params:
+      model || reasoningEffort
+        ? { model, effort: reasoningEffort }
+        : undefined,
   })
   return res.data
 }

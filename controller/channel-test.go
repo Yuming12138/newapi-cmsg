@@ -80,7 +80,7 @@ func testChannel(channel *model.Channel, testUserID int, testModel string, endpo
 	return testChannelWithPrompt(channel, testUserID, testModel, endpointType, isStream, "")
 }
 
-func testChannelWithPrompt(channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool, probePrompt string) testResult {
+func testChannelWithPrompt(channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool, probePrompt string, reasoningEffort ...string) testResult {
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
 		constant.ChannelTypeMidjourney,
@@ -243,6 +243,9 @@ func testChannelWithPrompt(channel *model.Channel, testUserID int, testModel str
 	}
 
 	request := buildTestRequest(testModel, endpointType, channel, isStream, probePrompt)
+	if len(reasoningEffort) > 0 {
+		applyTestReasoningEffort(request, reasoningEffort[0])
+	}
 
 	info, err := relaycommon.GenRelayInfo(c, relayFormat, request, nil)
 
@@ -529,6 +532,27 @@ func testChannelWithPrompt(channel *model.Channel, testUserID int, testModel str
 		newAPIError:   nil,
 		responseBody:  respBody,
 		upstreamModel: info.UpstreamModelName,
+	}
+}
+
+func applyTestReasoningEffort(request dto.Request, effort string) {
+	effort = strings.TrimSpace(effort)
+	if effort == "" {
+		return
+	}
+	switch req := request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		req.ReasoningEffort = effort
+	case *dto.OpenAIResponsesRequest:
+		if req.Reasoning == nil {
+			req.Reasoning = &dto.Reasoning{}
+		}
+		req.Reasoning.Effort = effort
+	case *dto.OpenAIResponsesCompactionRequest:
+		if req.Reasoning == nil {
+			req.Reasoning = &dto.Reasoning{}
+		}
+		req.Reasoning.Effort = effort
 	}
 }
 

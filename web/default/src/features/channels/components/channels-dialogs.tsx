@@ -31,7 +31,14 @@ import { UpstreamUpdateDialog } from './dialogs/upstream-update-dialog'
 import { ChannelMutateDrawer } from './drawers/channel-mutate-drawer'
 
 export function ChannelsDialogs() {
-  const { open, setOpen, currentRow, upstream } = useChannels()
+  const {
+    open,
+    setOpen,
+    currentRow,
+    capabilityTestOpen,
+    closeCapabilityTest,
+    upstream,
+  } = useChannels()
 
   return (
     <>
@@ -50,8 +57,8 @@ export function ChannelsDialogs() {
 
       {/* Capability Test Dialog (page-level so channel table refetches cannot unmount it) */}
       <CapabilityTestDialog
-        open={open === 'capability-test'}
-        onOpenChange={(v) => !v && setOpen(null)}
+        open={capabilityTestOpen}
+        onOpenChange={(v) => !v && closeCapabilityTest()}
       />
 
       {/* Balance Query Dialog */}

@@ -54,7 +54,20 @@ type CapabilityTestResult = {
   reason?: string
   error?: string
   latency_ms?: number
+  reasoning_effort?: string
 }
+
+const CAPABILITY_EFFORT_OPTIONS = [
+  { value: 'auto', label: 'Auto / upstream default' },
+  { value: 'none', label: 'None' },
+  { value: 'minimal', label: 'Minimal' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+  { value: 'xhigh', label: 'Extra high' },
+  { value: 'max', label: 'Max' },
+  { value: 'ultra', label: 'Ultra' },
+]
 
 const CAPABILITY_PROMPT =
   'Solve this problem carefully without external tools. A black bag contains candies with three flavors and two shapes. The counts are: apple round 7, apple star 7, peach round 9, peach star 6, watermelon round 8, watermelon star 4. What is the minimum number of candies to draw to guarantee having apple and peach candies of different shapes? End with exactly FINAL_ANSWER: <number> on its own line.'
@@ -77,8 +90,9 @@ export function CapabilityTestDialog({
   onOpenChange,
 }: CapabilityTestDialogProps) {
   const { t } = useTranslation()
-  const { currentRow } = useChannels()
+  const { capabilityTestChannel: channel } = useChannels()
   const [capabilityModel, setCapabilityModel] = useState('')
+  const [capabilityEffort, setCapabilityEffort] = useState('auto')
   const [isCapabilityTesting, setIsCapabilityTesting] = useState(false)
   const [capabilityResult, setCapabilityResult] =
     useState<CapabilityTestResult | null>(null)
@@ -87,27 +101,28 @@ export function CapabilityTestDialog({
 
   const capabilityModels = useMemo(
     () =>
-      (currentRow?.models ?? '')
+      (channel?.models ?? '')
         .split(',')
         .map((model) => model.trim())
         .filter(Boolean),
-    [currentRow?.models]
+    [channel?.models]
   )
 
   // Reset only when a new dialog session/channel is opened. A channel-list
   // refetch does not change this page-level component, so a long test keeps
   // its dialog, loading state, and result visible.
   useEffect(() => {
-    if (!open || !currentRow) return
+    if (!open || !channel) return
     const defaultModel =
       PREFERRED_MODELS.find((model) => capabilityModels.includes(model)) ??
       capabilityModels[0] ??
       ''
     setCapabilityModel(defaultModel)
     setCapabilityResult(null)
+    setCapabilityEffort('auto')
     setElapsedSeconds(0)
     setTestStartedAt(null)
-  }, [open, currentRow?.id, capabilityModels])
+  }, [open, channel?.id, capabilityModels])
 
   useEffect(() => {
     if (!isCapabilityTesting || testStartedAt == null) return
@@ -119,7 +134,7 @@ export function CapabilityTestDialog({
     return () => window.clearInterval(timer)
   }, [isCapabilityTesting, testStartedAt])
 
-  if (!currentRow) return null
+  if (!channel) return null
 
   const runCapabilityTest = async () => {
     if (isCapabilityTesting || !capabilityModel) return
@@ -130,8 +145,9 @@ export function CapabilityTestDialog({
     setCapabilityResult(null)
     try {
       const result = await testChannelCapability(
-        currentRow.id,
-        capabilityModel || undefined
+        channel.id,
+        capabilityModel || undefined,
+        capabilityEffort === 'auto' ? undefined : capabilityEffort
       )
       setCapabilityResult(result as CapabilityTestResult)
       if (result.success) {
@@ -149,6 +165,7 @@ export function CapabilityTestDialog({
         success: false,
         status: 'error',
         requested_model: capabilityModel,
+        reasoning_effort: capabilityEffort,
         reason: getErrorMessage(error),
       })
       toast.error(getErrorMessage(error))
@@ -194,6 +211,23 @@ export function CapabilityTestDialog({
             {capabilityModels.map((model) => (
               <SelectItem key={model} value={model}>
                 {model}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Select
+          value={capabilityEffort}
+          onValueChange={(value) => setCapabilityEffort(value ?? 'auto')}
+          disabled={isCapabilityTesting}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder={t('Select reasoning effort')} />
+          </SelectTrigger>
+          <SelectContent>
+            {CAPABILITY_EFFORT_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {t(option.label)}
               </SelectItem>
             ))}
           </SelectContent>

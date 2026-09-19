@@ -39,7 +39,6 @@ type DialogType =
   | 'edit-tag'
   | 'copy-channel'
   | 'routing-runtime'
-  | 'capability-test'
   | null
 
 type UpstreamUpdateState = ReturnType<typeof useChannelUpstreamUpdates>
@@ -57,6 +56,10 @@ type ChannelsContextType = {
   setIdSort: (enabled: boolean) => void
   sensitiveVisible: boolean
   setSensitiveVisible: (visible: boolean) => void
+  capabilityTestChannel: Channel | null
+  capabilityTestOpen: boolean
+  openCapabilityTest: (channel: Channel) => void
+  closeCapabilityTest: () => void
   upstream: UpstreamUpdateState
 }
 
@@ -83,6 +86,17 @@ export function ChannelsProvider({ children }: { children: React.ReactNode }) {
     return localStorage.getItem('channels-id-sort') === 'true'
   })
   const [sensitiveVisible, setSensitiveVisible] = useState(true)
+  const [capabilityTest, setCapabilityTest] = useState<{
+    open: boolean
+    channel: Channel | null
+  }>({ open: false, channel: null })
+
+  const openCapabilityTest = useCallback((channel: Channel) => {
+    setCapabilityTest({ open: true, channel })
+  }, [])
+  const closeCapabilityTest = useCallback(() => {
+    setCapabilityTest({ open: false, channel: null })
+  }, [])
 
   const queryClient = useQueryClient()
   const refreshChannels = useCallback(async () => {
@@ -105,6 +119,10 @@ export function ChannelsProvider({ children }: { children: React.ReactNode }) {
         setIdSort,
         sensitiveVisible,
         setSensitiveVisible,
+        capabilityTestChannel: capabilityTest.channel,
+        capabilityTestOpen: capabilityTest.open,
+        openCapabilityTest,
+        closeCapabilityTest,
         upstream,
       }}
     >

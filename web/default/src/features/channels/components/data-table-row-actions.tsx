@@ -155,7 +155,7 @@ function channelQuotaProtectionState(
 export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const { t } = useTranslation()
   const channel = row.original
-  const { setOpen, setCurrentRow, upstream } = useChannels()
+  const { setOpen, setCurrentRow, openCapabilityTest, upstream } = useChannels()
   const queryClient = useQueryClient()
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [quotaProtectionConfirmOpen, setQuotaProtectionConfirmOpen] =
@@ -207,8 +207,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   }
 
   const handleCapabilityTest = () => {
-    setCurrentRow(channel)
-    setOpen('capability-test')
+    openCapabilityTest(channel)
   }
 
   const handleQueryBalance = () => {
