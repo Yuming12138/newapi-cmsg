@@ -13,7 +13,9 @@ import (
 	"time"
 )
 
-const candyCapabilityPrompt = "Solve this problem carefully without external tools. A black bag contains candies with three flavors and two shapes. The counts are: apple round 7, apple star 7, peach round 9, peach star 6, watermelon round 8, watermelon star 4. What is the minimum number of candies to draw to guarantee having apple and peach candies of different shapes? End with exactly FINAL_ANSWER: <number> on its own line."
+const pelicanCapabilityPrompt = `Create one self-contained SVG illustration of a pelican riding a bicycle.
+
+Return only the complete <svg>...</svg> document, with no Markdown code fence and no explanation. The SVG must be directly renderable without external files, fonts, images, or network resources. It should visibly contain a pelican, a bicycle with two wheels, legs connected to pedals, and a coastal/background scene. Include at least one declarative animation using SVG animate/animateTransform or CSS keyframes so that the bicycle ride has visible motion. Keep the SVG reasonably compact and make sure it has a viewBox.`
 
 var capabilityModelPreference = []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"}
 
@@ -51,9 +53,30 @@ func selectCapabilityModel(channel *model.Channel, requested string) string {
 	return "gpt-5.6-sol"
 }
 
-func capabilityAnswerMatches(text string) bool {
+const maxCapabilitySVGRunes = 120000
 
-	return strings.HasSuffix(strings.TrimSpace(text), "FINAL_ANSWER: 21")
+// extractCapabilitySVG accepts both a bare SVG response and an SVG wrapped in
+// prose/Markdown. Only the first complete SVG root is returned to the UI.
+func extractCapabilitySVG(text string) string {
+	lower := strings.ToLower(text)
+	start := strings.Index(lower, "<svg")
+	if start < 0 {
+		return ""
+	}
+	endRelative := strings.Index(lower[start:], "</svg>")
+	if endRelative < 0 {
+		return ""
+	}
+	end := start + endRelative + len("</svg>")
+	svg := strings.TrimSpace(text[start:end])
+	if len([]rune(svg)) > maxCapabilitySVGRunes {
+		return ""
+	}
+	return svg
+}
+
+func capabilityAnswerMatches(text string) bool {
+	return extractCapabilitySVG(text) != ""
 }
 
 func capabilityAnswerPreview(text string) string {
@@ -73,10 +96,49 @@ func capabilityFailureReason(ok bool, text string) string {
 	if strings.TrimSpace(text) == "" {
 		return "empty_response"
 	}
-	if !strings.Contains(text, "FINAL_ANSWER:") {
-		return "missing_final_answer_marker"
+	lower := strings.ToLower(text)
+	if !strings.Contains(lower, "<svg") {
+		return "missing_svg"
 	}
-	return "answer_mismatch"
+	if !strings.Contains(lower, "</svg>") {
+		return "incomplete_svg"
+	}
+	return "invalid_svg"
+}
+
+func capabilityResponseText(responseBody []byte) string {
+	for _, path := range []string{"choices.0.message.content", "output_text"} {
+		value := gjson.GetBytes(responseBody, path)
+		if value.Type == gjson.String && strings.TrimSpace(value.String()) != "" {
+			return value.String()
+		}
+		if value.IsArray() {
+			var parts []string
+			for _, item := range value.Array() {
+				if item.Type == gjson.String {
+					parts = append(parts, item.String())
+					continue
+				}
+				if text := item.Get("text").String(); text != "" {
+					parts = append(parts, text)
+				}
+			}
+			if text := strings.Join(parts, ""); strings.TrimSpace(text) != "" {
+				return text
+			}
+		}
+	}
+
+	// Native Responses JSON normally stores text under output[].content[].text.
+	var parts []string
+	for _, output := range gjson.GetBytes(responseBody, "output").Array() {
+		for _, content := range output.Get("content").Array() {
+			if text := content.Get("text").String(); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	return strings.Join(parts, "")
 }
 
 func TestChannelCapability(c *gin.Context) {
@@ -105,11 +167,9 @@ func TestChannelCapability(c *gin.Context) {
 		return
 	}
 	started := time.Now()
-	result := testChannelWithPrompt(ch, uid, name, "", false, candyCapabilityPrompt, effort)
-	text := gjson.GetBytes(result.responseBody, "choices.0.message.content").String()
-	if text == "" {
-		text = gjson.GetBytes(result.responseBody, "output_text").String()
-	}
+	result := testChannelWithPrompt(ch, uid, name, "", false, pelicanCapabilityPrompt, effort)
+	text := capabilityResponseText(result.responseBody)
+	svg := extractCapabilitySVG(text)
 	ok := capabilityAnswerMatches(text)
 	status := "failed"
 	if ok {
@@ -121,5 +181,5 @@ func TestChannelCapability(c *gin.Context) {
 		return
 	}
 	common.SysLog(fmt.Sprintf("capability probe channel=%d requested_model=%s observed_model=%s provider=%s status=%s quality_pass=%t latency_ms=%d", id, name, result.upstreamModel, constant.GetChannelTypeName(ch.Type), status, ok, time.Since(started).Milliseconds()))
-	c.JSON(http.StatusOK, gin.H{"success": true, "channel_id": id, "requested_model": name, "reasoning_effort": effort, "observed_model": result.upstreamModel, "provider": constant.GetChannelTypeName(ch.Type), "channel_name": ch.Name, "quality_pass": ok, "answer_match": ok, "fallback_used": false, "status": status, "failure_reason": capabilityFailureReason(ok, text), "answer_preview": capabilityAnswerPreview(text), "latency_ms": time.Since(started).Milliseconds()})
+	c.JSON(http.StatusOK, gin.H{"success": true, "channel_id": id, "requested_model": name, "reasoning_effort": effort, "observed_model": result.upstreamModel, "provider": constant.GetChannelTypeName(ch.Type), "channel_name": ch.Name, "quality_pass": ok, "answer_match": ok, "fallback_used": false, "status": status, "failure_reason": capabilityFailureReason(ok, text), "answer_preview": capabilityAnswerPreview(text), "svg_detected": svg != "", "svg_preview": svg, "latency_ms": time.Since(started).Milliseconds()})
 }

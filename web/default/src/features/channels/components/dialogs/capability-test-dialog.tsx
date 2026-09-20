@@ -20,6 +20,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { HtmlContent } from '@/components/html-content'
 import {
   Dialog,
   DialogContent,
@@ -51,6 +52,8 @@ type CapabilityTestResult = {
   requested_model?: string
   observed_model?: string
   answer_preview?: string
+  svg_detected?: boolean
+  svg_preview?: string
   reason?: string
   error?: string
   latency_ms?: number
@@ -69,8 +72,9 @@ const CAPABILITY_EFFORT_OPTIONS = [
   { value: 'ultra', label: 'Ultra' },
 ]
 
-const CAPABILITY_PROMPT =
-  'Solve this problem carefully without external tools. A black bag contains candies with three flavors and two shapes. The counts are: apple round 7, apple star 7, peach round 9, peach star 6, watermelon round 8, watermelon star 4. What is the minimum number of candies to draw to guarantee having apple and peach candies of different shapes? End with exactly FINAL_ANSWER: <number> on its own line.'
+const CAPABILITY_PROMPT = `Create one self-contained SVG illustration of a pelican riding a bicycle.
+
+Return only the complete <svg>...</svg> document, with no Markdown code fence and no explanation. The SVG must be directly renderable without external files, fonts, images, or network resources. It should visibly contain a pelican, a bicycle with two wheels, legs connected to pedals, and a coastal/background scene. Include at least one declarative animation using SVG animate/animateTransform or CSS keyframes so that the bicycle ride has visible motion. Keep the SVG reasonably compact and make sure it has a viewBox.`
 
 const PREFERRED_MODELS = [
   'gpt-6-astra',
@@ -187,7 +191,7 @@ export function CapabilityTestDialog({
           <DialogTitle>{t('Test Capability')}</DialogTitle>
           <DialogDescription>
             {t(
-              'Select a text model to test on this channel. Image models are excluded from this gray test.'
+              'Generate a self-contained animated pelican SVG on this channel. The preview is sanitized before it is displayed.'
             )}
           </DialogDescription>
         </DialogHeader>
@@ -240,7 +244,7 @@ export function CapabilityTestDialog({
         )}
 
         {capabilityResult && (
-          <div className='max-h-96 overflow-auto rounded-md border p-3 text-sm'>
+          <div className='max-h-[60vh] overflow-auto rounded-md border p-3 text-sm'>
             <div>
               <b>{t('Result')}:</b> {capabilityResult.status || t('unknown')}
             </div>
@@ -256,12 +260,27 @@ export function CapabilityTestDialog({
               <b>{t('Observed model')}:</b>{' '}
               {capabilityResult.observed_model || t('unknown')}
             </div>
-            <pre className='mt-2 whitespace-pre-wrap text-xs'>
-              {capabilityResult.answer_preview ||
-                capabilityResult.reason ||
-                capabilityResult.error ||
-                t('No response content')}
-            </pre>
+            {capabilityResult.svg_preview && (
+              <div className='mt-3 rounded-md border bg-muted/20 p-2'>
+                <div className='mb-2 font-medium'>{t('SVG preview')}</div>
+                <div className='min-h-48 max-h-[28rem] overflow-auto rounded-sm bg-background p-2'>
+                  <HtmlContent
+                    content={capabilityResult.svg_preview}
+                    variant='isolated'
+                    className='min-h-44 w-full'
+                  />
+                </div>
+              </div>
+            )}
+            <div className='mt-3'>
+              <div className='mb-1 font-medium'>{t('Raw model response')}</div>
+              <pre className='max-h-80 overflow-auto whitespace-pre-wrap text-xs'>
+                {capabilityResult.answer_preview ||
+                  capabilityResult.reason ||
+                  capabilityResult.error ||
+                  t('No response content')}
+              </pre>
+            </div>
           </div>
         )}
 
