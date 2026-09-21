@@ -2395,20 +2395,15 @@ def apply_reset_credit_grace(
         quota_refilled = reset_credit_quota_refilled(config, previous_snapshot, current_snapshot)
         before_expiry = expires_ts > 0 and now_ts < expires_ts
         auto_succeeded = bool(account_state.get("auto_reset_succeeded_at"))
-        previous_available = number(account_state.get("baseline_available_count"))
-        current_available = number(account.get("reset_credits_available"))
-        credit_count_decreased = (
-            previous_available is not None
-            and current_available is not None
-            and current_available < previous_available
-        )
-        reset_confirmed = (
-            quota_refilled
-            or (before_expiry and not same_credit and credit_count_decreased)
-        )
-        if same_credit and not reset_confirmed and (
-            now_ts < expires_ts
-            or (auto_succeeded and now_ts <= expires_ts + confirmation_timeout)
+        # A reset-credit count decrease only proves that a credit disappeared;
+        # it does not prove that Home actually refilled the account quota. In
+        # particular, treating it as a manual reset here can close the pending
+        # credit before the ten-minute auto-consume window is reached.
+        reset_confirmed = quota_refilled
+        awaiting_auto_confirmation = auto_succeeded and now_ts <= expires_ts + confirmation_timeout
+        if not reset_confirmed and (
+            (same_credit and now_ts < expires_ts)
+            or awaiting_auto_confirmation
         ):
             continue
         if not reset_confirmed and before_expiry:
@@ -2448,14 +2443,36 @@ def apply_reset_credit_grace(
     active_accounts: list[dict[str, Any]] = []
 
     for account_key, account in current_accounts.items():
+        account_state = account_states.get(account_key)
         credit = credit_overrides.get(account_key) or reset_credit_current(account)
+        if credit is None and isinstance(account_state, dict):
+            # Keep a consumed credit in an awaiting-confirmation state even if
+            # Home temporarily omits it after the consume request. This lets
+            # the next probe confirm the refill instead of losing the state at
+            # the expiry boundary.
+            pending_status = account_state.get("status") in {
+                "active",
+                "consume_error",
+                "awaiting_confirmation",
+            }
+            pending_expires_ts = int(number(account_state.get("expires_ts")) or 0)
+            pending_until = pending_expires_ts
+            if account_state.get("auto_reset_succeeded_at"):
+                pending_until += confirmation_timeout
+            if pending_status and pending_expires_ts > 0 and now_ts < pending_until:
+                credit = {
+                    "credit_key": str(account_state.get("credit_key") or ""),
+                    "expires_at": account_state.get("expires_at"),
+                    "expires_ts": pending_expires_ts,
+                    "reset_type": account_state.get("reset_type"),
+                    "id_suffix": "",
+                }
         if credit is None:
             continue
         seconds_until_expiry = int(credit["expires_ts"]) - now_ts
         if seconds_until_expiry <= 0 or seconds_until_expiry > release_before:
             continue
 
-        account_state = account_states.get(account_key)
         if not isinstance(account_state, dict) or account_state.get("credit_key") != credit["credit_key"]:
             account_state = {
                 "status": "active",

@@ -2171,6 +2171,44 @@ class ResetCreditGraceTest(unittest.TestCase):
         consume.assert_called_once()
         self.assertEqual("quota_near_exhaustion", guarded["reset_credit_grace"]["accounts"][0]["auto_reset_reason"])
 
+    def test_credit_count_decrease_without_refill_keeps_pending_credit_for_auto_consume(self) -> None:
+        state: dict = {}
+        initial = reset_credit_result(
+            self.now,
+            12 * 60 * 60,
+            remaining_percent=40.0,
+            available_count=3,
+        )
+        guard.apply_reset_credit_grace(self.config, self.env, initial, state, self.now)
+
+        disappeared = reset_credit_result(
+            self.now,
+            12 * 60 * 60,
+            remaining_percent=40.0,
+            available_count=2,
+            include_credit=False,
+        )
+        with mock.patch.object(guard, "consume_reset_credit", return_value={"status": "ok"}) as consume:
+            pending = guard.apply_reset_credit_grace(
+                self.config, self.env, disappeared, state, self.now + 60, allow_consume=True
+            )
+            self.assertEqual(0, pending["reset_credit_grace"]["confirmed_reset_count"])
+            self.assertTrue(pending["reset_credit_grace"]["active"])
+            consume.assert_not_called()
+
+            due = guard.apply_reset_credit_grace(
+                self.config,
+                self.env,
+                disappeared,
+                state,
+                self.now + 12 * 60 * 60 - 600,
+                allow_consume=True,
+            )
+
+        consume.assert_called_once()
+        self.assertEqual("credit_expiring", due["reset_credit_grace"]["accounts"][0]["auto_reset_reason"])
+        self.assertEqual(0, due["reset_credit_grace"]["confirmed_reset_count"])
+
     def test_consume_capability_defaults_to_off(self) -> None:
         state: dict = {}
         result = reset_credit_result(self.now, 5 * 60)
