@@ -1,6 +1,7 @@
 package billing_setting
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -22,13 +23,83 @@ type BillingSetting struct {
 	BillingExpr map[string]string `json:"billing_expr"`
 }
 
+// Official GPT-5.6/GPT-6 Codex pricing uses a higher rate once the complete
+// input context exceeds 272K tokens. Keep these defaults in the source tree so
+// a fresh deployment and an existing deployment with an older/empty option
+// value use the same billing contract. An explicitly stored per-model mode can
+// still override the default (for example, setting a model back to "ratio").
+var defaultBillingMode = map[string]string{
+	"gpt-6-luna":    BillingModeTieredExpr,
+	"gpt-6-sol":     BillingModeTieredExpr,
+	"gpt-5.6-luna":  BillingModeTieredExpr,
+	"gpt-5.6-terra": BillingModeTieredExpr,
+	"gpt-5.6-sol":   BillingModeTieredExpr,
+}
+
+var defaultBillingExpr = map[string]string{
+	"gpt-6-luna":    `len <= 272000 ? tier("standard", p * 0.10 + cr * 0.01 + cc * 0.125 + c * 0.50) : tier("long_context", p * 0.20 + cr * 0.02 + cc * 0.25 + c * 0.75)`,
+	"gpt-6-sol":     `len <= 272000 ? tier("standard", p * 2.00 + cr * 0.20 + cc * 2.50 + c * 10.00) : tier("long_context", p * 4.00 + cr * 0.40 + cc * 5.00 + c * 15.00)`,
+	"gpt-5.6-luna":  `len <= 272000 ? tier("standard", p * 0.20 + cr * 0.02 + cc * 0.25 + c * 1.20) : tier("long_context", p * 0.40 + cr * 0.04 + cc * 0.50 + c * 1.80)`,
+	"gpt-5.6-terra": `len <= 272000 ? tier("standard", p * 2.00 + cr * 0.20 + cc * 2.50 + c * 12.00) : tier("long_context", p * 4.00 + cr * 0.40 + cc * 5.00 + c * 18.00)`,
+	"gpt-5.6-sol":   `len <= 272000 ? tier("standard", p * 4.00 + cr * 0.40 + cc * 5.00 + c * 20.00) : tier("long_context", p * 8.00 + cr * 0.80 + cc * 10.00 + c * 30.00)`,
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
 var billingSetting = BillingSetting{
-	BillingMode: make(map[string]string),
-	BillingExpr: make(map[string]string),
+	BillingMode: cloneStringMap(defaultBillingMode),
+	BillingExpr: cloneStringMap(defaultBillingExpr),
 }
 
 func init() {
 	config.GlobalConfig.Register("billing_setting", &billingSetting)
+}
+
+// UpdateConfigFromMap merges persisted settings over the built-in official
+// pricing defaults. Older databases may contain an empty or pre-GPT-6 map;
+// replacing the defaults wholesale would silently revert the new models to
+// ratio billing after restart.
+func (s *BillingSetting) UpdateConfigFromMap(configMap map[string]string) error {
+	if raw, ok := configMap[BillingModeField]; ok {
+		incoming := make(map[string]string)
+		if err := json.Unmarshal([]byte(raw), &incoming); err != nil {
+			return fmt.Errorf("decode %s: %w", BillingModeField, err)
+		}
+		merged := cloneStringMap(defaultBillingMode)
+		for key, value := range incoming {
+			merged[key] = value
+		}
+		s.BillingMode = merged
+	}
+	if raw, ok := configMap[BillingExprField]; ok {
+		incoming := make(map[string]string)
+		if err := json.Unmarshal([]byte(raw), &incoming); err != nil {
+			return fmt.Errorf("decode %s: %w", BillingExprField, err)
+		}
+		merged := cloneStringMap(defaultBillingExpr)
+		for key, value := range incoming {
+			merged[key] = value
+		}
+		s.BillingExpr = merged
+	}
+	return nil
+}
+
+// DefaultBillingExpressions returns a defensive copy for tests and migration
+// tooling without exposing the mutable live configuration map.
+func DefaultBillingExpressions() map[string]string {
+	return cloneStringMap(defaultBillingExpr)
+}
+
+// DefaultBillingModes returns a defensive copy of the built-in tier selection.
+func DefaultBillingModes() map[string]string {
+	return cloneStringMap(defaultBillingMode)
 }
 
 // ---------------------------------------------------------------------------

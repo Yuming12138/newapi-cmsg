@@ -15,6 +15,8 @@ func TestGPT56AndGPT6OfficialPricingRatios(t *testing.T) {
 		completionRatio  float64
 	}{
 		{model: "gpt-6-astra", inputPrice: 10, cachedInputPrice: 1, outputPrice: 50, modelRatio: 5.0, completionRatio: 5},
+		{model: "gpt-6-sol", inputPrice: 2, cachedInputPrice: 0.2, outputPrice: 10, modelRatio: 1.0, completionRatio: 5},
+		{model: "gpt-6-luna", inputPrice: 0.1, cachedInputPrice: 0.01, outputPrice: 0.5, modelRatio: 0.05, completionRatio: 5},
 		{model: "gpt-5.6-sol", inputPrice: 4, cachedInputPrice: 0.4, outputPrice: 20, modelRatio: 2.0, completionRatio: 5},
 		{model: "gpt-5.6-terra", inputPrice: 2, cachedInputPrice: 0.2, outputPrice: 12, modelRatio: 1.0, completionRatio: 6},
 		{model: "gpt-5.6-luna", inputPrice: 0.2, cachedInputPrice: 0.02, outputPrice: 1.2, modelRatio: 0.1, completionRatio: 6},

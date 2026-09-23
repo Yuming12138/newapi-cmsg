@@ -1484,6 +1484,37 @@
       }
     },
     {
+      "id": "gpt-6-luna",
+      "object": "model",
+      "created": 1790035200,
+      "owned_by": "openai",
+      "type": "openai",
+      "display_name": "GPT 6.0 Luna",
+      "version": "gpt-6.0",
+      "description": "GPT-6 Luna Codex model.",
+      "context_length": 1050000,
+      "max_completion_tokens": 128000,
+      "supported_parameters": [
+        "tools"
+      ],
+      "thinking": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      "supportedInputModalities": [
+        "text",
+        "image"
+      ],
+      "supportedOutputModalities": [
+        "text"
+      ]
+    },
+    {
       "id": "codex-auto-review",
       "object": "model",
       "created": 1776902400,
@@ -1509,6 +1540,8 @@
   ],
   "codex-team": [
 {"id":"gpt-6-astra","object":"model","created":1783616400,"owned_by":"openai","type":"openai","display_name":"GPT 6.0 Astra","version":"gpt-6.0","description":"GPT-6 Astra is our most intelligent model yet, with state-of-the-art performance in computer use, browsing, software engineering, science, and professional work.","context_length":272000,"max_completion_tokens":128000,"supported_parameters":["tools"],"thinking":{"levels":["low","medium","high","xhigh","max"]},"supportedInputModalities":["text","image"],"supportedOutputModalities":["text"]},
+{"id":"gpt-6-sol","object":"model","created":1790035200,"owned_by":"openai","type":"openai","display_name":"GPT 6.0 Sol","version":"gpt-6.0","description":"GPT-6 Sol Codex model.","context_length":1050000,"max_completion_tokens":128000,"supported_parameters":["tools"],"thinking":{"levels":["low","medium","high","xhigh","max"]},"supportedInputModalities":["text","image"],"supportedOutputModalities":["text"]},
+{"id":"gpt-6-luna","object":"model","created":1790035200,"owned_by":"openai","type":"openai","display_name":"GPT 6.0 Luna","version":"gpt-6.0","description":"GPT-6 Luna Codex model.","context_length":1050000,"max_completion_tokens":128000,"supported_parameters":["tools"],"thinking":{"levels":["low","medium","high","xhigh","max"]},"supportedInputModalities":["text","image"],"supportedOutputModalities":["text"]},
     {
       "id": "gpt-5.4",
       "object": "model",
@@ -1682,6 +1715,8 @@
   ],
   "codex-plus": [
 {"id":"gpt-6-astra","object":"model","created":1783616400,"owned_by":"openai","type":"openai","display_name":"GPT 6.0 Astra","version":"gpt-6.0","description":"GPT-6 Astra is our most intelligent model yet, with state-of-the-art performance in computer use, browsing, software engineering, science, and professional work.","context_length":272000,"max_completion_tokens":128000,"supported_parameters":["tools"],"thinking":{"levels":["low","medium","high","xhigh","max"]},"supportedInputModalities":["text","image"],"supportedOutputModalities":["text"]},
+{"id":"gpt-6-sol","object":"model","created":1790035200,"owned_by":"openai","type":"openai","display_name":"GPT 6.0 Sol","version":"gpt-6.0","description":"GPT-6 Sol Codex model.","context_length":1050000,"max_completion_tokens":128000,"supported_parameters":["tools"],"thinking":{"levels":["low","medium","high","xhigh","max"]},"supportedInputModalities":["text","image"],"supportedOutputModalities":["text"]},
+{"id":"gpt-6-luna","object":"model","created":1790035200,"owned_by":"openai","type":"openai","display_name":"GPT 6.0 Luna","version":"gpt-6.0","description":"GPT-6 Luna Codex model.","context_length":1050000,"max_completion_tokens":128000,"supported_parameters":["tools"],"thinking":{"levels":["low","medium","high","xhigh","max"]},"supportedInputModalities":["text","image"],"supportedOutputModalities":["text"]},
     {
       "id": "gpt-5.3-codex-spark",
       "object": "model",
@@ -1878,6 +1913,8 @@
   ],
   "codex-pro": [
 {"id":"gpt-6-astra","object":"model","created":1783616400,"owned_by":"openai","type":"openai","display_name":"GPT 6.0 Astra","version":"gpt-6.0","description":"GPT-6 Astra is our most intelligent model yet, with state-of-the-art performance in computer use, browsing, software engineering, science, and professional work.","context_length":272000,"max_completion_tokens":128000,"supported_parameters":["tools"],"thinking":{"levels":["low","medium","high","xhigh","max"]},"supportedInputModalities":["text","image"],"supportedOutputModalities":["text"]},
+{"id":"gpt-6-sol","object":"model","created":1790035200,"owned_by":"openai","type":"openai","display_name":"GPT 6.0 Sol","version":"gpt-6.0","description":"GPT-6 Sol Codex model.","context_length":1050000,"max_completion_tokens":128000,"supported_parameters":["tools"],"thinking":{"levels":["low","medium","high","xhigh","max"]},"supportedInputModalities":["text","image"],"supportedOutputModalities":["text"]},
+{"id":"gpt-6-luna","object":"model","created":1790035200,"owned_by":"openai","type":"openai","display_name":"GPT 6.0 Luna","version":"gpt-6.0","description":"GPT-6 Luna Codex model.","context_length":1050000,"max_completion_tokens":128000,"supported_parameters":["tools"],"thinking":{"levels":["low","medium","high","xhigh","max"]},"supportedInputModalities":["text","image"],"supportedOutputModalities":["text"]},
     {
       "id": "gpt-5.3-codex-spark",
       "object": "model",

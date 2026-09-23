@@ -293,6 +293,11 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billing
 		}
 	}
 
+	modelRatio, _, _ := ratio_setting.GetModelRatio(billingModelName)
+	completionRatio := ratio_setting.GetCompletionRatio(billingModelName)
+	cacheRatio, _ := ratio_setting.GetCacheRatio(billingModelName)
+	cacheCreationRatio, _ := ratio_setting.GetCreateCacheRatio(billingModelName)
+
 	exprHash := billingexpr.ExprHashString(exprStr)
 	snapshot := &billingexpr.BillingSnapshot{
 		BillingMode:               billing_setting.BillingModeTieredExpr,
@@ -312,9 +317,15 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, billing
 	info.BillingRequestInput = &requestInput
 
 	priceData := types.PriceData{
-		FreeModel:         freeModel,
-		GroupRatioInfo:    groupRatioInfo,
-		QuotaToPreConsume: preConsumedQuota,
+		FreeModel:            freeModel,
+		ModelRatio:           modelRatio,
+		CompletionRatio:      completionRatio,
+		CacheRatio:           cacheRatio,
+		CacheCreationRatio:   cacheCreationRatio,
+		CacheCreation5mRatio: cacheCreationRatio,
+		CacheCreation1hRatio: cacheCreationRatio * claudeCacheCreation1hMultiplier,
+		GroupRatioInfo:       groupRatioInfo,
+		QuotaToPreConsume:    preConsumedQuota,
 	}
 
 	if common.DebugEnabled {

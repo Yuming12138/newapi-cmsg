@@ -16,6 +16,36 @@ func TestModelOverrideHeadersFromEmbeddedModels(t *testing.T) {
 	}
 }
 
+func TestCodexTierModelsIncludeGPT6SolAndLuna(t *testing.T) {
+	for tier, models := range map[string][]*ModelInfo{
+		"team": GetCodexTeamModels(),
+		"plus": GetCodexPlusModels(),
+		"pro":  GetCodexProModels(),
+	} {
+		seen := make(map[string]bool, len(models))
+		for _, model := range models {
+			if model != nil {
+				seen[model.ID] = true
+			}
+		}
+		for _, want := range []string{"gpt-6-sol", "gpt-6-luna"} {
+			if !seen[want] {
+				t.Errorf("codex-%s is missing %s", tier, want)
+			}
+		}
+	}
+
+	seenFree := make(map[string]bool)
+	for _, model := range GetCodexFreeModels() {
+		if model != nil {
+			seenFree[model.ID] = true
+		}
+	}
+	if !seenFree["gpt-6-luna"] {
+		t.Error("codex-free is missing gpt-6-luna")
+	}
+}
+
 func TestWithXAIBuiltinsIncludesVideoPreviewModel(t *testing.T) {
 	models := WithXAIBuiltins(nil)
 
