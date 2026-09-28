@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState } from 'react'
 import * as z from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Plus, Edit, Trash2, Save } from 'lucide-react'
+import { Plus, Edit, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import dayjs from '@/lib/dayjs'
@@ -146,7 +146,6 @@ export function AnnouncementsSection({
   const updateOption = useUpdateOption()
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [isEnabled, setIsEnabled] = useState(enabled)
-  const [hasChanges, setHasChanges] = useState(false)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [showDialog, setShowDialog] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
@@ -186,14 +185,13 @@ export function AnnouncementsSection({
 
   const handleToggleEnabled = async (checked: boolean) => {
     try {
-      await updateOption.mutateAsync({
+      const result = await updateOption.mutateAsync({
         key: 'console_setting.announcements_enabled',
         value: checked,
       })
-      setIsEnabled(checked)
-      toast.success(t('Setting saved'))
+      if (result.success) setIsEnabled(checked)
     } catch {
-      toast.error(t('Failed to update setting'))
+      // The mutation displays the server or network error.
     }
   }
 
@@ -234,56 +232,56 @@ export function AnnouncementsSection({
     setShowDeleteDialog(true)
   }
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
+    let nextAnnouncements: Announcement[]
     if (deleteTarget === 'single' && editingAnnouncement) {
-      setAnnouncements((prev) =>
-        prev.filter((item) => item.id !== editingAnnouncement.id)
+      nextAnnouncements = announcements.filter(
+        (item) => item.id !== editingAnnouncement.id
       )
-      setHasChanges(true)
-      toast.success(t('Announcement deleted. Click "Save Settings" to apply.'))
     } else if (deleteTarget === 'batch') {
-      setAnnouncements((prev) =>
-        prev.filter((item) => !selectedIds.includes(item.id))
+      nextAnnouncements = announcements.filter(
+        (item) => !selectedIds.includes(item.id)
       )
-      setSelectedIds([])
-      setHasChanges(true)
-      toast.success(
-        t('{{count}} announcements deleted. Click "Save Settings" to apply.', {
-          count: selectedIds.length,
-        })
-      )
+    } else {
+      return
     }
-    setShowDeleteDialog(false)
-    setEditingAnnouncement(null)
+
+    try {
+      const result = await updateOption.mutateAsync({
+        key: 'console_setting.announcements',
+        value: JSON.stringify(nextAnnouncements),
+      })
+      if (!result.success) return
+      setAnnouncements(nextAnnouncements)
+      setSelectedIds([])
+      setShowDeleteDialog(false)
+      setEditingAnnouncement(null)
+    } catch {
+      // Keep the confirmation open so the user can retry.
+    }
   }
 
-  const handleSubmitForm = (values: AnnouncementFormValues) => {
+  const handleSubmitForm = async (values: AnnouncementFormValues) => {
+    let nextAnnouncements: Announcement[]
     if (editingAnnouncement) {
-      setAnnouncements((prev) =>
-        prev.map((item) =>
-          item.id === editingAnnouncement.id ? { ...item, ...values } : item
-        )
+      nextAnnouncements = announcements.map((item) =>
+        item.id === editingAnnouncement.id ? { ...item, ...values } : item
       )
-      toast.success(t('Announcement updated. Click "Save Settings" to apply.'))
     } else {
       const newId = Math.max(...announcements.map((item) => item.id), 0) + 1
-      setAnnouncements((prev) => [...prev, { id: newId, ...values }])
-      toast.success(t('Announcement added. Click "Save Settings" to apply.'))
+      nextAnnouncements = [...announcements, { id: newId, ...values }]
     }
-    setHasChanges(true)
-    setShowDialog(false)
-  }
 
-  const handleSaveAll = async () => {
     try {
-      await updateOption.mutateAsync({
+      const result = await updateOption.mutateAsync({
         key: 'console_setting.announcements',
-        value: JSON.stringify(announcements),
+        value: JSON.stringify(nextAnnouncements),
       })
-      setHasChanges(false)
-      toast.success(t('Announcements saved successfully'))
+      if (!result.success) return
+      setAnnouncements(nextAnnouncements)
+      setShowDialog(false)
     } catch {
-      toast.error(t('Failed to save announcements'))
+      // Keep the form open so the user can correct or retry the announcement.
     }
   }
 
@@ -326,7 +324,11 @@ export function AnnouncementsSection({
       <div className='space-y-4'>
         <div className='flex flex-wrap items-center justify-between gap-2'>
           <div className='flex flex-wrap items-center gap-2'>
-            <Button onClick={handleAdd} size='sm'>
+            <Button
+              onClick={handleAdd}
+              size='sm'
+              disabled={updateOption.isPending}
+            >
               <Plus className='mr-2 h-4 w-4' />
               {t('Add Announcement')}
             </Button>
@@ -334,27 +336,22 @@ export function AnnouncementsSection({
               onClick={handleBatchDelete}
               size='sm'
               variant='destructive'
-              disabled={selectedIds.length === 0}
+              disabled={selectedIds.length === 0 || updateOption.isPending}
             >
               <Trash2 className='mr-2 h-4 w-4' />
               {t('Delete (')}
               {selectedIds.length})
-            </Button>
-            <Button
-              onClick={handleSaveAll}
-              size='sm'
-              variant='secondary'
-              disabled={!hasChanges || updateOption.isPending}
-            >
-              <Save className='mr-2 h-4 w-4' />
-              {updateOption.isPending ? t('Saving...') : t('Save Settings')}
             </Button>
           </div>
           <div className='flex items-center gap-2'>
             <span className='text-muted-foreground text-sm'>
               {t('Enabled')}
             </span>
-            <Switch checked={isEnabled} onCheckedChange={handleToggleEnabled} />
+            <Switch
+              checked={isEnabled}
+              onCheckedChange={handleToggleEnabled}
+              disabled={updateOption.isPending}
+            />
           </div>
         </div>
 
@@ -443,6 +440,7 @@ export function AnnouncementsSection({
                           onClick={() => handleEdit(announcement)}
                           size='sm'
                           variant='ghost'
+                          disabled={updateOption.isPending}
                         >
                           <Edit className='h-4 w-4' />
                         </Button>
@@ -450,6 +448,7 @@ export function AnnouncementsSection({
                           onClick={() => handleDelete(announcement)}
                           size='sm'
                           variant='ghost'
+                          disabled={updateOption.isPending}
                         >
                           <Trash2 className='h-4 w-4' />
                         </Button>
@@ -463,7 +462,12 @@ export function AnnouncementsSection({
         </div>
       </div>
 
-      <Dialog open={showDialog} onOpenChange={setShowDialog}>
+      <Dialog
+        open={showDialog}
+        onOpenChange={(open) => {
+          if (!updateOption.isPending) setShowDialog(open)
+        }}
+      >
         <DialogContent className='max-w-2xl'>
           <DialogHeader>
             <DialogTitle>
@@ -601,11 +605,16 @@ export function AnnouncementsSection({
                   type='button'
                   variant='outline'
                   onClick={() => setShowDialog(false)}
+                  disabled={updateOption.isPending}
                 >
                   {t('Cancel')}
                 </Button>
-                <Button type='submit'>
-                  {editingAnnouncement ? t('Update') : t('Add')}
+                <Button type='submit' disabled={updateOption.isPending}>
+                  {updateOption.isPending
+                    ? t('Saving...')
+                    : editingAnnouncement
+                      ? t('Update')
+                      : t('Add')}
                 </Button>
               </DialogFooter>
             </form>
@@ -613,7 +622,12 @@ export function AnnouncementsSection({
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+      <AlertDialog
+        open={showDeleteDialog}
+        onOpenChange={(open) => {
+          if (!updateOption.isPending) setShowDeleteDialog(open)
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t('Are you sure?')}</AlertDialogTitle>
@@ -624,9 +638,14 @@ export function AnnouncementsSection({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete}>
-              {t('Delete')}
+            <AlertDialogCancel disabled={updateOption.isPending}>
+              {t('Cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void confirmDelete()}
+              disabled={updateOption.isPending}
+            >
+              {updateOption.isPending ? t('Saving...') : t('Delete')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
