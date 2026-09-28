@@ -77,6 +77,7 @@ import {
   handleUpdateTagField,
   handleUpdateChannelBalance,
   isTagAggregateRow,
+  isOfficialDeepSeekChannel,
   isOfficialMoonshotChannel,
   channelsQueryKeys,
   createChannelFieldUpdateScheduler,
@@ -1812,13 +1813,15 @@ function BalanceCell({ channel }: { channel: Channel }) {
   const [resetCreditAccount, setResetCreditAccount] =
     useState<CliproxyCPAQuotaAccount | null>(null)
   const currencyLabel = getCurrencyLabel()
-  const isMoonshot = isOfficialMoonshotChannel(channel)
-  const tokenSuffix = !isMoonshot && currencyLabel === 'Tokens' ? ' Tokens' : ''
+  const isCnyProvider =
+    isOfficialMoonshotChannel(channel) || isOfficialDeepSeekChannel(channel)
+  const tokenSuffix =
+    !isCnyProvider && currencyLabel === 'Tokens' ? ' Tokens' : ''
   const withSuffix = (value: string) =>
     tokenSuffix && value !== '-' ? `${value}${tokenSuffix}` : value
 
   const usedDisplay = withSuffix(
-    isMoonshot ? formatQuotaInCNY(usedQuota) : formatQuotaValue(usedQuota)
+    isCnyProvider ? formatQuotaInCNY(usedQuota) : formatQuotaValue(usedQuota)
   )
   const storedRemainingDisplay = withSuffix(formatBalance(balance, channel))
   const maskedUsedLabel = `${t('Used:')} ${SENSITIVE_MASK}`

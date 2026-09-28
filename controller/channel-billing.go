@@ -381,6 +381,18 @@ func isMoonshotBalanceBaseURL(rawURL string) bool {
 	return strings.EqualFold(parsed.Hostname(), "api.moonshot.cn")
 }
 
+func isDeepSeekBalanceBaseURL(rawURL string) bool {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return false
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	return strings.EqualFold(parsed.Hostname(), "api.deepseek.com")
+}
+
 func updateChannelUsageBalance(channel *model.Channel) (float64, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(channel.GetBaseURL()), "/")
 	if baseURL == "" {
@@ -641,7 +653,8 @@ func UpdateChannelBalance(c *gin.Context) {
 	}
 	providerBalance := balance
 	providerCurrency := "USD"
-	if isMoonshotBalanceBaseURL(channel.GetBaseURL()) {
+	if isMoonshotBalanceBaseURL(channel.GetBaseURL()) ||
+		(channel.Type == constant.ChannelTypeDeepSeek && isDeepSeekBalanceBaseURL(channel.GetBaseURL())) {
 		providerBalance = decimal.NewFromFloat(balance).Mul(decimal.NewFromFloat(ratio_setting.USD2RMB)).InexactFloat64()
 		providerCurrency = "CNY"
 	}

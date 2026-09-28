@@ -320,13 +320,27 @@ export function isOfficialMoonshotChannel(
   }
 }
 
+export function isOfficialDeepSeekChannel(
+  channel: Pick<Channel, 'base_url'>
+): boolean {
+  try {
+    return (
+      new URL(channel.base_url || '').hostname.toLowerCase() ===
+      'api.deepseek.com'
+    )
+  } catch {
+    return false
+  }
+}
+
 export function formatBalance(
   balance: number | null | undefined,
   channel?: Pick<Channel, 'base_url'>
 ): string {
   if (balance == null || Number.isNaN(balance)) return '-'
   const format =
-    channel && isOfficialMoonshotChannel(channel)
+    channel &&
+    (isOfficialMoonshotChannel(channel) || isOfficialDeepSeekChannel(channel))
       ? formatCNYFromUSD
       : formatCurrencyFromUSD
   return format(balance, {

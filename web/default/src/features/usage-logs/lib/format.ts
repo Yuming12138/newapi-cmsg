@@ -125,7 +125,11 @@ function usageLogCnyRate(
     return other.billing_currency_rate
   }
   const upstreamModel = other?.upstream_model_name || log.model_name
-  if (!upstreamModel.toLowerCase().startsWith('kimi-')) return null
+  const model = upstreamModel.toLowerCase()
+  const isDeepSeekLog =
+    log.group.toLowerCase().startsWith('deepseek') &&
+    model.startsWith('deepseek-')
+  if (!model.startsWith('kimi-') && !isDeepSeekLog) return null
   return useSystemConfigStore.getState().config.currency.cnyPricingRate
 }
 

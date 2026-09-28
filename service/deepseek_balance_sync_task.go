@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 )
@@ -170,10 +171,13 @@ func UpdateDeepSeekBalance(channel *model.Channel) (float64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
 
-	balance, err := fetchDeepSeekBalance(ctx, client, channel, cfg.BalanceURL)
+	providerBalanceCNY, err := fetchDeepSeekBalance(ctx, client, channel, cfg.BalanceURL)
 	if err != nil {
 		return 0, err
 	}
+	// Channel balances share a USD-equivalent storage unit. Convert the
+	// provider's CNY amount once; the API and UI convert it back for display.
+	balance := providerBalanceCNY / ratio_setting.USD2RMB
 
 	channel.UpdateBalance(balance)
 	channel.Balance = balance
@@ -304,7 +308,7 @@ func runDeepSeekBalanceSyncOnce() {
 		}
 
 		updatedCount++
-		logger.LogInfo(ctx, fmt.Sprintf("deepseek balance sync: channel_id=%d name=%s balance_cny=%.2f", channel.Id, channel.Name, balance))
+		logger.LogInfo(ctx, fmt.Sprintf("deepseek balance sync: channel_id=%d name=%s balance_cny=%.2f", channel.Id, channel.Name, balance*ratio_setting.USD2RMB))
 	}
 
 	if common.DebugEnabled {

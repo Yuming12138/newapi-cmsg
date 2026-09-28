@@ -24,3 +24,21 @@ func TestIsMoonshotBalanceBaseURL(t *testing.T) {
 		})
 	}
 }
+
+func TestIsDeepSeekBalanceBaseURL(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want bool
+	}{
+		{"https://api.deepseek.com", true},
+		{"HTTPS://API.DEEPSEEK.COM/v1", true},
+		{"https://api.deepseek.com.example.com", false},
+		{"https://deepseek.com", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := isDeepSeekBalanceBaseURL(tt.raw); got != tt.want {
+			t.Errorf("isDeepSeekBalanceBaseURL(%q) = %v, want %v", tt.raw, got, tt.want)
+		}
+	}
+}
