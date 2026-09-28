@@ -100,27 +100,32 @@ var defaultModelRatio = map[string]float64{
 	"gpt-4.5-preview":                  37.5,
 	"gpt-4.5-preview-2025-02-27":       37.5,
 	// OpenAI GPT-5.2+ Standard pricing. Model ratio is input price / ($2 per 1M tokens).
-	"gpt-5.5":               2.5,   // $5 / 1M input tokens; long-context input is $10 / 1M.
-	"gpt-5.5-pro":           15.0,  // $30 / 1M input tokens; long-context input is $60 / 1M.
-	"gpt-6-astra":           5.0,   // $10 / 1M input tokens.
-	"gpt-6-sol":             1.0,   // $2 / 1M input tokens; long-context input is $4 / 1M.
-	"gpt-6-luna":            0.05,  // $0.10 / 1M input tokens; long-context input is $0.20 / 1M.
-	"gpt-5.6-sol":           2.0,   // $4 / 1M input tokens.
-	"gpt-5.6-terra":         1.0,   // $2 / 1M input tokens.
-	"gpt-5.6-luna":          0.1,   // $0.20 / 1M input tokens.
-	"gpt-5.4":               1.25,  // $2.5 / 1M input tokens
-	"gpt-5.4-mini":          0.375, // $0.75 / 1M input tokens
-	"gpt-5.4-nano":          0.1,   // $0.20 / 1M input tokens
-	"gpt-5.4-pro":           15.0,  // $30 / 1M input tokens; long-context input is $60 / 1M.
-	"gpt-5.3-codex":         0.875, // $1.75 / 1M input tokens
-	"gpt-5.2":               0.875, // $1.75 / 1M input tokens
-	"gpt-5":                 0.625,
-	"gpt-5-2025-08-07":      0.625,
-	"gpt-5-chat-latest":     0.625,
-	"gpt-5-mini":            0.125,
-	"gpt-5-mini-2025-08-07": 0.125,
-	"gpt-5-nano":            0.025,
-	"gpt-5-nano-2025-08-07": 0.025,
+	"gpt-5.5":       2.5,  // $5 / 1M input tokens; long-context input is $10 / 1M.
+	"gpt-5.5-pro":   15.0, // $30 / 1M input tokens; long-context input is $60 / 1M.
+	"gpt-6-astra":   5.0,  // $10 / 1M input tokens.
+	"gpt-6-sol":     1.0,  // $2 / 1M input tokens; long-context input is $4 / 1M.
+	"gpt-6-luna":    0.05, // $0.10 / 1M input tokens; long-context input is $0.20 / 1M.
+	"gpt-5.6-sol":   2.0,  // $4 / 1M input tokens.
+	"gpt-5.6-terra": 1.0,  // $2 / 1M input tokens.
+	"gpt-5.6-luna":  0.1,  // $0.20 / 1M input tokens.
+	// Kimi official CNY/M input prices converted to the site's $2/M ratio base.
+	"kimi-k3":                  20.0 / (2.0 * USD2RMB),
+	"kimi-k2.6":                6.5 / (2.0 * USD2RMB),
+	"kimi-k2.7-code":           6.5 / (2.0 * USD2RMB),
+	"kimi-k2.7-code-highspeed": 13.0 / (2.0 * USD2RMB),
+	"gpt-5.4":                  1.25,  // $2.5 / 1M input tokens
+	"gpt-5.4-mini":             0.375, // $0.75 / 1M input tokens
+	"gpt-5.4-nano":             0.1,   // $0.20 / 1M input tokens
+	"gpt-5.4-pro":              15.0,  // $30 / 1M input tokens; long-context input is $60 / 1M.
+	"gpt-5.3-codex":            0.875, // $1.75 / 1M input tokens
+	"gpt-5.2":                  0.875, // $1.75 / 1M input tokens
+	"gpt-5":                    0.625,
+	"gpt-5-2025-08-07":         0.625,
+	"gpt-5-chat-latest":        0.625,
+	"gpt-5-mini":               0.125,
+	"gpt-5-mini-2025-08-07":    0.125,
+	"gpt-5-nano":               0.025,
+	"gpt-5-nano-2025-08-07":    0.025,
 	//"gpt-3.5-turbo-0301":           0.75, //deprecated
 	"gpt-3.5-turbo":          0.25,
 	"gpt-3.5-turbo-0613":     0.75,
@@ -366,17 +371,21 @@ var modelRatioMap = types.NewRWMap[string, float64]()
 var completionRatioMap = types.NewRWMap[string, float64]()
 
 var defaultCompletionRatio = map[string]float64{
-	"gpt-4-gizmo-*":     2,
-	"gpt-4o-gizmo-*":    3,
-	"gpt-4-all":         2,
-	"gpt-image-1":       8,
-	"gpt-image-1.5":     2,
-	"gpt-image-2":       2,
-	"gpt-6-astra":       5,
-	"gpt-6-sol":         5,
-	"gpt-6-luna":        5,
-	"deepseek-v4-flash": 2,
-	"deepseek-v4-pro":   2,
+	"gpt-4-gizmo-*":            2,
+	"gpt-4o-gizmo-*":           3,
+	"gpt-4-all":                2,
+	"gpt-image-1":              8,
+	"gpt-image-1.5":            2,
+	"gpt-image-2":              2,
+	"gpt-6-astra":              5,
+	"gpt-6-sol":                5,
+	"gpt-6-luna":               5,
+	"deepseek-v4-flash":        2,
+	"deepseek-v4-pro":          2,
+	"kimi-k3":                  5,
+	"kimi-k2.6":                27.0 / 6.5,
+	"kimi-k2.7-code":           27.0 / 6.5,
+	"kimi-k2.7-code-highspeed": 54.0 / 13.0,
 }
 
 // InitRatioSettings initializes all model related settings maps

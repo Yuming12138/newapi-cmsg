@@ -85,6 +85,37 @@ func TestDeepSeekV4OfficialPricingRatios(t *testing.T) {
 	}
 }
 
+func TestKimiOfficialPricingRatios(t *testing.T) {
+	tests := []struct {
+		model            string
+		inputPrice       float64
+		cachedInputPrice float64
+		outputPrice      float64
+	}{
+		{model: "kimi-k3", inputPrice: 20, cachedInputPrice: 2, outputPrice: 100},
+		{model: "kimi-k2.6", inputPrice: 6.5, cachedInputPrice: 1.1, outputPrice: 27},
+		{model: "kimi-k2.7-code", inputPrice: 6.5, cachedInputPrice: 1.3, outputPrice: 27},
+		{model: "kimi-k2.7-code-highspeed", inputPrice: 13, cachedInputPrice: 2.6, outputPrice: 54},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			modelRatio := defaultModelRatio[tt.model]
+			completionRatio := defaultCompletionRatio[tt.model]
+			cacheRatio := defaultCacheRatio[tt.model]
+			if got := modelRatio * 2 * USD2RMB; math.Abs(got-tt.inputPrice) > 1e-9 {
+				t.Fatalf("input price = %v, want %v", got, tt.inputPrice)
+			}
+			if got := modelRatio * cacheRatio * 2 * USD2RMB; math.Abs(got-tt.cachedInputPrice) > 1e-9 {
+				t.Fatalf("cached input price = %v, want %v", got, tt.cachedInputPrice)
+			}
+			if got := modelRatio * completionRatio * 2 * USD2RMB; math.Abs(got-tt.outputPrice) > 1e-9 {
+				t.Fatalf("output price = %v, want %v", got, tt.outputPrice)
+			}
+		})
+	}
+}
+
 func TestGPTImage15UsesImage2Ratios(t *testing.T) {
 	if got := defaultModelRatio["gpt-image-1.5"]; got != defaultModelRatio["gpt-image-2"] {
 		t.Fatalf("model ratio = %v, want %v", got, defaultModelRatio["gpt-image-2"])

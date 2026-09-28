@@ -16,6 +16,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGetCacheCreation1hRatio(t *testing.T) {
+	if got := getCacheCreation1hRatio("kimi-k3", 1); got != 2 {
+		t.Fatalf("Kimi K3 1-hour cache ratio = %v, want 2", got)
+	}
+	want := claudeCacheCreation1hMultiplier
+	if got := getCacheCreation1hRatio("claude-sonnet-4-20250514", 1); got != want {
+		t.Fatalf("Claude 1-hour cache ratio = %v, want %v", got, want)
+	}
+}
+
 func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

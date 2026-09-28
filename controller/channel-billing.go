@@ -368,6 +368,18 @@ func isUsageBalanceBaseURL(rawURL string) bool {
 		strings.HasSuffix(host, ".qflowapi.com")
 }
 
+func isMoonshotBalanceBaseURL(rawURL string) bool {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return false
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	return strings.EqualFold(parsed.Hostname(), "api.moonshot.cn")
+}
+
 func updateChannelUsageBalance(channel *model.Channel) (float64, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(channel.GetBaseURL()), "/")
 	if baseURL == "" {
@@ -532,6 +544,10 @@ func updateChannelBalance(channel *model.Channel) (float64, error) {
 	}
 	if isUsageBalanceBaseURL(channel.GetBaseURL()) {
 		return updateChannelUsageBalance(channel)
+	}
+	// OpenAI-compatible Moonshot channels still expose the official Kimi balance API.
+	if isMoonshotBalanceBaseURL(channel.GetBaseURL()) {
+		return updateChannelMoonshotBalance(channel)
 	}
 	switch channel.Type {
 	case constant.ChannelTypeOpenAI:
