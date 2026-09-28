@@ -14,6 +14,7 @@ import (
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -439,6 +440,10 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if strings.HasPrefix(summary.BillingModelName, "mimo-") {
 		other["mimo_free"] = true
 		other["mimo_tokenplan"] = true
+	}
+	if strings.HasPrefix(strings.ToLower(summary.BillingModelName), "kimi-") {
+		other["billing_currency"] = "CNY"
+		other["billing_currency_rate"] = ratio_setting.USD2RMB
 	}
 	if adminRejectReason != "" {
 		other["reject_reason"] = adminRejectReason

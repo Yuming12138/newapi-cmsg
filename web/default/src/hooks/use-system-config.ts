@@ -44,6 +44,7 @@ interface StatusApiResponse {
     quota_display_type?: CurrencyDisplayType
     quota_per_unit?: number
     usd_exchange_rate?: number
+    cny_pricing_rate?: number
     custom_currency_symbol?: string
     custom_currency_exchange_rate?: number
   }
@@ -81,6 +82,10 @@ export function mapStatusDataToConfig(
     usdExchangeRate: toNumber(
       data.usd_exchange_rate,
       DEFAULT_CURRENCY_CONFIG.usdExchangeRate
+    ),
+    cnyPricingRate: toNumber(
+      data.cny_pricing_rate,
+      DEFAULT_CURRENCY_CONFIG.cnyPricingRate
     ),
     customCurrencySymbol:
       data.custom_currency_symbol?.trim() ||

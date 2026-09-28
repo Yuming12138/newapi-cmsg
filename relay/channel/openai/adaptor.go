@@ -39,8 +39,9 @@ import (
 )
 
 type Adaptor struct {
-	ChannelType    int
-	ResponseFormat string
+	ChannelType         int
+	ResponseFormat      string
+	moonshotCustomTools map[string]struct{}
 }
 
 func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
@@ -616,6 +617,15 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if err != nil {
 		return nil, fmt.Errorf("normalize ASXS Grok Responses tools: %w", err)
 	}
+	if info != nil && isOfficialMoonshotURL(info.ChannelBaseUrl) {
+		request, a.moonshotCustomTools, err = normalizeMoonshotResponsesRequest(request)
+		if err != nil {
+			return nil, fmt.Errorf("normalize Moonshot Responses request: %w", err)
+		}
+		if request.Reasoning != nil {
+			info.ReasoningEffort = request.Reasoning.Effort
+		}
+	}
 	return request, nil
 }
 
@@ -692,6 +702,11 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
+	if info != nil && info.RelayMode == relayconstant.RelayModeResponses && len(a.moonshotCustomTools) > 0 {
+		if rewriteErr := rewriteMoonshotResponses(resp, info.IsStream, a.moonshotCustomTools); rewriteErr != nil {
+			return nil, types.NewOpenAIError(rewriteErr, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+		}
+	}
 	switch info.RelayMode {
 	case relayconstant.RelayModeRealtime:
 		err, usage = OpenaiRealtimeHandler(c, info)

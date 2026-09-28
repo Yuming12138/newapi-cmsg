@@ -32,7 +32,6 @@ import {
   MessagesSquare,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import {
   formatLogQuota,
   formatTimestampToDate,
@@ -57,6 +56,8 @@ import {
   isViolationFeeLog,
   getFirstResponseTimeColor,
   getResponseTimeColor,
+  formatUsageLogPrice,
+  formatUsageLogQuota,
 } from '../../lib/format'
 import {
   getLogTypeConfig,
@@ -148,7 +149,8 @@ function BillingBreakdown(props: {
 
   const rows: Array<{ label: string; value: string }> = []
   const priceOpts = { digitsLarge: 4, digitsSmall: 6, abbreviate: false }
-  const fmtPrice = (usd: number) => formatBillingCurrencyFromUSD(usd, priceOpts)
+  const fmtPrice = (usd: number) =>
+    formatUsageLogPrice(log, usd, priceOpts, other)
   const baseInputUSD = other.model_ratio != null ? other.model_ratio * 2.0 : 0
 
   if (isTieredExpr) {
@@ -310,7 +312,7 @@ function BillingBreakdown(props: {
 
   rows.push({
     label: t('Total Cost'),
-    value: formatLogQuota(log.quota),
+    value: formatUsageLogQuota(log, log.quota, other),
   })
 
   if (rows.length === 0) return null
@@ -750,7 +752,11 @@ export function DetailsDialog(props: DetailsDialogProps) {
             )}
             <DetailRow
               label={t('Fee Amount')}
-              value={formatLogQuota(other.fee_quota ?? props.log.quota)}
+              value={formatUsageLogQuota(
+                props.log,
+                other.fee_quota ?? props.log.quota,
+                other
+              )}
               mono
             />
           </DetailSection>

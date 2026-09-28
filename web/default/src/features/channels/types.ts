@@ -195,7 +195,8 @@ export interface ChannelBalanceResponse {
   success: boolean
   message?: string
   balance?: number
-  currency?: string
+  provider_balance?: number
+  provider_currency?: string
 }
 
 export interface FetchModelsResponse {
@@ -298,7 +299,12 @@ export interface MultiKeyStatusResponse {
 // ============================================================================
 
 export type ChannelSortBy =
-  'id' | 'name' | 'priority' | 'balance' | 'response_time' | 'test_time'
+  | 'id'
+  | 'name'
+  | 'priority'
+  | 'balance'
+  | 'response_time'
+  | 'test_time'
 
 export type ChannelSortOrder = 'asc' | 'desc'
 

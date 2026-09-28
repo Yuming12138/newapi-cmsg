@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import type { QueryClient } from '@tanstack/react-query'
 import i18next from 'i18next'
 import { toast } from 'sonner'
-import { formatCurrencyFromUSD } from '@/lib/currency'
+import { formatCNYFromUSD, formatCurrencyFromUSD } from '@/lib/currency'
 import {
   copyChannel,
   deleteChannel,
@@ -363,7 +363,9 @@ export async function handleUpdateChannelBalance(
       const balance = response.balance
       toast.success(
         i18next.t('Balance updated: {{balance}}', {
-          balance: formatCurrencyFromUSD(balance, {
+          balance: (response.provider_currency === 'CNY'
+            ? formatCNYFromUSD
+            : formatCurrencyFromUSD)(balance, {
             digitsLarge: 2,
             digitsSmall: 4,
             abbreviate: false,

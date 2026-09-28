@@ -154,6 +154,10 @@ function getConfig(): CurrencyConfig {
       currency?.usdExchangeRate && currency.usdExchangeRate > 0
         ? currency.usdExchangeRate
         : DEFAULT_CURRENCY_CONFIG.usdExchangeRate,
+    cnyPricingRate:
+      currency?.cnyPricingRate && currency.cnyPricingRate > 0
+        ? currency.cnyPricingRate
+        : DEFAULT_CURRENCY_CONFIG.cnyPricingRate,
     customCurrencyExchangeRate:
       currency?.customCurrencyExchangeRate &&
       currency.customCurrencyExchangeRate > 0
@@ -372,6 +376,33 @@ export function formatCurrencyFromUSD(
       : amountUSD * meta.exchangeRate
 
   return formatCurrencyValue(value, merged, meta)
+}
+
+/** Display a CNY-priced provider amount while the shared quota remains in USD units. */
+export function formatCNYFromUSD(
+  amountUSD: number | null | undefined,
+  options?: CurrencyFormatOptions,
+  rate?: number
+): string {
+  if (amountUSD == null || Number.isNaN(amountUSD)) return '-'
+  const config = getConfig()
+  const cnyRate = rate && rate > 0 ? rate : config.cnyPricingRate
+  return formatCurrencyValue(amountUSD * cnyRate, mergeOptions(options), {
+    kind: 'currency',
+    symbol: '¥',
+    currencyCode: 'CNY',
+    exchangeRate: cnyRate,
+  })
+}
+
+/** Convert raw quota units to the CNY amount for a CNY-priced provider. */
+export function formatQuotaInCNY(
+  quota: number | null | undefined,
+  options?: CurrencyFormatOptions,
+  rate?: number
+): string {
+  if (quota == null || Number.isNaN(quota)) return '-'
+  return formatCNYFromUSD(quota / getConfig().quotaPerUnit, options, rate)
 }
 
 /**

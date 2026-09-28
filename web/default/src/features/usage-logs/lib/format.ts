@@ -16,6 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useSystemConfigStore } from '@/stores/system-config-store'
+import {
+  formatBillingCurrencyFromUSD,
+  formatCNYFromUSD,
+  formatQuotaInCNY,
+  type CurrencyFormatOptions,
+} from '@/lib/currency'
+import { formatLogQuota } from '@/lib/format'
 import type { StatusBadgeProps } from '@/components/status-badge'
 import {
   BILLING_PRICING_VARS,
@@ -103,6 +111,46 @@ export function parseLogOther(other: string): LogOtherData | null {
     console.error('Failed to parse log other field:', error)
     return null
   }
+}
+
+function usageLogCnyRate(
+  log: UsageLog,
+  other: LogOtherData | null
+): number | null {
+  if (
+    other?.billing_currency === 'CNY' &&
+    other.billing_currency_rate != null &&
+    other.billing_currency_rate > 0
+  ) {
+    return other.billing_currency_rate
+  }
+  const upstreamModel = other?.upstream_model_name || log.model_name
+  if (!upstreamModel.toLowerCase().startsWith('kimi-')) return null
+  return useSystemConfigStore.getState().config.currency.cnyPricingRate
+}
+
+export function formatUsageLogQuota(
+  log: UsageLog,
+  quota: number = log.quota,
+  other: LogOtherData | null = parseLogOther(log.other)
+): string {
+  const rate = usageLogCnyRate(log, other)
+  const options = { digitsLarge: 4, digitsSmall: 6, abbreviate: false }
+  return rate != null
+    ? formatQuotaInCNY(quota, options, rate)
+    : formatLogQuota(quota)
+}
+
+export function formatUsageLogPrice(
+  log: UsageLog,
+  priceUSD: number,
+  options?: CurrencyFormatOptions,
+  other: LogOtherData | null = parseLogOther(log.other)
+): string {
+  const rate = usageLogCnyRate(log, other)
+  return rate != null
+    ? formatCNYFromUSD(priceUSD, options, rate)
+    : formatBillingCurrencyFromUSD(priceUSD, options)
 }
 
 /**

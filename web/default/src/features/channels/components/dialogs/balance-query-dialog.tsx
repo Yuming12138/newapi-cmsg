@@ -21,7 +21,6 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, RefreshCw, DollarSign } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { formatCurrencyFromUSD } from '@/lib/currency'
 import { formatTimestampToDate } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import {
@@ -33,7 +32,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { getCodexUsage, updateChannelBalance } from '../../api'
-import { channelsQueryKeys } from '../../lib'
+import { channelsQueryKeys, formatBalance } from '../../lib'
 import { useChannels } from '../channels-provider'
 import {
   CodexUsageDialog,
@@ -132,13 +131,6 @@ export function BalanceQueryDialog({
     onOpenChange(false)
   }
 
-  const formatBalance = (bal: number) =>
-    formatCurrencyFromUSD(bal, {
-      digitsLarge: 2,
-      digitsSmall: 4,
-      abbreviate: false,
-    })
-
   const formatDate = (timestamp: number) => {
     if (!timestamp) return 'Never'
     return formatTimestampToDate(timestamp)
@@ -179,8 +171,8 @@ export function BalanceQueryDialog({
             </div>
             <div className='text-2xl font-bold'>
               {balance !== null
-                ? formatBalance(balance)
-                : formatBalance(currentRow.balance)}
+                ? formatBalance(balance, currentRow)
+                : formatBalance(currentRow.balance, currentRow)}
             </div>
             <div className='text-muted-foreground mt-2 text-xs'>
               {t('Last updated:')}{' '}

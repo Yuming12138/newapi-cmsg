@@ -18,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/shopspring/decimal"
@@ -522,7 +523,7 @@ func updateChannelMoonshotBalance(channel *model.Channel) (float64, error) {
 		return 0, fmt.Errorf("failed to update moonshot balance, status: %v, code: %d, scode: %s", response.Status, response.Code, response.Scode)
 	}
 	availableBalanceCny := response.Data.AvailableBalance
-	availableBalanceUsd := decimal.NewFromFloat(availableBalanceCny).Div(decimal.NewFromFloat(operation_setting.Price)).InexactFloat64()
+	availableBalanceUsd := decimal.NewFromFloat(availableBalanceCny).Div(decimal.NewFromFloat(ratio_setting.USD2RMB)).InexactFloat64()
 	channel.UpdateBalance(availableBalanceUsd)
 	return availableBalanceUsd, nil
 }
@@ -638,10 +639,18 @@ func UpdateChannelBalance(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	providerBalance := balance
+	providerCurrency := "USD"
+	if isMoonshotBalanceBaseURL(channel.GetBaseURL()) {
+		providerBalance = decimal.NewFromFloat(balance).Mul(decimal.NewFromFloat(ratio_setting.USD2RMB)).InexactFloat64()
+		providerCurrency = "CNY"
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"balance": balance,
+		"success":           true,
+		"message":           "",
+		"balance":           balance, // shared internal USD-equivalent unit
+		"provider_balance":  providerBalance,
+		"provider_currency": providerCurrency,
 	})
 }
 

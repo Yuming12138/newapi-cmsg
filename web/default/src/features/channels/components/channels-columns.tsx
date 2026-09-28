@@ -31,7 +31,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { getCurrencyLabel } from '@/lib/currency'
+import { formatQuotaInCNY, getCurrencyLabel } from '@/lib/currency'
 import {
   formatTimestampToDate,
   formatQuota as formatQuotaValue,
@@ -77,6 +77,7 @@ import {
   handleUpdateTagField,
   handleUpdateChannelBalance,
   isTagAggregateRow,
+  isOfficialMoonshotChannel,
   channelsQueryKeys,
   createChannelFieldUpdateScheduler,
   type TagRow,
@@ -443,9 +444,7 @@ function parseCliproxyCPAQuotaAccounts(
     .filter(isCliproxyCPAAccountActive)
 }
 
-function isCliproxyCPAAccountActive(
-  account: CliproxyCPAQuotaAccount
-): boolean {
+function isCliproxyCPAAccountActive(account: CliproxyCPAQuotaAccount): boolean {
   return (
     account.disabled !== true &&
     account.state !== 'manual_disabled' &&
@@ -504,7 +503,9 @@ function parseCliproxyCPAQuotaMeta(
       if (!accountsSourcePresent) return bucket
       const bucketAccounts = accounts.filter((account) => {
         if (account.bucket && account.bucket === bucket.key) return true
-        return account.bucket == null && account.canExhaust === bucket.canExhaust
+        return (
+          account.bucket == null && account.canExhaust === bucket.canExhaust
+        )
       })
       return {
         ...bucket,
@@ -609,15 +610,15 @@ function parseCliproxyCPAQuotaMeta(
         numberValue(presentation?.total_balance_units),
       accountCount: accountsSourcePresent
         ? accounts.length
-        : numberValue(health.account_count) ??
+        : (numberValue(health.account_count) ??
           numberValue(presentation?.account_count) ??
-          null,
+          null),
       availableAccountCount: accountsSourcePresent
         ? accounts.filter((account) => isCliproxyCPAAccountAvailable(account))
             .length
-        : numberValue(health.available_account_count) ??
+        : (numberValue(health.available_account_count) ??
           numberValue(presentation?.available_account_count) ??
-          null,
+          null),
       updatedAt,
       fiveHour,
       weekly,
@@ -1811,12 +1812,15 @@ function BalanceCell({ channel }: { channel: Channel }) {
   const [resetCreditAccount, setResetCreditAccount] =
     useState<CliproxyCPAQuotaAccount | null>(null)
   const currencyLabel = getCurrencyLabel()
-  const tokenSuffix = currencyLabel === 'Tokens' ? ' Tokens' : ''
+  const isMoonshot = isOfficialMoonshotChannel(channel)
+  const tokenSuffix = !isMoonshot && currencyLabel === 'Tokens' ? ' Tokens' : ''
   const withSuffix = (value: string) =>
     tokenSuffix && value !== '-' ? `${value}${tokenSuffix}` : value
 
-  const usedDisplay = withSuffix(formatQuotaValue(usedQuota))
-  const storedRemainingDisplay = withSuffix(formatBalance(balance))
+  const usedDisplay = withSuffix(
+    isMoonshot ? formatQuotaInCNY(usedQuota) : formatQuotaValue(usedQuota)
+  )
+  const storedRemainingDisplay = withSuffix(formatBalance(balance, channel))
   const maskedUsedLabel = `${t('Used:')} ${SENSITIVE_MASK}`
   const maskedRemainingLabel = `${t('Remaining:')} ${SENSITIVE_MASK}`
   const cliproxyCPAQuota = parseCliproxyCPAQuotaMeta(channel.other_info)

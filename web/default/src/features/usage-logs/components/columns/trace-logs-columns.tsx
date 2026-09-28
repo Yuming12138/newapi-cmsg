@@ -30,7 +30,6 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
-  formatLogQuota,
   formatTimestampToDate,
   formatTokens,
   formatUseTime,
@@ -50,7 +49,11 @@ import {
   type CliproxyCPADispatchAuditRecord,
 } from '@/features/channels/api'
 import type { UsageLog } from '../../data/schema'
-import { formatModelName, parseLogOther } from '../../lib/format'
+import {
+  formatModelName,
+  formatUsageLogQuota,
+  parseLogOther,
+} from '../../lib/format'
 import {
   getLogTypeConfig,
   isDisplayableLogType,
@@ -166,8 +169,7 @@ function CPATraceInline({
   const enabled = isCliproxyCPATraceLog(log)
   const { data, isFetching, error } = useQuery({
     queryKey: ['cliproxy-cpa-dispatch-audit', log.channel, log.request_id],
-    queryFn: () =>
-      getCliproxyCPADispatchAudits(log.channel, 1, log.request_id),
+    queryFn: () => getCliproxyCPADispatchAudits(log.channel, 1, log.request_id),
     enabled,
     staleTime: 5_000,
     refetchOnWindowFocus: false,
@@ -181,7 +183,9 @@ function CPATraceInline({
         (candidate) => candidate.schedulable === false
       )
     : []
-  const errorLabel = audit ? cpaAuditErrorLabel(audit.error ?? selected?.error) : null
+  const errorLabel = audit
+    ? cpaAuditErrorLabel(audit.error ?? selected?.error)
+    : null
 
   if (isFetching && !audit) {
     return (
@@ -237,7 +241,7 @@ function CPATraceInline({
         <TooltipContent
           side='bottom'
           align='start'
-          className='block w-[380px] max-w-[calc(100vw-2rem)] space-y-2 whitespace-normal p-3 text-left text-xs leading-relaxed'
+          className='block w-[380px] max-w-[calc(100vw-2rem)] space-y-2 p-3 text-left text-xs leading-relaxed whitespace-normal'
         >
           <div className='flex items-center justify-between gap-3'>
             <span className='font-semibold'>CPA Trace</span>
@@ -247,9 +251,13 @@ function CPATraceInline({
           </div>
           <div className='grid grid-cols-[72px_minmax(0,1fr)] gap-x-2 gap-y-1'>
             <span className='text-background/70'>request_id</span>
-            <span className='break-all font-mono'>{audit.request_id || '-'}</span>
+            <span className='font-mono break-all'>
+              {audit.request_id || '-'}
+            </span>
             <span className='text-background/70'>模型</span>
-            <span className='break-words'>{audit.model || selected?.model || '-'}</span>
+            <span className='break-words'>
+              {audit.model || selected?.model || '-'}
+            </span>
             <span className='text-background/70'>选中</span>
             <span className='break-words'>{selectedLabel}</span>
             <span className='text-background/70'>耗时</span>
@@ -284,7 +292,7 @@ function CPATraceInline({
             )}
           </div>
           {errorLabel && (
-            <div className='text-destructive break-words border-t pt-2'>
+            <div className='text-destructive border-t pt-2 break-words'>
               {errorLabel}
             </div>
           )}
@@ -650,7 +658,7 @@ export function useTraceLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
               </span>
             )}
             <span className='text-muted-foreground/80 font-mono text-[11px]'>
-              {formatLogQuota(log.quota || 0)}
+              {formatUsageLogQuota(log, log.quota || 0, other)}
             </span>
           </div>
         )

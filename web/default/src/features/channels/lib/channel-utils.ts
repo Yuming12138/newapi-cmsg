@@ -16,7 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { formatCurrencyFromUSD, formatQuotaWithCurrency } from '@/lib/currency'
+import {
+  formatCNYFromUSD,
+  formatCurrencyFromUSD,
+  formatQuotaWithCurrency,
+} from '@/lib/currency'
 import dayjs from '@/lib/dayjs'
 import { formatTimestampToDate } from '@/lib/format'
 import {
@@ -303,9 +307,29 @@ export function validateChannelSettings(settings: string): boolean {
 /**
  * Format balance with currency symbol
  */
-export function formatBalance(balance: number | null | undefined): string {
+export function isOfficialMoonshotChannel(
+  channel: Pick<Channel, 'base_url'>
+): boolean {
+  try {
+    return (
+      new URL(channel.base_url || '').hostname.toLowerCase() ===
+      'api.moonshot.cn'
+    )
+  } catch {
+    return false
+  }
+}
+
+export function formatBalance(
+  balance: number | null | undefined,
+  channel?: Pick<Channel, 'base_url'>
+): string {
   if (balance == null || Number.isNaN(balance)) return '-'
-  return formatCurrencyFromUSD(balance, {
+  const format =
+    channel && isOfficialMoonshotChannel(channel)
+      ? formatCNYFromUSD
+      : formatCurrencyFromUSD
+  return format(balance, {
     digitsLarge: 2,
     digitsSmall: 4,
     abbreviate: false,

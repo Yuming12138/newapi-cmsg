@@ -31,6 +31,8 @@ export interface CurrencyConfig {
   quotaPerUnit: number
   /** Exchange rate from USD to the configured local currency */
   usdExchangeRate: number
+  /** Rate used to normalize CNY-priced model costs into system USD quota */
+  cnyPricingRate: number
   /** Custom currency symbol configured by the admin (used when type === CUSTOM) */
   customCurrencySymbol: string
   /** Exchange rate from USD to the custom currency (used when type === CUSTOM) */
@@ -51,6 +53,7 @@ export const DEFAULT_CURRENCY_CONFIG: CurrencyConfig = {
   quotaDisplayType: 'USD',
   quotaPerUnit: 500000,
   usdExchangeRate: 1,
+  cnyPricingRate: 7.3,
   customCurrencySymbol: '¤',
   customCurrencyExchangeRate: 1,
 }

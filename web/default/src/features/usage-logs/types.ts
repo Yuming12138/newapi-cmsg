@@ -144,6 +144,8 @@ export interface LogOtherData {
   cache_creation_ratio_1h?: number
   is_model_mapped?: boolean
   upstream_model_name?: string
+  billing_currency?: string
+  billing_currency_rate?: number
   audio_ratio?: number
   audio_completion_ratio?: number
   frt?: number
@@ -156,12 +158,12 @@ export interface LogOtherData {
   reasoning_effort?: string
   image?: boolean
   image_ratio?: number
-	image_result?: boolean
-	image_requested_size?: string
-	image_actual_size?: string
-	image_upstream_reported_size?: string
-	image_size_mismatch?: boolean
-	image_billing_basis?: string
+  image_result?: boolean
+  image_requested_size?: string
+  image_actual_size?: string
+  image_upstream_reported_size?: string
+  image_size_mismatch?: boolean
+  image_billing_basis?: string
   image_output?: number
   web_search?: boolean
   web_search_call_count?: number
