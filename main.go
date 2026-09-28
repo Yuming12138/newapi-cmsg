@@ -125,6 +125,7 @@ func main() {
 
 	// DeepSeek balance sync task
 	service.StartDeepSeekBalanceSyncTask()
+	service.StartKimiBalanceSyncTask()
 
 	// Channel budget guard task
 	service.StartChannelBudgetGuardTask()

@@ -43,6 +43,21 @@ export interface ChannelQuotaDataItem {
   quota?: number
 }
 
+export interface ProviderAccountBalance {
+  balance: number | null
+  currency: 'CNY'
+  updated_at: number
+  channel_count: number
+  account_count: number
+  synced_account_count: number
+  partial: boolean
+}
+
+export interface DashboardProviderBalances {
+  kimi: ProviderAccountBalance
+  deepseek: ProviderAccountBalance
+}
+
 // ============================================================================
 // Uptime Monitoring Types
 // ============================================================================

@@ -20,6 +20,7 @@ import { api } from '@/lib/api'
 import type {
   ChannelQuotaDataItem,
   CodexRadarOverview,
+  DashboardProviderBalances,
   QuotaDataItem,
   UptimeGroupResult,
 } from './types'
@@ -93,4 +94,15 @@ export async function getCodexRadarOverview() {
     data: CodexRadarOverview
   }>('/api/codex-radar/overview')
   return res.data.data
+}
+
+export async function getDashboardProviderBalances(): Promise<DashboardProviderBalances> {
+  const response = await api.get<{
+    success: boolean
+    data: DashboardProviderBalances
+  }>('/api/dashboard/provider-balances')
+  if (!response.data.success) {
+    throw new Error('Unable to load provider balances')
+  }
+  return response.data.data
 }

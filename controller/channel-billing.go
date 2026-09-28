@@ -507,37 +507,7 @@ func updateChannelOpenRouterBalance(channel *model.Channel) (float64, error) {
 }
 
 func updateChannelMoonshotBalance(channel *model.Channel) (float64, error) {
-	url := "https://api.moonshot.cn/v1/users/me/balance"
-	body, err := GetResponseBody("GET", url, channel, GetAuthHeader(channel.Key))
-	if err != nil {
-		return 0, err
-	}
-
-	type MoonshotBalanceData struct {
-		AvailableBalance float64 `json:"available_balance"`
-		VoucherBalance   float64 `json:"voucher_balance"`
-		CashBalance      float64 `json:"cash_balance"`
-	}
-
-	type MoonshotBalanceResponse struct {
-		Code   int                 `json:"code"`
-		Data   MoonshotBalanceData `json:"data"`
-		Scode  string              `json:"scode"`
-		Status bool                `json:"status"`
-	}
-
-	response := MoonshotBalanceResponse{}
-	err = json.Unmarshal(body, &response)
-	if err != nil {
-		return 0, err
-	}
-	if !response.Status || response.Code != 0 {
-		return 0, fmt.Errorf("failed to update moonshot balance, status: %v, code: %d, scode: %s", response.Status, response.Code, response.Scode)
-	}
-	availableBalanceCny := response.Data.AvailableBalance
-	availableBalanceUsd := decimal.NewFromFloat(availableBalanceCny).Div(decimal.NewFromFloat(ratio_setting.USD2RMB)).InexactFloat64()
-	channel.UpdateBalance(availableBalanceUsd)
-	return availableBalanceUsd, nil
+	return service.UpdateKimiBalance(channel)
 }
 
 func updateChannelBalance(channel *model.Channel) (float64, error) {
