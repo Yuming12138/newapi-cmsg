@@ -283,10 +283,12 @@ var defaultModelRatio = map[string]float64{
 	"deepseek-chat":          0.27 / 2,
 	"deepseek-coder":         0.27 / 2,
 	"deepseek-reasoner":      0.55 / 2, // 0.55 / 1k tokens
-	// DeepSeek V4 public API pricing in CNY per 1M tokens:
-	// V4-Flash-0731 input ¥1/output ¥2; V4-Pro-0813 input ¥3/output ¥6.
-	"deepseek-v4-flash": 1.0 / 1000 * RMB,
-	"deepseek-v4-pro":   3.0 / 1000 * RMB,
+	// DeepSeek off-peak CNY/1M input prices. Peak/holiday prices are selected
+	// by the billing expressions; these ratios are the off-peak display fallback.
+	"deepseek-flash":      1.0 / (2.0 * USD2RMB),
+	"deepseek-v4-flash":   1.0 / (2.0 * USD2RMB), // legacy alias for deepseek-flash
+	"deepseek-v4-pro":     4.5 / (2.0 * USD2RMB),
+	"deepseek-v4-pro[1m]": 4.5 / (2.0 * USD2RMB), // channel compatibility alias
 	// Perplexity online 模型对搜索额外收费，有需要应自行调整，此处不计入搜索费用
 	"llama-3-sonar-small-32k-chat":   0.2 / 1000 * USD,
 	"llama-3-sonar-small-32k-online": 0.2 / 1000 * USD,
@@ -380,8 +382,10 @@ var defaultCompletionRatio = map[string]float64{
 	"gpt-6-astra":              5,
 	"gpt-6-sol":                5,
 	"gpt-6-luna":               5,
-	"deepseek-v4-flash":        2,
-	"deepseek-v4-pro":          2,
+	"deepseek-flash":           4,
+	"deepseek-v4-flash":        4,
+	"deepseek-v4-pro":          3,
+	"deepseek-v4-pro[1m]":      3,
 	"kimi-k3":                  5,
 	"kimi-k2.6":                27.0 / 6.5,
 	"kimi-k2.7-code":           27.0 / 6.5,

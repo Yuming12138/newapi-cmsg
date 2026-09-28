@@ -3,11 +3,13 @@ package billingexpr
 import (
 	"crypto/sha256"
 	"fmt"
+	"time"
 )
 
 type RequestInput struct {
 	Headers map[string]string
 	Body    []byte
+	At      time.Time // frozen when the request starts for time-dependent pricing
 }
 
 // TokenParams holds all token dimensions passed into an Expr evaluation.

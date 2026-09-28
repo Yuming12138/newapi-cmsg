@@ -23,25 +23,39 @@ type BillingSetting struct {
 	BillingExpr map[string]string `json:"billing_expr"`
 }
 
+// DeepSeek publishes CNY prices; billing expressions use the site's USD/1M
+// coefficients, converted here with the configured 7.3 CNY/USD quota rate.
+// Source: https://api-docs.deepseek.com/zh-cn/quick_start/pricing
+const deepSeekFlashExpr = `deepseekPeak() ? tier("peak", p * 0.2739726027397260 + cr * 0.0054794520547945 + c * 1.0958904109589040) : tier("offpeak", p * 0.1369863013698630 + cr * 0.0027397260273973 + c * 0.5479452054794520)`
+const deepSeekProExpr = `deepseekPeak() ? tier("peak", p * 1.2328767123287672 + cr * 0.0410958904109589 + c * 3.6986301369863015) : tier("offpeak", p * 0.6164383561643836 + cr * 0.0205479452054795 + c * 1.8493150684931507)`
+
 // Official GPT-5.6/GPT-6 Codex pricing uses a higher rate once the complete
 // input context exceeds 272K tokens. Keep these defaults in the source tree so
 // a fresh deployment and an existing deployment with an older/empty option
 // value use the same billing contract. An explicitly stored per-model mode can
 // still override the default (for example, setting a model back to "ratio").
 var defaultBillingMode = map[string]string{
-	"gpt-6-luna":    BillingModeTieredExpr,
-	"gpt-6-sol":     BillingModeTieredExpr,
-	"gpt-5.6-luna":  BillingModeTieredExpr,
-	"gpt-5.6-terra": BillingModeTieredExpr,
-	"gpt-5.6-sol":   BillingModeTieredExpr,
+	"gpt-6-luna":          BillingModeTieredExpr,
+	"gpt-6-sol":           BillingModeTieredExpr,
+	"gpt-5.6-luna":        BillingModeTieredExpr,
+	"gpt-5.6-terra":       BillingModeTieredExpr,
+	"gpt-5.6-sol":         BillingModeTieredExpr,
+	"deepseek-flash":      BillingModeTieredExpr,
+	"deepseek-v4-flash":   BillingModeTieredExpr,
+	"deepseek-v4-pro":     BillingModeTieredExpr,
+	"deepseek-v4-pro[1m]": BillingModeTieredExpr,
 }
 
 var defaultBillingExpr = map[string]string{
-	"gpt-6-luna":    `len <= 272000 ? tier("standard", p * 0.10 + cr * 0.01 + cc * 0.125 + c * 0.50) : tier("long_context", p * 0.20 + cr * 0.02 + cc * 0.25 + c * 0.75)`,
-	"gpt-6-sol":     `len <= 272000 ? tier("standard", p * 2.00 + cr * 0.20 + cc * 2.50 + c * 10.00) : tier("long_context", p * 4.00 + cr * 0.40 + cc * 5.00 + c * 15.00)`,
-	"gpt-5.6-luna":  `len <= 272000 ? tier("standard", p * 0.20 + cr * 0.02 + cc * 0.25 + c * 1.20) : tier("long_context", p * 0.40 + cr * 0.04 + cc * 0.50 + c * 1.80)`,
-	"gpt-5.6-terra": `len <= 272000 ? tier("standard", p * 2.00 + cr * 0.20 + cc * 2.50 + c * 12.00) : tier("long_context", p * 4.00 + cr * 0.40 + cc * 5.00 + c * 18.00)`,
-	"gpt-5.6-sol":   `len <= 272000 ? tier("standard", p * 4.00 + cr * 0.40 + cc * 5.00 + c * 20.00) : tier("long_context", p * 8.00 + cr * 0.80 + cc * 10.00 + c * 30.00)`,
+	"gpt-6-luna":          `len <= 272000 ? tier("standard", p * 0.10 + cr * 0.01 + cc * 0.125 + c * 0.50) : tier("long_context", p * 0.20 + cr * 0.02 + cc * 0.25 + c * 0.75)`,
+	"gpt-6-sol":           `len <= 272000 ? tier("standard", p * 2.00 + cr * 0.20 + cc * 2.50 + c * 10.00) : tier("long_context", p * 4.00 + cr * 0.40 + cc * 5.00 + c * 15.00)`,
+	"gpt-5.6-luna":        `len <= 272000 ? tier("standard", p * 0.20 + cr * 0.02 + cc * 0.25 + c * 1.20) : tier("long_context", p * 0.40 + cr * 0.04 + cc * 0.50 + c * 1.80)`,
+	"gpt-5.6-terra":       `len <= 272000 ? tier("standard", p * 2.00 + cr * 0.20 + cc * 2.50 + c * 12.00) : tier("long_context", p * 4.00 + cr * 0.40 + cc * 5.00 + c * 18.00)`,
+	"gpt-5.6-sol":         `len <= 272000 ? tier("standard", p * 4.00 + cr * 0.40 + cc * 5.00 + c * 20.00) : tier("long_context", p * 8.00 + cr * 0.80 + cc * 10.00 + c * 30.00)`,
+	"deepseek-flash":      deepSeekFlashExpr,
+	"deepseek-v4-flash":   deepSeekFlashExpr,
+	"deepseek-v4-pro":     deepSeekProExpr,
+	"deepseek-v4-pro[1m]": deepSeekProExpr,
 }
 
 func cloneStringMap(src map[string]string) map[string]string {

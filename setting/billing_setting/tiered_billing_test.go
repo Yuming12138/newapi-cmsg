@@ -3,6 +3,7 @@ package billing_setting
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 )
@@ -49,6 +50,71 @@ func TestDefaultGPT56AndGPT6TieredPricing(t *testing.T) {
 			assertTierPrice(t, expr, 272001, "long_context", billingexpr.TokenParams{CC: 1}, tt.longCacheWrite)
 			assertTierPrice(t, expr, 272001, "long_context", billingexpr.TokenParams{C: 1}, tt.longOutput)
 		})
+	}
+}
+
+func TestDeepSeekOfficialPeakAndOffPeakPricing(t *testing.T) {
+	beijing := time.FixedZone("CST", 8*60*60)
+	periods := []struct {
+		name string
+		at   time.Time
+		peak bool
+	}{
+		{"weekday_peak", time.Date(2026, 9, 29, 9, 0, 0, 0, beijing), true},
+		{"lunch_offpeak", time.Date(2026, 9, 29, 12, 0, 0, 0, beijing), false},
+		{"afternoon_peak", time.Date(2026, 9, 29, 14, 0, 0, 0, beijing), true},
+		{"evening_offpeak", time.Date(2026, 9, 29, 18, 0, 0, 0, beijing), false},
+		{"national_holiday", time.Date(2026, 10, 1, 10, 0, 0, 0, beijing), false},
+		{"makeup_saturday", time.Date(2026, 10, 10, 10, 0, 0, 0, beijing), false},
+		{"unknown_calendar_year", time.Date(2027, 1, 4, 10, 0, 0, 0, beijing), false},
+	}
+	models := []struct {
+		name   string
+		prices [3]float64 // off-peak CNY/1M: input, cache hit, output
+	}{
+		{"deepseek-flash", [3]float64{1, 0.02, 4}},
+		{"deepseek-v4-pro", [3]float64{4.5, 0.15, 13.5}},
+	}
+	for _, model := range models {
+		expr := defaultBillingExpr[model.name]
+		if defaultBillingMode[model.name] != BillingModeTieredExpr {
+			t.Fatalf("%s is not using tiered pricing", model.name)
+		}
+		if err := SmokeTestExpr(expr); err != nil {
+			t.Fatalf("%s expression: %v", model.name, err)
+		}
+		for _, period := range periods {
+			t.Run(model.name+"/"+period.name, func(t *testing.T) {
+				wantTier := "offpeak"
+				multiplier := 1.0
+				if period.peak {
+					wantTier = "peak"
+					multiplier = 2
+				}
+				for i, params := range []billingexpr.TokenParams{
+					{P: 1_000_000}, {CR: 1_000_000}, {C: 1_000_000},
+				} {
+					usd, trace, err := billingexpr.RunExprWithRequest(expr, params, billingexpr.RequestInput{At: period.at})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got, want := usd/1_000_000*7.3, model.prices[i]*multiplier; math.Abs(got-want) > 1e-9 {
+						t.Fatalf("price[%d] = %.12f CNY, want %.12f", i, got, want)
+					}
+					if trace.MatchedTier != wantTier {
+						t.Fatalf("tier = %q, want %q", trace.MatchedTier, wantTier)
+					}
+				}
+			})
+		}
+	}
+	for alias, canonical := range map[string]string{
+		"deepseek-v4-flash":   "deepseek-flash",
+		"deepseek-v4-pro[1m]": "deepseek-v4-pro",
+	} {
+		if defaultBillingMode[alias] != BillingModeTieredExpr || defaultBillingExpr[alias] != defaultBillingExpr[canonical] {
+			t.Fatalf("%s does not inherit %s pricing", alias, canonical)
+		}
 	}
 }
 

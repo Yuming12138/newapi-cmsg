@@ -59,27 +59,30 @@ func TestGPT56AndGPT6OfficialPricingRatios(t *testing.T) {
 	}
 }
 
-func TestDeepSeekV4OfficialPricingRatios(t *testing.T) {
+func TestDeepSeekOffPeakPricingRatios(t *testing.T) {
 	tests := []struct {
-		model           string
-		modelRatio      float64
-		completionRatio float64
-		cacheRatio      float64
+		model            string
+		inputPrice       float64
+		cachedInputPrice float64
+		outputPrice      float64
 	}{
-		{model: "deepseek-v4-flash", modelRatio: 1.0 / 1000 * RMB, completionRatio: 2, cacheRatio: 0.02 / 1.0},
-		{model: "deepseek-v4-pro", modelRatio: 3.0 / 1000 * RMB, completionRatio: 2, cacheRatio: 0.025 / 3.0},
+		{model: "deepseek-flash", inputPrice: 1, cachedInputPrice: 0.02, outputPrice: 4},
+		{model: "deepseek-v4-flash", inputPrice: 1, cachedInputPrice: 0.02, outputPrice: 4},
+		{model: "deepseek-v4-pro", inputPrice: 4.5, cachedInputPrice: 0.15, outputPrice: 13.5},
+		{model: "deepseek-v4-pro[1m]", inputPrice: 4.5, cachedInputPrice: 0.15, outputPrice: 13.5},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
-			if got := defaultModelRatio[tt.model]; got != tt.modelRatio {
-				t.Fatalf("model ratio = %v, want %v", got, tt.modelRatio)
+			ratio := defaultModelRatio[tt.model]
+			if got := ratio * 2 * USD2RMB; math.Abs(got-tt.inputPrice) > 1e-9 {
+				t.Fatalf("input price = %v, want %v", got, tt.inputPrice)
 			}
-			if got := defaultCompletionRatio[tt.model]; got != tt.completionRatio {
-				t.Fatalf("completion ratio = %v, want %v", got, tt.completionRatio)
+			if got := ratio * defaultCacheRatio[tt.model] * 2 * USD2RMB; math.Abs(got-tt.cachedInputPrice) > 1e-9 {
+				t.Fatalf("cached input price = %v, want %v", got, tt.cachedInputPrice)
 			}
-			if got := defaultCacheRatio[tt.model]; got != tt.cacheRatio {
-				t.Fatalf("cache ratio = %v, want %v", got, tt.cacheRatio)
+			if got := ratio * defaultCompletionRatio[tt.model] * 2 * USD2RMB; math.Abs(got-tt.outputPrice) > 1e-9 {
+				t.Fatalf("output price = %v, want %v", got, tt.outputPrice)
 			}
 		})
 	}

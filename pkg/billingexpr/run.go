@@ -51,18 +51,22 @@ func RunExprByHashWithRequest(exprStr, hash string, params TokenParams, request 
 func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (float64, TraceResult, error) {
 	trace := TraceResult{}
 	headers := normalizeHeaders(request.Headers)
+	at := request.At
+	if at.IsZero() {
+		at = time.Now()
+	}
 
 	env := map[string]interface{}{
-		"p":    params.P,
-		"c":    params.C,
-		"len":  params.Len,
-		"cr":   params.CR,
-		"cc":   params.CC,
-		"cc1h": params.CC1h,
-		"img":  params.Img,
+		"p":     params.P,
+		"c":     params.C,
+		"len":   params.Len,
+		"cr":    params.CR,
+		"cc":    params.CC,
+		"cc1h":  params.CC1h,
+		"img":   params.Img,
 		"img_o": params.ImgO,
-		"ai":   params.AI,
-		"ao":   params.AO,
+		"ai":    params.AI,
+		"ao":    params.AO,
 		"tier": func(name string, value float64) float64 {
 			trace.MatchedTier = name
 			trace.Cost = value
@@ -88,16 +92,17 @@ func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (flo
 			}
 			return strings.Contains(fmt.Sprint(source), substr)
 		},
-		"hour":    func(tz string) int { return timeInZone(tz).Hour() },
-		"minute":  func(tz string) int { return timeInZone(tz).Minute() },
-		"weekday": func(tz string) int { return int(timeInZone(tz).Weekday()) },
-		"month":   func(tz string) int { return int(timeInZone(tz).Month()) },
-		"day":     func(tz string) int { return timeInZone(tz).Day() },
-		"max":     math.Max,
-		"min":   math.Min,
-		"abs":   math.Abs,
-		"ceil":  math.Ceil,
-		"floor": math.Floor,
+		"hour":         func(tz string) int { return timeInZoneAt(at, tz).Hour() },
+		"minute":       func(tz string) int { return timeInZoneAt(at, tz).Minute() },
+		"weekday":      func(tz string) int { return int(timeInZoneAt(at, tz).Weekday()) },
+		"month":        func(tz string) int { return int(timeInZoneAt(at, tz).Month()) },
+		"day":          func(tz string) int { return timeInZoneAt(at, tz).Day() },
+		"deepseekPeak": func() bool { return deepSeekPeakTime(at) },
+		"max":          math.Max,
+		"min":          math.Min,
+		"abs":          math.Abs,
+		"ceil":         math.Ceil,
+		"floor":        math.Floor,
 	}
 
 	out, err := expr.Run(prog, env)
@@ -111,16 +116,16 @@ func runProgram(prog *vm.Program, params TokenParams, request RequestInput) (flo
 	return f, trace, nil
 }
 
-func timeInZone(tz string) time.Time {
+func timeInZoneAt(at time.Time, tz string) time.Time {
 	tz = strings.TrimSpace(tz)
 	if tz == "" {
-		return time.Now().UTC()
+		return at.UTC()
 	}
 	loc, err := time.LoadLocation(tz)
 	if err != nil {
-		return time.Now().UTC()
+		return at.UTC()
 	}
-	return time.Now().In(loc)
+	return at.In(loc)
 }
 
 func normalizeHeaders(headers map[string]string) map[string]string {

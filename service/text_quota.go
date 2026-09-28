@@ -441,7 +441,10 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other["mimo_free"] = true
 		other["mimo_tokenplan"] = true
 	}
-	if strings.HasPrefix(strings.ToLower(summary.BillingModelName), "kimi-") {
+	isOfficialDeepSeek := relayInfo.ChannelType == constant.ChannelTypeDeepSeek &&
+		strings.EqualFold(strings.TrimRight(relayInfo.ChannelBaseUrl, "/"), "https://api.deepseek.com") &&
+		strings.HasPrefix(strings.ToLower(summary.BillingModelName), "deepseek-")
+	if strings.HasPrefix(strings.ToLower(summary.BillingModelName), "kimi-") || isOfficialDeepSeek {
 		other["billing_currency"] = "CNY"
 		other["billing_currency_rate"] = ratio_setting.USD2RMB
 	}

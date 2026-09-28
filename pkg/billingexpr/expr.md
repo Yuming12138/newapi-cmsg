@@ -84,6 +84,7 @@ Powered by [expr-lang/expr](https://github.com/expr-lang/expr). Expressions are 
 | `weekday` | `weekday(tz) → int` | Day of week (0=Sunday, 6=Saturday) |
 | `month` | `month(tz) → int` | Month (1-12) |
 | `day` | `day(tz) → int` | Day of month (1-31) |
+| `deepseekPeak` | `deepseekPeak() → bool` | DeepSeek peak pricing window in Beijing time, excluding 2026 Chinese public holidays. Unknown calendar years use the off-peak rate until the official holiday schedule is added. |
 | `max` | `max(a, b) → float64` | Math max |
 | `min` | `min(a, b) → float64` | Math min |
 | `abs` | `abs(x) → float64` | Absolute value |
