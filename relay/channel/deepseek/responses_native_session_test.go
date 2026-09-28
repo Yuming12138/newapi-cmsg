@@ -93,8 +93,8 @@ func TestNormalizeNativeResponsesInputConvertsUnsupportedCustomToolPair(t *testi
 	require.JSONEq(t, `{"input":"text(true)"}`, items[0]["arguments"].(string))
 	require.NotContains(t, items[0], "input")
 	require.Equal(t, "function_call_output", items[1]["type"])
-	require.Equal(t, "custom_tool_call", items[2]["type"])
-	require.Equal(t, "custom_tool_call_output", items[3]["type"])
+	require.Equal(t, "function_call", items[2]["type"])
+	require.Equal(t, "function_call_output", items[3]["type"])
 }
 
 func TestNormalizeNativeResponsesInputConvertsOutputForReplayedFunctionCall(t *testing.T) {
@@ -108,6 +108,40 @@ func TestNormalizeNativeResponsesInputConvertsOutputForReplayedFunctionCall(t *t
 	items, err := normalizeResponsesInput(got.Input)
 	require.NoError(t, err)
 	require.Equal(t, "function_call_output", items[1]["type"])
+}
+
+func TestNormalizeNativeResponsesInputPairsSeparatedCodexToolOutput(t *testing.T) {
+	request := dto.OpenAIResponsesRequest{Input: json.RawMessage(`[
+		{"type":"reasoning","content":[{"type":"reasoning_text","text":"use a tool"}]},
+		{"type":"custom_tool_call","call_id":"call_exec","name":"exec","input":"text(1)"},
+		{"type":"message","role":"assistant","content":"I used the tool."},
+		{"type":"custom_tool_call_output","call_id":"call_exec","output":"1"}
+	]`)}
+
+	got, err := normalizeNativeResponsesInputForUpstream(request)
+	require.NoError(t, err)
+	items, err := normalizeResponsesInput(got.Input)
+	require.NoError(t, err)
+	require.Len(t, items, 4)
+	require.Equal(t, "reasoning", items[0]["type"])
+	require.Equal(t, "function_call", items[1]["type"])
+	require.Equal(t, "function_call_output", items[2]["type"])
+	require.Equal(t, "call_exec", items[2]["call_id"])
+	require.Equal(t, "message", items[3]["type"])
+}
+
+func TestPairNativeResponsesToolOutputsPreservesMultipleCallIDs(t *testing.T) {
+	items := []map[string]any{
+		{"type": "function_call", "call_id": "call_1"},
+		{"type": "custom_tool_call", "call_id": "call_2"},
+		{"type": "function_call_output", "call_id": "call_1"},
+		{"type": "custom_tool_call_output", "call_id": "call_2"},
+	}
+	ordered, changed := pairNativeResponsesToolOutputs(items)
+	require.True(t, changed)
+	require.Equal(t, []string{"call_1", "call_1", "call_2", "call_2"}, []string{
+		toolCallID(ordered[0]), toolCallID(ordered[1]), toolCallID(ordered[2]), toolCallID(ordered[3]),
+	})
 }
 
 func TestNormalizeNativeResponsesInputLeavesUnchangedRequestShape(t *testing.T) {

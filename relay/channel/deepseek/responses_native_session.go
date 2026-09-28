@@ -102,15 +102,23 @@ func nativeResponsesItemKey(item map[string]any) string {
 	return ""
 }
 
-// DeepSeek only supports apply_patch as a custom tool. Codex custom tools such
-// as exec are exposed to the client as custom calls, but their transcript must
-// be represented as function call pairs when replayed to DeepSeek.
+// DeepSeek advertises function tools. Convert Codex custom call history to
+// matching function call pairs before replaying the stateless transcript.
 func normalizeNativeResponsesInputForUpstream(request dto.OpenAIResponsesRequest) (dto.OpenAIResponsesRequest, error) {
 	inputItems, err := normalizeResponsesInput(request.Input)
 	if err != nil {
 		return request, err
 	}
 	changed := false
+	filtered := make([]map[string]any, 0, len(inputItems))
+	for _, item := range inputItems {
+		if common.Interface2String(item["type"]) == "additional_tools" {
+			changed = true
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	inputItems = filtered
 	functionCallIDs := make(map[string]struct{})
 	for _, item := range inputItems {
 		itemType := common.Interface2String(item["type"])
@@ -121,9 +129,6 @@ func normalizeNativeResponsesInputForUpstream(request dto.OpenAIResponsesRequest
 			continue
 		}
 		if itemType != "custom_tool_call" {
-			continue
-		}
-		if common.Interface2String(item["name"]) == "apply_patch" {
 			continue
 		}
 		callID := toolCallID(item)
@@ -149,6 +154,8 @@ func normalizeNativeResponsesInputForUpstream(request dto.OpenAIResponsesRequest
 			changed = true
 		}
 	}
+	inputItems, reordered := pairNativeResponsesToolOutputs(inputItems)
+	changed = changed || reordered
 	if !changed {
 		return request, nil
 	}
@@ -158,6 +165,43 @@ func normalizeNativeResponsesInputForUpstream(request dto.OpenAIResponsesRequest
 	}
 	request.Input = input
 	return request, nil
+}
+
+// DeepSeek's stateless Responses API requires each tool result directly after
+// its call. Codex may place an assistant message between the two when it sends
+// the complete transcript, so pair them without changing their call IDs.
+func pairNativeResponsesToolOutputs(items []map[string]any) ([]map[string]any, bool) {
+	outputsByCall := make(map[string][]int)
+	for index, item := range items {
+		if isResponsesToolOutput(item) {
+			if callID := toolCallID(item); callID != "" {
+				outputsByCall[callID] = append(outputsByCall[callID], index)
+			}
+		}
+	}
+
+	paired := make([]bool, len(items))
+	ordered := make([]map[string]any, 0, len(items))
+	changed := false
+	for index, item := range items {
+		if paired[index] {
+			continue
+		}
+		ordered = append(ordered, item)
+		if !isResponsesToolCall(item) {
+			continue
+		}
+		for _, outputIndex := range outputsByCall[toolCallID(item)] {
+			if outputIndex <= index || paired[outputIndex] {
+				continue
+			}
+			ordered = append(ordered, items[outputIndex])
+			paired[outputIndex] = true
+			changed = changed || outputIndex != index+1
+			break
+		}
+	}
+	return ordered, changed
 }
 
 func setNativeResponsesRequest(c *gin.Context, request dto.OpenAIResponsesRequest) {

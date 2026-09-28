@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -89,7 +90,7 @@ func TestProResponsesUsesNativeEndpoint(t *testing.T) {
 	require.Equal(t, "https://api.deepseek.com/responses", url)
 }
 
-func TestConvertOpenAIResponsesRequestPreservesNativePayload(t *testing.T) {
+func TestConvertOpenAIResponsesRequestNormalizesNativeTools(t *testing.T) {
 	info := testRelayInfo("deepseek-v4-flash-max")
 	stream := true
 	maxOutputTokens := uint(4096)
@@ -113,7 +114,14 @@ func TestConvertOpenAIResponsesRequestPreservesNativePayload(t *testing.T) {
 	require.Equal(t, "deepseek-v4-flash", got.Model)
 	require.JSONEq(t, string(request.Input), string(got.Input))
 	require.JSONEq(t, string(request.Instructions), string(got.Instructions))
-	require.JSONEq(t, string(request.Tools), string(got.Tools))
+	var tools []map[string]any
+	require.NoError(t, common.Unmarshal(got.Tools, &tools))
+	require.Len(t, tools, 2)
+	require.Equal(t, "read_file", tools[0]["name"])
+	require.Equal(t, "function", tools[0]["type"])
+	require.Equal(t, "apply_patch", tools[1]["name"])
+	require.Equal(t, "function", tools[1]["type"])
+	require.NotContains(t, tools[1], "format")
 	require.Equal(t, request.MaxOutputTokens, got.MaxOutputTokens)
 	require.Equal(t, request.Stream, got.Stream)
 	require.NotNil(t, got.Reasoning)

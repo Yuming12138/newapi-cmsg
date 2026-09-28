@@ -245,6 +245,12 @@ type moonshotResponsesBody struct {
 	sequenceOffset int
 }
 
+// RewriteCustomFunctionResponses restores client-facing custom tool calls
+// after a provider has handled those tools as JSON-schema functions.
+func RewriteCustomFunctionResponses(resp *http.Response, streamed bool, names map[string]struct{}) error {
+	return rewriteMoonshotResponses(resp, streamed, names)
+}
+
 func rewriteMoonshotResponses(resp *http.Response, streamed bool, names map[string]struct{}) error {
 	if resp == nil || resp.Body == nil || len(names) == 0 {
 		return nil

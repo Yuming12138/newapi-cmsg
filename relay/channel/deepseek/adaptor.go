@@ -174,6 +174,10 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	}
 	setNativeResponsesToolMapForRequest(c, request)
 	setNativeResponsesRequest(c, request)
+	request, err = normalizeNativeResponsesToolsForUpstream(request)
+	if err != nil {
+		return nil, err
+	}
 	request, err = normalizeNativeResponsesInputForUpstream(request)
 	if err != nil {
 		return nil, err
@@ -230,6 +234,15 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 			return handleResponsesChatResponse(c, resp, info)
 		}
 		if info.RelayMode == constant.RelayModeResponses && supportsNativeDeepSeekResponses(info, info.UpstreamModelName) {
+			customNames := make(map[string]struct{})
+			for name, tool := range getNativeResponsesToolMap(c) {
+				if tool.Type == "custom" {
+					customNames[name] = struct{}{}
+				}
+			}
+			if rewriteErr := openai.RewriteCustomFunctionResponses(resp, info.IsStream, customNames); rewriteErr != nil {
+				return nil, types.NewOpenAIError(rewriteErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+			}
 			return handleNativeResponsesResponse(c, resp, info)
 		}
 		adaptor := openai.Adaptor{}
