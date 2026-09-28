@@ -49,6 +49,20 @@ func normalizeMoonshotResponsesRequest(request dto.OpenAIResponsesRequest) (dto.
 		filtered := make([]map[string]any, 0, len(items))
 		for _, item := range items {
 			switch item["type"] {
+			case "additional_tools":
+				additional, ok := item["tools"].([]any)
+				if !ok {
+					return request, nil, fmt.Errorf("Moonshot additional_tools.tools must be an array")
+				}
+				for _, value := range additional {
+					tool, ok := value.(map[string]any)
+					if !ok {
+						return request, nil, fmt.Errorf("Moonshot additional_tools contains a non-object tool")
+					}
+					if err := normalizeMoonshotTool(tool, customNames); err != nil {
+						return request, nil, err
+					}
+				}
 			case "reasoning":
 				delete(item, "encrypted_content")
 				summary, _ := item["summary"].([]any)

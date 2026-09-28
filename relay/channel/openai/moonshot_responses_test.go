@@ -151,3 +151,23 @@ func TestMoonshotCustomToolResultRoundTrip(t *testing.T) {
 	require.NoError(t, common.Unmarshal([]byte(items[0]["arguments"].(string)), &args))
 	require.Equal(t, "printf OK", args["input"])
 }
+
+func TestNormalizeMoonshotAdditionalCustomTools(t *testing.T) {
+	input, err := common.Marshal([]map[string]any{
+		{"type": "message", "role": "user", "content": "Use exec"},
+		{"type": "additional_tools", "role": "developer", "tools": []map[string]any{
+			{"type": "custom", "name": "exec", "description": "Run a command", "format": map[string]any{"type": "grammar", "syntax": "lark", "definition": "start: SOURCE"}},
+		}},
+	})
+	require.NoError(t, err)
+	converted, names, err := normalizeMoonshotResponsesRequest(dto.OpenAIResponsesRequest{Model: "kimi-k3", Input: input})
+	require.NoError(t, err)
+	require.Contains(t, names, "exec")
+	var items []map[string]any
+	require.NoError(t, common.Unmarshal(converted.Input, &items))
+	additional := items[1]["tools"].([]any)[0].(map[string]any)
+	require.Equal(t, "function", additional["type"])
+	require.Equal(t, "exec", additional["name"])
+	require.NotContains(t, additional, "format")
+	require.Equal(t, "object", additional["parameters"].(map[string]any)["type"])
+}
