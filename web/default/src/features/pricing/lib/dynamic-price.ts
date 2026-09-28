@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { formatBillingCurrencyFromUSD } from '@/lib/currency'
+import { formatBillingCurrencyFromUSD, formatCNYFromUSD } from '@/lib/currency'
 import { TOKEN_UNIT_DIVISORS } from '../constants'
 import type { PricingModel, TokenUnit } from '../types'
 import {
@@ -30,6 +30,7 @@ import {
 
 type DynamicPriceOptions = {
   tokenUnit: TokenUnit
+  providerCNY?: boolean
   showRechargePrice?: boolean
   priceRate?: number
   usdExchangeRate?: number
@@ -62,6 +63,10 @@ const PRIMARY_DYNAMIC_FIELDS = new Set(['inputPrice', 'outputPrice'])
 
 export function isDynamicPricingModel(model: PricingModel): boolean {
   return model.billing_mode === 'tiered_expr' && Boolean(model.billing_expr)
+}
+
+export function isDeepSeekOfficialPricingModel(model: PricingModel): boolean {
+  return Boolean(model.billing_expr?.includes('deepseekPeak()'))
 }
 
 export function getDynamicDisplayGroupRatio(model: PricingModel): number {
@@ -107,7 +112,11 @@ export function formatDynamicUnitPrice(
     usdExchangeRate
   )
 
-  return formatBillingCurrencyFromUSD(displayPrice, {
+  const format = options.providerCNY
+    ? (value: number, formatOptions: Parameters<typeof formatCNYFromUSD>[1]) =>
+        formatCNYFromUSD(value, formatOptions, 7.3)
+    : formatBillingCurrencyFromUSD
+  return format(displayPrice, {
     digitsLarge: 4,
     digitsSmall: 6,
     abbreviate: false,
@@ -167,8 +176,16 @@ export function getDynamicPricingSummary(
   if (!isDynamicPricingModel(model)) return null
 
   const tiers = getDynamicPricingTiers(model)
-  const tier = tiers[0] || null
-  const entries = getDynamicPriceEntries(tier, options)
+  const isDeepSeek = isDeepSeekOfficialPricingModel(model)
+  // The summary shows the provider's starting price; details show both periods.
+  const tier =
+    (isDeepSeek ? tiers.find((item) => item.label === 'offpeak') : null) ||
+    tiers[0] ||
+    null
+  const entries = getDynamicPriceEntries(tier, {
+    ...options,
+    providerCNY: isDeepSeek,
+  })
   const rawExpression = model.billing_expr || ''
 
   return {

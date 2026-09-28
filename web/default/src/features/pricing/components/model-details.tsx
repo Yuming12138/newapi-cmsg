@@ -56,6 +56,7 @@ import {
   getDynamicPriceEntries,
   getDynamicPricingSummary,
   getDynamicPricingTiers,
+  isDeepSeekOfficialPricingModel,
   isDynamicPricingModel,
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
@@ -684,6 +685,7 @@ function GroupPricingSection(props: {
               priceRate: props.priceRate,
               usdExchangeRate: props.usdExchangeRate,
               groupRatioMultiplier: 1,
+              providerCNY: isDeepSeekOfficialPricingModel(props.model),
             })
           )
           .map((entry) => [entry.field, entry])
@@ -728,6 +730,9 @@ function GroupPricingSection(props: {
                           priceRate: props.priceRate,
                           usdExchangeRate: props.usdExchangeRate,
                           groupRatioMultiplier: ratio,
+                          providerCNY: isDeepSeekOfficialPricingModel(
+                            props.model
+                          ),
                         })
                         const entryMap = new Map(
                           entries.map((entry) => [entry.field, entry])
