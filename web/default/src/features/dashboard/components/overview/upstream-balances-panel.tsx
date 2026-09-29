@@ -18,7 +18,6 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import type { AsxsQuotaPoolStatus } from '@/features/auth/types'
 import { getDashboardProviderBalances } from '@/features/dashboard/api'
 import type { ProviderAccountBalance } from '@/features/dashboard/types'
 
@@ -54,6 +53,14 @@ function BalanceRow(props: BalanceRowProps) {
         hour12: false,
       }).format(new Date(props.updatedAt * 1000))
     : null
+  let syncLabel = props.unavailableText
+  if (props.amount != null) {
+    if (props.partial) {
+      syncLabel = t('Partially synced')
+    } else if (updatedAt) {
+      syncLabel = t('Updated {{time}}', { time: updatedAt })
+    }
+  }
 
   return (
     <div className='bg-background/75 rounded-xl border px-3 py-2.5'>
@@ -69,20 +76,11 @@ function BalanceRow(props: BalanceRowProps) {
           className='text-muted-foreground shrink-0 text-[10px]'
           title={updatedAt ?? undefined}
         >
-          {props.partial
-            ? t('Partially synced')
-            : updatedAt
-              ? t('Updated {{time}}', { time: updatedAt })
-              : props.unavailableText}
+          {syncLabel}
         </span>
       </div>
     </div>
   )
-}
-
-type UpstreamBalancesPanelProps = {
-  asxs?: AsxsQuotaPoolStatus
-  statusLoading: boolean
 }
 
 function providerUnavailableText(
@@ -93,7 +91,7 @@ function providerUnavailableText(
   return provider?.channel_count ? waiting : noChannel
 }
 
-export function UpstreamBalancesPanel(props: UpstreamBalancesPanelProps) {
+export function UpstreamBalancesPanel() {
   const { t } = useTranslation()
   const balancesQuery = useQuery({
     queryKey: ['dashboard', 'provider-balances'],
@@ -103,6 +101,7 @@ export function UpstreamBalancesPanel(props: UpstreamBalancesPanelProps) {
   })
   const kimi = balancesQuery.data?.kimi
   const deepSeek = balancesQuery.data?.deepseek
+  const asxs = balancesQuery.data?.asxs
   const noChannel = t('No active channel')
   const waiting = t('Waiting for balance sync')
   const unavailable = t('Balance temporarily unavailable')
@@ -112,19 +111,19 @@ export function UpstreamBalancesPanel(props: UpstreamBalancesPanelProps) {
       <div>
         <h3 className='text-sm font-semibold'>{t('Upstream balances')}</h3>
         <p className='text-muted-foreground mt-1 text-xs'>
-          {t('ASXS daily budget and official model account balances')}
+          {t('ASXS account subscriptions and official model account balances')}
         </p>
       </div>
       <div className='grid gap-2'>
         <BalanceRow
           name='ASXS'
-          caption={t('Daily spendable budget')}
-          amount={props.asxs?.remaining_usd}
+          caption={t('Total daily subscription balance')}
+          amount={asxs?.balance}
           currency='USD'
-          updatedAt={props.asxs?.updated_at}
-          unavailableText={noChannel}
-          partial={props.asxs?.partial}
-          loading={props.statusLoading}
+          updatedAt={asxs?.updated_at}
+          unavailableText={unavailable}
+          partial={asxs?.partial}
+          loading={balancesQuery.isPending}
           tone='text-amber-700 dark:text-amber-300'
         />
         <BalanceRow

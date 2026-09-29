@@ -54,6 +54,13 @@ export interface ProviderAccountBalance {
 }
 
 export interface DashboardProviderBalances {
+  asxs: {
+    balance: number | null
+    currency: 'USD'
+    updated_at: number
+    subscription_count: number
+    partial: boolean
+  }
   kimi: ProviderAccountBalance
   deepseek: ProviderAccountBalance
 }

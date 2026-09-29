@@ -25,8 +25,9 @@ type ProviderAccountBalance struct {
 }
 
 type DashboardProviderBalances struct {
-	Kimi     ProviderAccountBalance `json:"kimi"`
-	DeepSeek ProviderAccountBalance `json:"deepseek"`
+	ASXS     ASXSAccountDailyBalance `json:"asxs"`
+	Kimi     ProviderAccountBalance  `json:"kimi"`
+	DeepSeek ProviderAccountBalance  `json:"deepseek"`
 }
 
 func GetDashboardProviderBalances(ctx context.Context) (DashboardProviderBalances, error) {
@@ -37,12 +38,20 @@ func GetDashboardProviderBalances(ctx context.Context) (DashboardProviderBalance
 		Find(&channels).Error; err != nil {
 		return DashboardProviderBalances{}, err
 	}
-	return summarizeDashboardProviderBalances(channels), nil
+	balances := summarizeDashboardProviderBalances(channels)
+	asxs, err := fetchASXSAccountDailyBalance(ctx)
+	if err != nil {
+		balances.ASXS = unavailableASXSAccountDailyBalance()
+	} else {
+		balances.ASXS = asxs
+	}
+	return balances, nil
 }
 
 func summarizeDashboardProviderBalances(channels []*model.Channel) DashboardProviderBalances {
 	deepSeekSetting := currentDeepSeekBalanceSetting()
 	return DashboardProviderBalances{
+		ASXS: ASXSAccountDailyBalance{Currency: "USD"},
 		Kimi: summarizeProviderAccountBalance(channels, isOfficialKimiChannel),
 		DeepSeek: summarizeProviderAccountBalance(channels, func(channel *model.Channel) bool {
 			return isDeepSeekBalanceChannel(channel, deepSeekSetting)

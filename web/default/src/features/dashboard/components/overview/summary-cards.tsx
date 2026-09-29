@@ -227,12 +227,7 @@ export function SummaryCards() {
           </StaggerContainer>
         </div>
 
-        {isAdmin ? (
-          <UpstreamBalancesPanel
-            asxs={status?.asxs_quota_pool}
-            statusLoading={loading}
-          />
-        ) : null}
+        {isAdmin ? <UpstreamBalancesPanel /> : null}
       </div>
     </div>
   )
