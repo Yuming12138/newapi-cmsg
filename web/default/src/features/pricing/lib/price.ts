@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { formatCurrencyFromUSD } from '@/lib/currency'
+import { formatCNYFromUSD, formatCurrencyFromUSD } from '@/lib/currency'
 import { QUOTA_TYPE_VALUES, TOKEN_UNIT_DIVISORS } from '../constants'
 import type { PricingModel, TokenUnit, PriceType } from '../types'
 
@@ -121,6 +121,18 @@ function hasRatio(value: number | null | undefined): boolean {
   return value !== undefined && value !== null && Number.isFinite(Number(value))
 }
 
+/** Kimi's official token prices are set in CNY, then stored as USD ratios. */
+function formatModelCurrency(model: PricingModel, priceInUSD: number): string {
+  const options = {
+    digitsLarge: 4,
+    digitsSmall: 6,
+    abbreviate: false,
+  }
+  return model.model_name.startsWith('kimi-')
+    ? formatCNYFromUSD(priceInUSD, options, 7.3)
+    : formatCurrencyFromUSD(priceInUSD, options)
+}
+
 /**
  * Apply recharge rate to price
  *
@@ -187,11 +199,7 @@ export function formatPrice(
   )
 
   const price = priceInUSD / TOKEN_UNIT_DIVISORS[tokenUnit]
-  return formatCurrencyFromUSD(price, {
-    digitsLarge: 4,
-    digitsSmall: 6,
-    abbreviate: false,
-  })
+  return formatModelCurrency(model, price)
 }
 
 /**
@@ -222,11 +230,7 @@ export function formatGroupPrice(
   )
 
   const price = priceInUSD / TOKEN_UNIT_DIVISORS[tokenUnit]
-  return formatCurrencyFromUSD(price, {
-    digitsLarge: 4,
-    digitsSmall: 6,
-    abbreviate: false,
-  })
+  return formatModelCurrency(model, price)
 }
 
 /**
