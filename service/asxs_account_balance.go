@@ -268,7 +268,8 @@ func parseASXSAccountDailyBalance(raw []byte, now time.Time) (ASXSAccountDailyBa
 		}
 		leftMicros += left
 	}
-	balance := math.Round(float64(leftMicros)/1e4) / 100
+	// ASXS billing-state micros use 5,000,000 units per USD.
+	balance := math.Round(float64(leftMicros)/5e4) / 100
 	result.Balance = &balance
 	return result, nil
 }
