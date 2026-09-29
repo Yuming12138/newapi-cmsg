@@ -21,14 +21,15 @@ import (
 const asxsAccountTokenFileDefault = "/data/ops/asxs-account-token"
 
 // ASXSAccountDailyBalance is the account-wide subscription remainder. Channel
-// balances from /api/usage remain separate because they describe a single
-// routing pool and are also used to protect individual channels.
+// balances can use this same account total when the channel guard is configured
+// with the asxs_account source.
 type ASXSAccountDailyBalance struct {
 	Balance           *float64 `json:"balance"`
 	Currency          string   `json:"currency"`
 	UpdatedAt         int64    `json:"updated_at"`
 	SubscriptionCount int      `json:"subscription_count"`
 	Partial           bool     `json:"partial"`
+	DailyLimitUSD     float64  `json:"-"`
 }
 
 type asxsBillingWindow struct {
@@ -226,7 +227,7 @@ func parseASXSAccountDailyBalance(raw []byte, now time.Time) (ASXSAccountDailyBa
 		windowsByID[item.SubscriptionID] = item.Windows
 	}
 	seen := make(map[string]bool, len(subscriptions))
-	var leftMicros int64
+	var leftMicros, limitMicros int64
 	for _, subscription := range subscriptions {
 		if subscription.ID == "" || seen[subscription.ID] {
 			result.Partial = true
@@ -260,6 +261,10 @@ func parseASXSAccountDailyBalance(raw []byte, now time.Time) (ASXSAccountDailyBa
 			return unavailableASXSAccountDailyBalance(), fmt.Errorf("ASXS account daily quota is incomplete")
 		}
 		left := *window.LeftMicros
+		limit := *window.LimitMicros
+		if limit < 0 || limit > (1<<63-1)-limitMicros {
+			return unavailableASXSAccountDailyBalance(), fmt.Errorf("ASXS account daily limit is invalid")
+		}
 		if left < 0 {
 			left = 0
 		}
@@ -267,10 +272,12 @@ func parseASXSAccountDailyBalance(raw []byte, now time.Time) (ASXSAccountDailyBa
 			return unavailableASXSAccountDailyBalance(), fmt.Errorf("ASXS account balance exceeds int64")
 		}
 		leftMicros += left
+		limitMicros += limit
 	}
 	// ASXS billing-state micros use 5,000,000 units per USD.
 	balance := math.Round(float64(leftMicros)/5e4) / 100
 	result.Balance = &balance
+	result.DailyLimitUSD = float64(limitMicros) / 5e6
 	return result, nil
 }
 

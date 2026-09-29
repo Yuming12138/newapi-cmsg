@@ -24,6 +24,7 @@ import (
 const (
 	channelBudgetGuardStateOptionKey = "channel_budget_guard_state"
 	channelBudgetGuardDefaultRemark  = "余额自动同步自 asxs /api/usage"
+	channelBudgetGuardAccountRemark  = "余额自动同步自 ASXS 账号订阅汇总"
 )
 
 type channelBudgetGuardState struct {
@@ -343,11 +344,11 @@ func UpdateChannelBudgetGuardBalance(ctx context.Context, channel *model.Channel
 	}
 	managed := resolveChannelBudgetGuardChannels(cfg, []*model.Channel{channel})
 	if len(managed) == 0 {
-		return 0, false, nil
+		return updateASXSAccountSharedMemberBalance(ctx, cfg, channel)
 	}
 	item := managed[0]
 	source := strings.ToLower(strings.TrimSpace(defaultString(item.config.Source, "local")))
-	if source != "asxs_usage" {
+	if source != "asxs_usage" && source != "asxs_account" {
 		return 0, false, nil
 	}
 
@@ -376,6 +377,51 @@ func UpdateChannelBudgetGuardBalance(ctx context.Context, channel *model.Channel
 		model.InitChannelCache()
 	}
 	return channel.Balance, true, nil
+}
+
+// A shared member uses the same account balance as its managed source. Refresh
+// the source first so clicking either channel shows the same current value.
+func updateASXSAccountSharedMemberBalance(ctx context.Context, cfg *operation_setting.ChannelBudgetGuardSetting, member *model.Channel) (float64, bool, error) {
+	for _, pool := range cfg.SharedBalancePools {
+		memberFound := false
+		for _, memberID := range pool.MemberChannelIDs {
+			if memberID == member.Id {
+				memberFound = true
+				break
+			}
+		}
+		if !memberFound {
+			continue
+		}
+		source, err := model.GetChannelById(pool.SourceChannelID, true)
+		if err != nil {
+			return 0, true, err
+		}
+		managed := resolveChannelBudgetGuardChannels(cfg, []*model.Channel{source})
+		if len(managed) != 1 || !strings.EqualFold(strings.TrimSpace(managed[0].config.Source), "asxs_account") {
+			continue
+		}
+		if _, _, err := UpdateChannelBudgetGuardBalance(ctx, source); err != nil {
+			return 0, true, err
+		}
+		state := loadChannelBudgetGuardState()
+		updated, statusChanged := applySharedBalancePools(cfg, []*model.Channel{source, member}, &state, common.GetTimestamp())
+		if updated {
+			if err := saveJSONOption(channelBudgetGuardStateOptionKey, state); err != nil {
+				logger.LogWarn(ctx, fmt.Sprintf("channel budget guard: save shared state failed after manual balance refresh: %v", err))
+			}
+		}
+		if statusChanged {
+			model.InitChannelCache()
+		}
+		if member.Balance != source.Balance {
+			if err := updateChannelBudgetGuardChannel(member, channelBudgetChannelUpdate{Balance: float64Ptr(source.Balance)}, common.GetTimestamp()); err != nil {
+				return 0, true, err
+			}
+		}
+		return member.Balance, true, nil
+	}
+	return 0, false, nil
 }
 
 func UpdateCliproxyCPAQuotaGuardBalance(channel *model.Channel) (float64, bool, error) {
@@ -560,7 +606,8 @@ func filterASXSChannelBudgetGuardChannels(managed []channelBudgetManagedChannel)
 }
 
 func isASXSChannelBudgetGuardItem(item channelBudgetManagedChannel) bool {
-	return strings.EqualFold(strings.TrimSpace(defaultString(item.config.Source, "local")), "asxs_usage")
+	source := strings.ToLower(strings.TrimSpace(defaultString(item.config.Source, "local")))
+	return source == "asxs_usage" || source == "asxs_account"
 }
 
 func summarizeASXSChannelBudgetPool(cfg *operation_setting.ChannelBudgetGuardSetting, managed []channelBudgetManagedChannel, balanceFallbacks []*model.Channel, failed int, refreshed bool) ChannelBudgetPoolSummary {
@@ -569,8 +616,12 @@ func summarizeASXSChannelBudgetPool(cfg *operation_setting.ChannelBudgetGuardSet
 	if cfg != nil && strings.TrimSpace(cfg.AutoDiscovery.ASXS.Group) != "" {
 		group = strings.TrimSpace(cfg.AutoDiscovery.ASXS.Group)
 	}
+	source := "asxs_account"
+	if len(managed) > 0 {
+		source = strings.ToLower(strings.TrimSpace(defaultString(managed[0].config.Source, source)))
+	}
 	summary := ChannelBudgetPoolSummary{
-		Source:             "asxs_usage",
+		Source:             source,
 		Group:              group,
 		FailedChannelCount: failed,
 		QuotaPerUSD:        quotaPerUSD,
@@ -762,7 +813,7 @@ func resolveChannelBudgetGuardChannels(cfg *operation_setting.ChannelBudgetGuard
 					ID:       channel.Id,
 					Name:     channel.Name,
 					Mode:     defaultString(asxs.Mode, "daily"),
-					Source:   defaultString(asxs.Source, "asxs_usage"),
+					Source:   defaultString(asxs.Source, "asxs_account"),
 					UsageURL: defaultString(asxs.UsageURL, "https://api.asxs.top/api/usage"),
 					LimitUSD: asxs.DefaultLimitUSD,
 					Enabled:  true,
@@ -790,7 +841,7 @@ func applyChannelBudgetGuard(ctx context.Context, cfg *operation_setting.Channel
 		return state, false, false, fmt.Errorf("unsupported mode %q", mode)
 	}
 
-	if source == "asxs_usage" {
+	if source == "asxs_usage" || source == "asxs_account" {
 		return applyASXSChannelBudgetGuard(ctx, cfg, channel, channelCfg, state, nowTs, quotaPerUSD)
 	}
 
@@ -865,21 +916,52 @@ func applyChannelBudgetGuard(ctx context.Context, cfg *operation_setting.Channel
 	return state, true, statusChanged, nil
 }
 
+func asxsAccountGuardUsage(account ASXSAccountDailyBalance) (asxsUsageResult, error) {
+	if account.Balance == nil || math.IsNaN(*account.Balance) || math.IsInf(*account.Balance, 0) || math.IsNaN(account.DailyLimitUSD) || math.IsInf(account.DailyLimitUSD, 0) || account.DailyLimitUSD < 0 {
+		return asxsUsageResult{}, fmt.Errorf("ASXS account daily balance is unavailable")
+	}
+	return asxsUsageResult{
+		PlanName:     "ASXS account daily subscriptions",
+		TotalUSD:     account.DailyLimitUSD,
+		UsedUSD:      math.Max(account.DailyLimitUSD-*account.Balance, 0),
+		RemainingUSD: *account.Balance,
+		Unit:         "USD",
+		RawItems:     account.SubscriptionCount,
+	}, nil
+}
+
 func applyASXSChannelBudgetGuard(ctx context.Context, cfg *operation_setting.ChannelBudgetGuardSetting, channel *model.Channel, channelCfg operation_setting.ChannelBudgetGuardChannelSetting, state channelBudgetGuardChannelState, nowTs int64, quotaPerUSD float64) (channelBudgetGuardChannelState, bool, bool, error) {
-	usageURL := defaultString(channelCfg.UsageURL, "https://api.asxs.top/api/usage")
-	usage, err := fetchASXSUsage(ctx, channel, usageURL, channelBudgetGuardTimeout(cfg, channelCfg))
-	if err != nil {
-		return state, false, false, err
+	source := strings.ToLower(strings.TrimSpace(channelCfg.Source))
+	var usage asxsUsageResult
+	var partial bool
+	if source == "asxs_account" {
+		account, err := fetchASXSAccountDailyBalance(ctx)
+		if err != nil {
+			return state, false, false, err
+		}
+		usage, err = asxsAccountGuardUsage(account)
+		if err != nil {
+			return state, false, false, err
+		}
+		partial = account.Partial
+	} else {
+		usageURL := defaultString(channelCfg.UsageURL, "https://api.asxs.top/api/usage")
+		var err error
+		usage, err = fetchASXSUsage(ctx, channel, usageURL, channelBudgetGuardTimeout(cfg, channelCfg))
+		if err != nil {
+			return state, false, false, err
+		}
 	}
 	limitUSD := channelCfg.LimitUSD
-	if usage.TotalUSD > 0 {
+	if source == "asxs_account" || usage.TotalUSD > 0 {
 		limitUSD = usage.TotalUSD
 	}
 	usedQuota := int64(math.Round(math.Max(usage.UsedUSD, 0) * quotaPerUSD))
 	remainingUSD := math.Max(usage.RemainingUSD, 0)
 	otherInfo := parseGuardObject(channel.OtherInfo)
 	budgetExtra := map[string]interface{}{
-		"source":                 "asxs_usage",
+		"source":                 source,
+		"partial":                partial,
 		"upstream_plan_name":     usage.PlanName,
 		"upstream_reset_info":    usage.ResetInfo,
 		"upstream_total_usd":     roundFloat(usage.TotalUSD, 6),
@@ -888,17 +970,25 @@ func applyASXSChannelBudgetGuard(ctx context.Context, cfg *operation_setting.Cha
 		"disabled_by_guard":      state.DisabledByGuard,
 	}
 	otherInfo["budget_guard"] = buildChannelBudgetInfo(channelCfg, "upstream_daily", limitUSD, usedQuota, quotaPerUSD, remainingUSD, nowTs, budgetReason(remainingUSD > 0), budgetExtra)
-	otherInfo[channelQuotaSourceInfoKey] = buildASXSQuotaSource(usage, remainingUSD, nowTs)
+	quotaSource := buildASXSQuotaSource(usage, remainingUSD, nowTs)
+	if source == "asxs_account" {
+		rawSource := quotaSource["raw_source"].(map[string]interface{})
+		rawSource["source"] = source
+		rawSource["subscription_count"] = usage.RawItems
+	}
+	otherInfo[channelQuotaSourceInfoKey] = quotaSource
 
 	updates := channelBudgetChannelUpdate{UsedQuota: &usedQuota, Balance: float64Ptr(remainingUSD), OtherInfo: otherInfo}
 	statusChanged := false
-	if channel.Remark == nil || strings.TrimSpace(*channel.Remark) == "" {
+	if source == "asxs_account" && (channel.Remark == nil || strings.TrimSpace(*channel.Remark) == "" || strings.TrimSpace(*channel.Remark) == channelBudgetGuardDefaultRemark) {
+		updates.Remark = stringPtr(channelBudgetGuardAccountRemark)
+	} else if channel.Remark == nil || strings.TrimSpace(*channel.Remark) == "" {
 		updates.Remark = stringPtr(channelBudgetGuardDefaultRemark)
 	}
 
 	if remainingUSD <= 0 {
 		updates.Balance = float64Ptr(0)
-		if channel.Status == common.ChannelStatusEnabled {
+		if !partial && channel.Status == common.ChannelStatusEnabled {
 			updates.Status = intPtr(common.ChannelStatusAutoDisabled)
 			updates.AbilitiesEnabled = boolPtr(false)
 			otherInfo["status_reason"] = fmt.Sprintf("channel_budget_exhausted: upstream daily limit $%g", limitUSD)
@@ -909,7 +999,7 @@ func applyASXSChannelBudgetGuard(ctx context.Context, cfg *operation_setting.Cha
 			state.DisabledByGuard = true
 			statusChanged = true
 		}
-	} else if wasDisabledByChannelBudgetGuard(state, channel.OtherInfo) && channel.Status != common.ChannelStatusManuallyDisabled {
+	} else if !partial && wasDisabledByChannelBudgetGuard(state, channel.OtherInfo) && channel.Status != common.ChannelStatusManuallyDisabled {
 		updates.Status = intPtr(common.ChannelStatusEnabled)
 		updates.AbilitiesEnabled = boolPtr(true)
 		state.DisabledByGuard = false

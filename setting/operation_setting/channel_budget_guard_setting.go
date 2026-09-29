@@ -66,7 +66,7 @@ var channelBudgetGuardSetting = ChannelBudgetGuardSetting{
 			Group:           "asxs",
 			BaseURL:         "https://api.asxs.top",
 			Mode:            "daily",
-			Source:          "asxs_usage",
+			Source:          "asxs_account",
 			UsageURL:        "https://api.asxs.top/api/usage",
 			DefaultLimitUSD: 1,
 		},
