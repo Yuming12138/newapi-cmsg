@@ -12,17 +12,17 @@ func TestParseASXSAccountDailyBalanceSumsDistinctActiveSubscriptions(t *testing.
 	now := time.Date(2026, time.September, 29, 10, 0, 0, 0, time.UTC)
 	raw := []byte(`{
 		"balanceMicros":0,
-		"subscription":{"id":"sixty","expiresAt":"2026-09-30T00:00:00Z","limits":[{"limitType":"daily","limitMicros":60000000,"leftMicros":60000000}]},
+		"subscription":{"id":"sixty","expiresAt":"2026-09-30T00:00:00Z","limits":[{"limitType":"daily","limitMicros":300000000,"leftMicros":300000000}]},
 		"subscriptions":[
-			{"id":"sixty","expiresAt":"2026-09-30T00:00:00Z","limits":[{"limitType":"daily","limitMicros":60000000,"leftMicros":60000000}]},
-			{"id":"thirty-six","expiresAt":"2026-10-05T00:00:00Z","limits":[{"limitType":"daily","limitMicros":36000000,"leftMicros":36000000}]},
-			{"id":"non-daily","limits":[{"limitType":"total","limitMicros":1000000,"leftMicros":1000000}]},
-			{"id":"expired","expiresAt":"2026-09-28T00:00:00Z","limits":[{"limitType":"daily","limitMicros":10000000,"leftMicros":10000000}]}
+			{"id":"sixty","expiresAt":"2026-09-30T00:00:00Z","limits":[{"limitType":"daily","limitMicros":300000000,"leftMicros":300000000}]},
+			{"id":"thirty-six","expiresAt":"2026-10-05T00:00:00Z","limits":[{"limitType":"daily","limitMicros":180000000,"leftMicros":180000000}]},
+			{"id":"non-daily","limits":[{"limitType":"total","limitMicros":5000000,"leftMicros":5000000}]},
+			{"id":"expired","expiresAt":"2026-09-28T00:00:00Z","limits":[{"limitType":"daily","limitMicros":50000000,"leftMicros":50000000}]}
 		],
-		"windows":[{"limitType":"daily","limitMicros":60000000,"leftMicros":43390000}],
+		"windows":[{"limitType":"daily","limitMicros":300000000,"leftMicros":216950000}],
 		"subscriptionWindows":[
-			{"subscriptionId":"sixty","windows":[{"limitType":"daily","limitMicros":60000000,"leftMicros":43390000}]},
-			{"subscriptionId":"thirty-six","windows":[{"limitType":"daily","limitMicros":36000000,"leftMicros":36000000}]}
+			{"subscriptionId":"sixty","windows":[{"limitType":"daily","limitMicros":300000000,"leftMicros":216950000}]},
+			{"subscriptionId":"thirty-six","windows":[{"limitType":"daily","limitMicros":180000000,"leftMicros":180000000}]}
 		]
 	}`)
 	got, err := parseASXSAccountDailyBalance(raw, now)
@@ -38,11 +38,11 @@ func TestParseASXSAccountDailyBalanceFallsBackToStaticSubscriptionLimit(t *testi
 	now := time.Date(2026, time.September, 29, 10, 0, 0, 0, time.UTC)
 	raw := []byte(`{
 		"balanceMicros":0,
-		"subscription":{"id":"sixty","limits":[{"limitType":"daily","limitMicros":60000000,"leftMicros":60000000}]},
+		"subscription":{"id":"sixty","limits":[{"limitType":"daily","limitMicros":300000000,"leftMicros":300000000}]},
 		"subscriptions":[
-			{"id":"thirty-six","limits":[{"limitType":"daily","limitMicros":36000000,"leftMicros":36000000}]}
+			{"id":"thirty-six","limits":[{"limitType":"daily","limitMicros":180000000,"leftMicros":180000000}]}
 		],
-		"windows":[{"limitType":"daily","limitMicros":60000000,"leftMicros":43390000}]
+		"windows":[{"limitType":"daily","limitMicros":300000000,"leftMicros":216950000}]
 	}`)
 	got, err := parseASXSAccountDailyBalance(raw, now)
 	if err != nil {
@@ -61,7 +61,7 @@ func TestParseASXSAccountDailyBalanceRejectsErrorPayload(t *testing.T) {
 }
 
 func TestParseASXSAccountDailyBalanceKeepsExhaustedZero(t *testing.T) {
-	raw := []byte(`{"balanceMicros":0,"subscriptions":[{"id":"exhausted","limits":[{"limitType":"daily","limitMicros":4000000,"leftMicros":0}]}]}`)
+	raw := []byte(`{"balanceMicros":0,"subscriptions":[{"id":"exhausted","limits":[{"limitType":"daily","limitMicros":20000000,"leftMicros":0}]}]}`)
 	got, err := parseASXSAccountDailyBalance(raw, time.Now())
 	if err != nil || got.Balance == nil || *got.Balance != 0 {
 		t.Fatalf("exhausted subscription = %+v, error=%v; want a real $0 balance", got, err)
