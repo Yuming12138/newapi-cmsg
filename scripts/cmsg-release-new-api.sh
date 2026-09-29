@@ -11,7 +11,7 @@ host="${CMSG_HOST:-cmsg-root}"
 remote_dir="${CMSG_REMOTE_DIR:-/opt/new-api}"
 compose_file="${CMSG_COMPOSE_FILE:-docker-compose.prod.yml}"
 public_status_url="${CMSG_PUBLIC_STATUS_URL:-https://api.cmsg666.xyz/api/status}"
-keep_prior="${CMSG_KEEP_PRIOR_RELEASES:-3}"
+keep_prior="${CMSG_KEEP_PRIOR_RELEASES:-2}"
 skip_tests="${CMSG_SKIP_TESTS:-0}"
 
 branch="$(git branch --show-current)"
@@ -115,7 +115,13 @@ if [[ "$actual_sha" != "$expected_sha" ]]; then
   exit 1
 fi
 
-cp "$compose_file" "$compose_file.bak.$release"
+active_release="$(grep -oE '\./releases/new-api-[^/]+/new-api:/new-api:ro' "$compose_file" | head -n 1 | cut -d/ -f3)"
+case "$active_release" in
+  new-api-*) ;;
+  *) echo "cannot identify active release" >&2; exit 1 ;;
+esac
+mkdir -p backups
+cp "$compose_file" "backups/$compose_file.current-$active_release"
 perl -0pi -e "s#\./releases/[^:]+/new-api:/new-api:ro#./releases/$release/new-api:/new-api:ro#" "$compose_file"
 grep -n './releases/.*/new-api:/new-api:ro' "$compose_file"
 
@@ -144,10 +150,16 @@ mapfile -t old_releases < <(
       { print $2 }
     '
 )
+cp "$compose_file" "backups/$compose_file.current-$release"
 for old in "${old_releases[@]}"; do
   case "$old" in
     new-api-*) rm -rf -- "releases/$old" ;;
   esac
+done
+for snapshot in backups/"$compose_file".current-new-api-*; do
+  [[ -f "$snapshot" ]] || continue
+  snapshot_release="${snapshot##*.current-}"
+  [[ -d "releases/$snapshot_release" ]] || rm -f -- "$snapshot"
 done
 REMOTE
 
