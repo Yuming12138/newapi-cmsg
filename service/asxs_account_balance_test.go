@@ -29,7 +29,7 @@ func TestParseASXSAccountDailyBalanceSumsDistinctActiveSubscriptions(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Balance == nil || math.Abs(*got.Balance-79.39) > 0.000001 || got.SubscriptionCount != 3 || got.Partial || got.Currency != "USD" {
+	if got.Balance == nil || math.Abs(*got.Balance-79.39) > 0.000001 || got.SubscriptionCount != 3 || got.Partial || got.Currency != "USD" || got.DailyLimitUSD != 96 {
 		t.Fatalf("ASXS account daily balance = %+v, want $79.39 from two daily subscriptions", got)
 	}
 }
@@ -48,7 +48,7 @@ func TestParseASXSAccountDailyBalanceFallsBackToStaticSubscriptionLimit(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Balance == nil || *got.Balance != 79.39 || !got.Partial {
+	if got.Balance == nil || *got.Balance != 79.39 || !got.Partial || got.DailyLimitUSD != 96 {
 		t.Fatalf("ASXS account daily balance = %+v, want $79.39 with static fallback marked partial", got)
 	}
 }
@@ -93,5 +93,18 @@ func TestReadASXSAccountTokenRejectsPublicPermissions(t *testing.T) {
 	}
 	if _, err := readASXSAccountToken(path); err == nil {
 		t.Fatal("read token with public permissions succeeded")
+	}
+}
+
+func TestASXSAccountGuardUsageUsesAggregateDailyBalance(t *testing.T) {
+	balance := 46.73
+	usage, err := asxsAccountGuardUsage(ASXSAccountDailyBalance{
+		Balance: &balance, DailyLimitUSD: 118, SubscriptionCount: 4,
+	})
+	if err != nil || usage.TotalUSD != 118 || math.Abs(usage.UsedUSD-71.27) > 0.000001 || usage.RemainingUSD != balance || usage.RawItems != 4 {
+		t.Fatalf("account guard usage = %+v, err=%v", usage, err)
+	}
+	if _, err := asxsAccountGuardUsage(ASXSAccountDailyBalance{}); err == nil {
+		t.Fatal("missing account balance must not replace a channel balance")
 	}
 }
