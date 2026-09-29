@@ -163,7 +163,7 @@ for snapshot in backups/"$compose_file".current-new-api-*; do
 done
 REMOTE
 
-ssh "$host" "curl -fsS --max-time 10 http://127.0.0.1:3000/api/status | head -c 400; echo"
-curl -fsS --max-time 15 "$public_status_url" | head -c 400
-echo
+ssh "$host" "curl -fsS --max-time 10 -o /dev/null http://127.0.0.1:3000/api/status"
+curl -fsS --max-time 15 -o /dev/null "$public_status_url"
+echo "local and public status endpoints healthy"
 echo "deployed $release"
