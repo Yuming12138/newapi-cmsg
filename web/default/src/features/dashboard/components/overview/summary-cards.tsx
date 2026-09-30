@@ -23,7 +23,6 @@ import { useAuthStore } from '@/stores/auth-store'
 import { getSelf } from '@/lib/api'
 import { getCurrencyLabel, isCurrencyDisplayEnabled } from '@/lib/currency'
 import { formatNumber, formatQuota } from '@/lib/format'
-import { ROLE } from '@/lib/roles'
 import { computeTimeRange } from '@/lib/time'
 import { useStatus } from '@/hooks/use-status'
 import { StaggerContainer, StaggerItem } from '@/components/page-transition'
@@ -110,7 +109,6 @@ export function SummaryCards() {
 
   const liveUser =
     selfQuery.data?.success && selfQuery.data?.data ? selfQuery.data.data : user
-  const isAdmin = Boolean(liveUser?.role && liveUser.role >= ROLE.ADMIN)
 
   const displayedRemainQuota = Number(liveUser?.quota ?? 0)
 
@@ -193,9 +191,7 @@ export function SummaryCards() {
 
   return (
     <div className='bg-card overflow-hidden rounded-2xl border shadow-xs'>
-      <div
-        className={isAdmin ? 'grid xl:grid-cols-[minmax(0,1fr)_19rem]' : 'grid'}
-      >
+      <div className='grid xl:grid-cols-[minmax(0,1fr)_19rem]'>
         <div className='flex flex-col gap-3 p-4 sm:p-5'>
           <div className='flex flex-wrap items-start justify-between gap-3'>
             <div className='flex flex-col gap-1'>
@@ -227,7 +223,7 @@ export function SummaryCards() {
           </StaggerContainer>
         </div>
 
-        {isAdmin ? <UpstreamBalancesPanel /> : null}
+        <UpstreamBalancesPanel />
       </div>
     </div>
   )
