@@ -37,6 +37,7 @@ const deepSeekProExpr = `deepseekPeak() ? tier("peak", p * 1.2328767123287672 + 
 var defaultBillingMode = map[string]string{
 	"gpt-6-luna":          BillingModeTieredExpr,
 	"gpt-6-sol":           BillingModeTieredExpr,
+	"gpt-6.1-sol":         BillingModeTieredExpr,
 	"gpt-5.6-luna":        BillingModeTieredExpr,
 	"gpt-5.6-terra":       BillingModeTieredExpr,
 	"gpt-5.6-sol":         BillingModeTieredExpr,
@@ -47,8 +48,10 @@ var defaultBillingMode = map[string]string{
 }
 
 var defaultBillingExpr = map[string]string{
-	"gpt-6-luna":          `len <= 272000 ? tier("standard", p * 0.10 + cr * 0.01 + cc * 0.125 + c * 0.50) : tier("long_context", p * 0.20 + cr * 0.02 + cc * 0.25 + c * 0.75)`,
-	"gpt-6-sol":           `len <= 272000 ? tier("standard", p * 2.00 + cr * 0.20 + cc * 2.50 + c * 10.00) : tier("long_context", p * 4.00 + cr * 0.40 + cc * 5.00 + c * 15.00)`,
+	"gpt-6-luna": `len <= 272000 ? tier("standard", p * 0.10 + cr * 0.01 + cc * 0.125 + c * 0.50) : tier("long_context", p * 0.20 + cr * 0.02 + cc * 0.25 + c * 0.75)`,
+	"gpt-6-sol":  `len <= 272000 ? tier("standard", p * 2.00 + cr * 0.20 + cc * 2.50 + c * 10.00) : tier("long_context", p * 4.00 + cr * 0.40 + cc * 5.00 + c * 15.00)`,
+	// https://developers.openai.com/api/docs/models/gpt-6.1-sol
+	"gpt-6.1-sol":         `len <= 272000 ? tier("standard", p * 2.00 + cr * 0.10 + cc * 2.50 + c * 10.00) : tier("long_context", p * 4.00 + cr * 0.20 + cc * 5.00 + c * 15.00)`,
 	"gpt-5.6-luna":        `len <= 272000 ? tier("standard", p * 0.20 + cr * 0.02 + cc * 0.25 + c * 1.20) : tier("long_context", p * 0.40 + cr * 0.04 + cc * 0.50 + c * 1.80)`,
 	"gpt-5.6-terra":       `len <= 272000 ? tier("standard", p * 2.00 + cr * 0.20 + cc * 2.50 + c * 12.00) : tier("long_context", p * 4.00 + cr * 0.40 + cc * 5.00 + c * 18.00)`,
 	"gpt-5.6-sol":         `len <= 272000 ? tier("standard", p * 4.00 + cr * 0.40 + cc * 5.00 + c * 20.00) : tier("long_context", p * 8.00 + cr * 0.80 + cc * 10.00 + c * 30.00)`,
