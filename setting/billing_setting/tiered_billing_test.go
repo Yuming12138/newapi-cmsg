@@ -22,6 +22,7 @@ func TestDefaultGPT56AndGPT6TieredPricing(t *testing.T) {
 	}{
 		{model: "gpt-6-luna", standardInput: 0.10, standardCached: 0.01, standardCacheWrite: 0.125, standardOutput: 0.50, longInput: 0.20, longCached: 0.02, longCacheWrite: 0.25, longOutput: 0.75},
 		{model: "gpt-6-sol", standardInput: 2.00, standardCached: 0.20, standardCacheWrite: 2.50, standardOutput: 10.00, longInput: 4.00, longCached: 0.40, longCacheWrite: 5.00, longOutput: 15.00},
+		{model: "gpt-6.1-sol", standardInput: 2.00, standardCached: 0.10, standardCacheWrite: 2.50, standardOutput: 10.00, longInput: 4.00, longCached: 0.20, longCacheWrite: 5.00, longOutput: 15.00},
 		{model: "gpt-5.6-luna", standardInput: 0.20, standardCached: 0.02, standardCacheWrite: 0.25, standardOutput: 1.20, longInput: 0.40, longCached: 0.04, longCacheWrite: 0.50, longOutput: 1.80},
 		{model: "gpt-5.6-terra", standardInput: 2.00, standardCached: 0.20, standardCacheWrite: 2.50, standardOutput: 12.00, longInput: 4.00, longCached: 0.40, longCacheWrite: 5.00, longOutput: 18.00},
 		{model: "gpt-5.6-sol", standardInput: 4.00, standardCached: 0.40, standardCacheWrite: 5.00, standardOutput: 20.00, longInput: 8.00, longCached: 0.80, longCacheWrite: 10.00, longOutput: 30.00},
