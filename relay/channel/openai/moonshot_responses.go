@@ -13,9 +13,10 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 )
 
-// Moonshot accepts custom apply_patch, but Codex also registers custom exec.
-// Expose unsupported custom tools as functions upstream, then restore their
-// custom-tool wire format on the way back to the client.
+// Codex sends file edits as the custom apply_patch tool and command execution
+// as custom exec. CPA-compatible Kimi endpoints do not reliably execute that
+// custom envelope, so expose both as function tools upstream, then restore
+// their custom-tool wire format on the way back to the client.
 func isOfficialMoonshotURL(rawURL string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(rawURL))
 	return err == nil && strings.EqualFold(parsed.Hostname(), "api.moonshot.cn")
@@ -210,9 +211,6 @@ func normalizeMoonshotTool(tool map[string]any, customNames map[string]struct{})
 		return nil
 	}
 	name, _ := tool["name"].(string)
-	if name == "apply_patch" {
-		return nil
-	}
 	if name == "" {
 		return fmt.Errorf("Moonshot custom tool is missing a name")
 	}

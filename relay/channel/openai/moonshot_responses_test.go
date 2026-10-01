@@ -81,8 +81,9 @@ func TestConvertOpenAIResponsesRequestNormalizesCpaKimiTools(t *testing.T) {
 	require.NoError(t, common.Unmarshal(converted.Input, &input))
 	require.Len(t, input, 1)
 	additional := input[0]["tools"].([]any)[0].(map[string]any)
-	require.Equal(t, "custom", additional["type"])
+	require.Equal(t, "function", additional["type"])
 	require.Equal(t, "apply_patch", additional["name"])
+	require.NotNil(t, additional["parameters"])
 }
 
 func TestNormalizeMoonshotResponsesRequestForCodexTools(t *testing.T) {
@@ -109,6 +110,7 @@ func TestNormalizeMoonshotResponsesRequestForCodexTools(t *testing.T) {
 	converted, names, err := normalizeMoonshotResponsesRequest(request)
 	require.NoError(t, err)
 	require.Contains(t, names, "exec")
+	require.Contains(t, names, "apply_patch")
 	require.Equal(t, "high", converted.Reasoning.Effort)
 	require.Empty(t, converted.Reasoning.Summary)
 	require.Nil(t, converted.Include)
@@ -120,14 +122,14 @@ func TestNormalizeMoonshotResponsesRequestForCodexTools(t *testing.T) {
 	require.Equal(t, "function", gotTools[0]["type"])
 	require.Equal(t, "object", gotTools[0]["parameters"].(map[string]any)["type"])
 	require.NotContains(t, gotTools[0], "format")
-	require.Equal(t, "custom", gotTools[1]["type"])
+	require.Equal(t, "function", gotTools[1]["type"])
 
 	var gotInput []map[string]any
 	require.NoError(t, common.Unmarshal(converted.Input, &gotInput))
 	require.Len(t, gotInput, 3)
 	require.Equal(t, "function_call", gotInput[0]["type"])
 	require.Equal(t, "function_call_output", gotInput[1]["type"])
-	require.Equal(t, "custom_tool_call", gotInput[2]["type"])
+	require.Equal(t, "function_call", gotInput[2]["type"])
 	var args map[string]string
 	require.NoError(t, common.Unmarshal([]byte(gotInput[0]["arguments"].(string)), &args))
 	require.Equal(t, "print(1)", args["input"])
