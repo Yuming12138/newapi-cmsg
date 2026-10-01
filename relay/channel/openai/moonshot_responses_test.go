@@ -8,9 +8,82 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIsMoonshotResponsesChannelRecognizesCpaKimiModel(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeOpenAI,
+			ChannelBaseUrl:    "https://cpa.example/v1",
+			UpstreamModelName: "kimi-k3",
+		},
+	}
+	require.True(t, isMoonshotResponsesChannel(info, "gpt-5.6-sol"))
+
+	info.UpstreamModelName = "gpt-5.6-sol"
+	require.False(t, isMoonshotResponsesChannel(info, "gpt-5.6-sol"))
+
+	info.ChannelType = constant.ChannelTypeMoonshot
+	require.True(t, isMoonshotResponsesChannel(info, "gpt-5.6-sol"))
+
+	info.ChannelType = constant.ChannelTypeOpenAI
+	info.ChannelBaseUrl = "https://api.moonshot.cn/v1"
+	require.True(t, isMoonshotResponsesChannel(info, "moonshot-v1-8k"))
+}
+
+func TestConvertOpenAIResponsesRequestNormalizesCpaKimiTools(t *testing.T) {
+	toolsJSON, err := common.Marshal([]map[string]any{
+		{
+			"type": "custom", "name": "exec", "description": "Run a command",
+			"format": map[string]any{"type": "grammar", "syntax": "lark", "definition": "start: SOURCE"},
+		},
+	})
+	require.NoError(t, err)
+	inputJSON, err := common.Marshal([]map[string]any{
+		{
+			"type": "additional_tools", "role": "developer",
+			"tools": []map[string]any{
+				{"type": "custom", "name": "apply_patch", "format": map[string]any{"type": "grammar", "syntax": "lark", "definition": "start: SOURCE"}},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	request := dto.OpenAIResponsesRequest{
+		Model: "kimi-k3", Tools: toolsJSON, Input: inputJSON,
+	}
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeOpenAI,
+			ChannelBaseUrl:    "https://cpa.example/v1",
+			UpstreamModelName: "kimi-k3",
+		},
+	}
+
+	convertedAny, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, request)
+	require.NoError(t, err)
+	converted := convertedAny.(dto.OpenAIResponsesRequest)
+
+	var tools []map[string]any
+	require.NoError(t, common.Unmarshal(converted.Tools, &tools))
+	require.Len(t, tools, 1)
+	require.Equal(t, "function", tools[0]["type"])
+	require.Equal(t, "exec", tools[0]["name"])
+
+	var input []map[string]any
+	require.NoError(t, common.Unmarshal(converted.Input, &input))
+	require.Len(t, input, 1)
+	additional := input[0]["tools"].([]any)[0].(map[string]any)
+	require.Equal(t, "custom", additional["type"])
+	require.Equal(t, "apply_patch", additional["name"])
+}
 
 func TestNormalizeMoonshotResponsesRequestForCodexTools(t *testing.T) {
 	tools, err := common.Marshal([]map[string]any{
