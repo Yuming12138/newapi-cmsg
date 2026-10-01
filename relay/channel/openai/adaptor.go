@@ -617,7 +617,7 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if err != nil {
 		return nil, fmt.Errorf("normalize ASXS Grok Responses tools: %w", err)
 	}
-	if info != nil && isOfficialMoonshotURL(info.ChannelBaseUrl) {
+	if isMoonshotResponsesChannel(info, request.Model) {
 		request, a.moonshotCustomTools, err = normalizeMoonshotResponsesRequest(request)
 		if err != nil {
 			return nil, fmt.Errorf("normalize Moonshot Responses request: %w", err)
@@ -627,6 +627,24 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		}
 	}
 	return request, nil
+}
+
+func isMoonshotResponsesChannel(info *relaycommon.RelayInfo, requestedModel string) bool {
+	if info == nil || info.ChannelMeta == nil {
+		return false
+	}
+	// Kimi subscriptions may be exposed through a CPA/OpenAI-compatible URL.
+	if info.ChannelType == constant.ChannelTypeMoonshot || isOfficialMoonshotURL(info.ChannelBaseUrl) {
+		return true
+	}
+
+	for _, model := range []string{info.UpstreamModelName, requestedModel} {
+		model = strings.ToLower(strings.TrimSpace(model))
+		if strings.HasPrefix(model, "kimi-") {
+			return true
+		}
+	}
+	return false
 }
 
 func sanitizeGPTResponsesInputItemIDs(request dto.OpenAIResponsesRequest, info *relaycommon.RelayInfo) (dto.OpenAIResponsesRequest, error) {
