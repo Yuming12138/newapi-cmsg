@@ -73,14 +73,14 @@ func TestConvertOpenAIResponsesRequestNormalizesCpaKimiTools(t *testing.T) {
 
 	var tools []map[string]any
 	require.NoError(t, common.Unmarshal(converted.Tools, &tools))
-	require.Len(t, tools, 1)
+	require.Len(t, tools, 2)
 	require.Equal(t, "function", tools[0]["type"])
 	require.Equal(t, "exec", tools[0]["name"])
 
 	var input []map[string]any
 	require.NoError(t, common.Unmarshal(converted.Input, &input))
-	require.Len(t, input, 1)
-	additional := input[0]["tools"].([]any)[0].(map[string]any)
+	require.Empty(t, input)
+	additional := tools[1]
 	require.Equal(t, "function", additional["type"])
 	require.Equal(t, "apply_patch", additional["name"])
 	require.NotNil(t, additional["parameters"])
@@ -240,9 +240,78 @@ func TestNormalizeMoonshotAdditionalCustomTools(t *testing.T) {
 	require.Contains(t, names, "exec")
 	var items []map[string]any
 	require.NoError(t, common.Unmarshal(converted.Input, &items))
-	additional := items[1]["tools"].([]any)[0].(map[string]any)
+	require.Len(t, items, 1)
+	require.Equal(t, "message", items[0]["type"])
+	var tools []map[string]any
+	require.NoError(t, common.Unmarshal(converted.Tools, &tools))
+	require.Len(t, tools, 1)
+	additional := tools[0]
 	require.Equal(t, "function", additional["type"])
 	require.Equal(t, "exec", additional["name"])
 	require.NotContains(t, additional, "format")
 	require.Equal(t, "object", additional["parameters"].(map[string]any)["type"])
+}
+
+func TestMoonshotDesktopDynamicNamespaceToolRoundTrip(t *testing.T) {
+	// Desktop sends an empty top-level tools array and a custom exec inside
+	// the dynamically advertised functions namespace. CPA must see that tool.
+	request := dto.OpenAIResponsesRequest{
+		Model: "kimi-k3", Tools: []byte(`[]`),
+		Input: []byte(`[
+			{"type":"custom_tool_call","call_id":"call_1","name":"exec","namespace":"functions","input":"text(await tools.exec_command({cmd:'write file'}))"},
+			{"type":"custom_tool_call_output","call_id":"call_1","output":"file written"},
+			{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"exec","description":"Run JavaScript"},{"type":"function","name":"wait","parameters":{"type":"object"}}]}]}
+		]`),
+	}
+	converted, names, err := normalizeMoonshotResponsesRequest(request)
+	require.NoError(t, err)
+	var tools []map[string]any
+	require.NoError(t, common.Unmarshal(converted.Tools, &tools))
+	require.Len(t, tools, 1)
+	require.Equal(t, "namespace", tools[0]["type"])
+	require.Equal(t, "functions", tools[0]["name"])
+	children := tools[0]["tools"].([]any)
+	require.Len(t, children, 2)
+	require.Equal(t, "function", children[0].(map[string]any)["type"])
+
+	var input []map[string]any
+	require.NoError(t, common.Unmarshal(converted.Input, &input))
+	require.Len(t, input, 2)
+	require.Equal(t, "function_call", input[0]["type"])
+	require.Equal(t, "functions", input[0]["namespace"])
+	require.Equal(t, "function_call_output", input[1]["type"])
+
+	upstream := map[string]any{
+		"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "exec", "namespace": "functions",
+		"arguments": input[0]["arguments"],
+	}
+	require.True(t, rewriteMoonshotFunctionItem(upstream, names))
+	require.Equal(t, "custom_tool_call", upstream["type"])
+	require.Equal(t, "functions", upstream["namespace"])
+	require.Equal(t, "text(await tools.exec_command({cmd:'write file'}))", upstream["input"])
+}
+
+func TestMoonshotDynamicNamespacesMergeWithoutDuplicateTools(t *testing.T) {
+	request := dto.OpenAIResponsesRequest{
+		Tools: []byte(`[{"type":"namespace","name":"functions","tools":[{"type":"function","name":"wait"},{"type":"custom","name":"exec","description":"old"}]}]`),
+		Input: []byte(`[
+			{"type":"additional_tools","tools":[{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"exec","description":"new"},{"type":"function","name":"request_user_input"}]}]},
+			{"type":"additional_tools","tools":[{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"exec","description":"latest"}]}]},
+			{"type":"message","role":"user","content":"Create a file"}
+		]`),
+	}
+	converted, _, err := normalizeMoonshotResponsesRequest(request)
+	require.NoError(t, err)
+	var tools []map[string]any
+	require.NoError(t, common.Unmarshal(converted.Tools, &tools))
+	require.Len(t, tools, 1)
+	children := tools[0]["tools"].([]any)
+	require.Len(t, children, 3)
+	require.Equal(t, "wait", children[0].(map[string]any)["name"])
+	require.Equal(t, "latest\nPass the original free-form tool input as the input string.", children[1].(map[string]any)["description"])
+	require.Equal(t, "request_user_input", children[2].(map[string]any)["name"])
+	var input []map[string]any
+	require.NoError(t, common.Unmarshal(converted.Input, &input))
+	require.Len(t, input, 1)
+	require.Equal(t, "message", input[0]["type"])
 }

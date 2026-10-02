@@ -23,6 +23,11 @@ func isOfficialMoonshotURL(rawURL string) bool {
 }
 
 func normalizeMoonshotResponsesRequest(request dto.OpenAIResponsesRequest) (dto.OpenAIResponsesRequest, map[string]struct{}, error) {
+	var err error
+	request, err = promoteMoonshotAdditionalTools(request)
+	if err != nil {
+		return request, nil, err
+	}
 	customNames := make(map[string]struct{})
 	if len(request.Tools) > 0 {
 		var tools []map[string]any
@@ -50,20 +55,6 @@ func normalizeMoonshotResponsesRequest(request dto.OpenAIResponsesRequest) (dto.
 		filtered := make([]map[string]any, 0, len(items))
 		for _, item := range items {
 			switch item["type"] {
-			case "additional_tools":
-				additional, ok := item["tools"].([]any)
-				if !ok {
-					return request, nil, fmt.Errorf("Moonshot additional_tools.tools must be an array")
-				}
-				for _, value := range additional {
-					tool, ok := value.(map[string]any)
-					if !ok {
-						return request, nil, fmt.Errorf("Moonshot additional_tools contains a non-object tool")
-					}
-					if err := normalizeMoonshotTool(tool, customNames); err != nil {
-						return request, nil, err
-					}
-				}
 			case "reasoning":
 				delete(item, "encrypted_content")
 				summary, _ := item["summary"].([]any)
@@ -191,6 +182,93 @@ func normalizeMoonshotResponsesRequest(request dto.OpenAIResponsesRequest) (dto.
 	request.EnableThinking = nil
 	request.Preset = nil
 	return request, customNames, nil
+}
+
+// Codex Desktop can put every tool in input.additional_tools, leaving the
+// top-level tools array empty. CPA's Responses-to-chat translator only reads
+// the top-level array. Promote declarations before normalizing tools/history
+// so the provider sees them and can restore namespaced calls on its response.
+func promoteMoonshotAdditionalTools(request dto.OpenAIResponsesRequest) (dto.OpenAIResponsesRequest, error) {
+	input := bytes.TrimSpace(request.Input)
+	if len(input) == 0 || input[0] != '[' {
+		return request, nil
+	}
+	var items []map[string]any
+	if err := common.Unmarshal(request.Input, &items); err != nil {
+		return request, fmt.Errorf("decode Moonshot input: %w", err)
+	}
+	var tools []map[string]any
+	if len(request.Tools) > 0 {
+		if err := common.Unmarshal(request.Tools, &tools); err != nil {
+			return request, fmt.Errorf("decode Moonshot tools: %w", err)
+		}
+	}
+	filtered := make([]map[string]any, 0, len(items))
+	promoted := false
+	for _, item := range items {
+		if item["type"] != "additional_tools" {
+			filtered = append(filtered, item)
+			continue
+		}
+		additional, ok := item["tools"].([]any)
+		if !ok {
+			return request, fmt.Errorf("Moonshot additional_tools.tools must be an array")
+		}
+		for _, value := range additional {
+			tool, ok := value.(map[string]any)
+			if !ok {
+				return request, fmt.Errorf("Moonshot additional_tools contains a non-object tool")
+			}
+			tools = mergeMoonshotTool(tools, tool)
+		}
+		promoted = true
+	}
+	if !promoted {
+		return request, nil
+	}
+	var err error
+	request.Input, err = common.Marshal(filtered)
+	if err != nil {
+		return request, err
+	}
+	request.Tools, err = common.Marshal(tools)
+	return request, err
+}
+
+// Later declarations replace the same tool, while namespaces are merged so
+// adding one dynamic tool does not remove its already-declared siblings.
+func mergeMoonshotTool(tools []map[string]any, added map[string]any) []map[string]any {
+	addedName, _ := added["name"].(string)
+	addedType, _ := added["type"].(string)
+	for i, current := range tools {
+		currentName, _ := current["name"].(string)
+		currentType, _ := current["type"].(string)
+		if currentName != addedName || (currentType == "namespace") != (addedType == "namespace") {
+			continue
+		}
+		if addedName == "" && currentType != addedType {
+			continue
+		}
+		if addedType == "namespace" {
+			var children []map[string]any
+			for _, parent := range []map[string]any{current, added} {
+				nested, _ := parent["tools"].([]any)
+				for _, value := range nested {
+					if child, ok := value.(map[string]any); ok {
+						children = mergeMoonshotTool(children, child)
+					}
+				}
+			}
+			nested := make([]any, len(children))
+			for j, child := range children {
+				nested[j] = child
+			}
+			added["tools"] = nested
+		}
+		tools[i] = added
+		return tools
+	}
+	return append(tools, added)
 }
 
 func normalizeMoonshotTool(tool map[string]any, customNames map[string]struct{}) error {
