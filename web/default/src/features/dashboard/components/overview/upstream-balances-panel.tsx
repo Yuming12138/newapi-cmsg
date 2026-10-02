@@ -19,7 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { getDashboardProviderBalances } from '@/features/dashboard/api'
-import type { ProviderAccountBalance } from '@/features/dashboard/types'
+import type {
+  KimiSubscriptionBalance,
+  ProviderAccountBalance,
+} from '@/features/dashboard/types'
 
 type BalanceRowProps = {
   name: string
@@ -91,6 +94,101 @@ function providerUnavailableText(
   return provider?.channel_count ? waiting : noChannel
 }
 
+function subscriptionWindowLabel(name: string): string {
+  switch (name) {
+    case '5h':
+      return '5h'
+    case 'week':
+    case '7d':
+      return '7d'
+    case 'month_total':
+      return '月度总额'
+    case 'month_code':
+      return '月度代码'
+    default:
+      return name
+  }
+}
+
+function KimiSubscriptionRow(props: {
+  subscription: KimiSubscriptionBalance
+  officialBalance: number | null | undefined
+  loading: boolean
+}) {
+  const { t, i18n } = useTranslation()
+  const remaining =
+    props.subscription.remaining_percent ??
+    (props.subscription.windows.length > 0
+      ? Math.min(
+          ...props.subscription.windows.map(
+            (window) => window.remaining_percent
+          )
+        )
+      : null)
+  const formattedRemaining =
+    remaining != null && Number.isFinite(remaining)
+      ? `${new Intl.NumberFormat(i18n.language, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }).format(remaining)}%`
+      : '--'
+  const updatedAt = props.subscription.updated_at
+    ? new Intl.DateTimeFormat(i18n.language, {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(new Date(props.subscription.updated_at * 1000))
+    : null
+  const syncLabel = props.subscription.partial
+    ? t('Partially synced')
+    : updatedAt
+      ? t('Updated {{time}}', { time: updatedAt })
+      : t('Waiting for balance sync')
+
+  return (
+    <div className='bg-background/75 rounded-xl border px-3 py-2.5'>
+      <div className='flex items-center justify-between gap-2 text-xs'>
+        <span className='font-semibold text-violet-700 dark:text-violet-300'>
+          Kimi
+        </span>
+        <span className='text-muted-foreground truncate'>
+          {t('CPA subscription quota')}
+        </span>
+      </div>
+      <div className='mt-1 flex items-end justify-between gap-2'>
+        <span className='font-mono text-xl font-semibold tabular-nums'>
+          {props.loading ? '···' : formattedRemaining}
+        </span>
+        <span className='text-muted-foreground shrink-0 text-[10px]'>
+          {syncLabel}
+        </span>
+      </div>
+      <div className='text-muted-foreground mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px]'>
+        {props.subscription.windows.map((window) => (
+          <span key={window.name}>
+            {subscriptionWindowLabel(window.name)}{' '}
+            {new Intl.NumberFormat(i18n.language, {
+              minimumFractionDigits: 1,
+              maximumFractionDigits: 1,
+            }).format(window.remaining_percent)}%
+          </span>
+        ))}
+      </div>
+      {props.officialBalance != null && (
+        <div className='text-muted-foreground mt-1 text-[10px]'>
+          {t('Official wallet')}: ¥
+          {new Intl.NumberFormat(i18n.language, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          }).format(props.officialBalance)}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function UpstreamBalancesPanel() {
   const { t } = useTranslation()
   const balancesQuery = useQuery({
@@ -126,21 +224,29 @@ export function UpstreamBalancesPanel() {
           loading={balancesQuery.isPending}
           tone='text-amber-700 dark:text-amber-300'
         />
-        <BalanceRow
-          name='Kimi'
-          caption={t('Official account balance')}
-          amount={kimi?.balance}
-          currency='CNY'
-          updatedAt={kimi?.updated_at}
-          unavailableText={
-            balancesQuery.isError
-              ? unavailable
-              : providerUnavailableText(kimi, noChannel, waiting)
-          }
-          partial={kimi?.partial}
-          loading={balancesQuery.isPending}
-          tone='text-violet-700 dark:text-violet-300'
-        />
+        {kimi?.subscription ? (
+          <KimiSubscriptionRow
+            subscription={kimi.subscription}
+            officialBalance={kimi.balance}
+            loading={balancesQuery.isPending}
+          />
+        ) : (
+          <BalanceRow
+            name='Kimi'
+            caption={t('Official account balance')}
+            amount={kimi?.balance}
+            currency='CNY'
+            updatedAt={kimi?.updated_at}
+            unavailableText={
+              balancesQuery.isError
+                ? unavailable
+                : providerUnavailableText(kimi, noChannel, waiting)
+            }
+            partial={kimi?.partial}
+            loading={balancesQuery.isPending}
+            tone='text-violet-700 dark:text-violet-300'
+          />
+        )}
         <BalanceRow
           name='DeepSeek'
           caption={t('Official account balance')}

@@ -51,6 +51,33 @@ export interface ProviderAccountBalance {
   account_count: number
   synced_account_count: number
   partial: boolean
+  subscription?: KimiSubscriptionBalance | null
+}
+
+export interface KimiSubscriptionWindow {
+  name: string
+  remaining_percent: number
+  reset_at: number
+}
+
+export interface KimiSubscriptionAccount {
+  id: string
+  remaining_percent: number
+  windows: KimiSubscriptionWindow[]
+}
+
+export interface KimiSubscriptionBalance {
+  source: string
+  remaining_percent: number | null
+  windows: KimiSubscriptionWindow[]
+  accounts: KimiSubscriptionAccount[]
+  account_count: number
+  credential_count: number
+  available_account_count: number
+  channel_count: number
+  updated_at: number
+  partial: boolean
+  error?: string
 }
 
 export interface DashboardProviderBalances {

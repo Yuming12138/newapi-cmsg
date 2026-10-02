@@ -361,15 +361,24 @@ export async function handleUpdateChannelBalance(
     const response = await updateChannelBalance(id)
     if (response.success && response.balance !== undefined) {
       const balance = response.balance
+      const providerCurrency = response.provider_currency?.toUpperCase()
+      const formattedBalance =
+        providerCurrency === 'PERCENT'
+          ? `${(response.provider_balance ?? balance).toFixed(2)}%`
+          : providerCurrency === 'CNY'
+            ? formatCNYFromUSD(balance, {
+                digitsLarge: 2,
+                digitsSmall: 4,
+                abbreviate: false,
+              })
+            : formatCurrencyFromUSD(balance, {
+                digitsLarge: 2,
+                digitsSmall: 4,
+                abbreviate: false,
+              })
       toast.success(
         i18next.t('Balance updated: {{balance}}', {
-          balance: (response.provider_currency === 'CNY'
-            ? formatCNYFromUSD
-            : formatCurrencyFromUSD)(balance, {
-            digitsLarge: 2,
-            digitsSmall: 4,
-            abbreviate: false,
-          }),
+          balance: formattedBalance,
         })
       )
       queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })

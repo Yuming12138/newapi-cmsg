@@ -124,13 +124,19 @@ func runKimiBalanceSyncOnce() {
 
 	ctx := context.Background()
 	var channels []*model.Channel
-	if err := model.DB.Select("id", "name", "key", "type", "base_url", "setting", "status").
+	if err := model.DB.Select("id", "name", "key", "type", "base_url", "setting", "status", "models", "model_mapping", "other_info", "balance", "balance_updated_time").
 		Where("status = ?", common.ChannelStatusEnabled).
 		Find(&channels).Error; err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("Kimi balance sync query failed: %v", err))
 		return
 	}
 	for _, channel := range channels {
+		if IsKimiCPAChannel(channel) {
+			if _, err := UpdateKimiCPASubscriptionBalance(ctx, channel); err != nil {
+				logger.LogWarn(ctx, fmt.Sprintf("Kimi subscription sync: channel_id=%d failed: %v", channel.Id, err))
+			}
+			continue
+		}
 		if !isOfficialKimiChannel(channel) || strings.TrimSpace(channel.Key) == "" {
 			continue
 		}

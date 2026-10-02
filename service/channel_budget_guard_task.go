@@ -428,6 +428,10 @@ func UpdateCliproxyCPAQuotaGuardBalance(channel *model.Channel) (float64, bool, 
 	if channel == nil {
 		return 0, false, fmt.Errorf("channel is nil")
 	}
+	if IsKimiCPAChannel(channel) {
+		balance, err := UpdateKimiCPASubscriptionBalance(context.Background(), channel)
+		return balance, true, err
+	}
 	otherInfo := parseGuardObject(channel.OtherInfo)
 	guardInfo, ok := otherInfo["cliproxy_cpa_quota_guard"].(map[string]interface{})
 	if !ok {

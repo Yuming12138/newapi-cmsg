@@ -511,6 +511,9 @@ func updateChannelMoonshotBalance(channel *model.Channel) (float64, error) {
 }
 
 func updateChannelBalance(channel *model.Channel) (float64, error) {
+	if service.IsKimiCPAChannel(channel) {
+		return service.UpdateKimiCPASubscriptionBalance(context.Background(), channel)
+	}
 	if balance, handled, err := service.UpdateChannelBudgetGuardBalance(context.Background(), channel); handled || err != nil {
 		return balance, err
 	}
@@ -623,7 +626,9 @@ func UpdateChannelBalance(c *gin.Context) {
 	}
 	providerBalance := balance
 	providerCurrency := "USD"
-	if isMoonshotBalanceBaseURL(channel.GetBaseURL()) ||
+	if service.IsKimiCPAChannel(channel) {
+		providerCurrency = "percent"
+	} else if isMoonshotBalanceBaseURL(channel.GetBaseURL()) ||
 		(channel.Type == constant.ChannelTypeDeepSeek && isDeepSeekBalanceBaseURL(channel.GetBaseURL())) {
 		providerBalance = decimal.NewFromFloat(balance).Mul(decimal.NewFromFloat(ratio_setting.USD2RMB)).InexactFloat64()
 		providerCurrency = "CNY"

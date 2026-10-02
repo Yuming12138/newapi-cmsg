@@ -15,13 +15,14 @@ import (
 // ProviderAccountBalance is an official account balance, not a daily quota.
 // A nil balance means no account has supplied a usable balance yet.
 type ProviderAccountBalance struct {
-	Balance            *float64 `json:"balance"`
-	Currency           string   `json:"currency"`
-	UpdatedAt          int64    `json:"updated_at"`
-	ChannelCount       int      `json:"channel_count"`
-	AccountCount       int      `json:"account_count"`
-	SyncedAccountCount int      `json:"synced_account_count"`
-	Partial            bool     `json:"partial"`
+	Balance            *float64                 `json:"balance"`
+	Currency           string                   `json:"currency"`
+	UpdatedAt          int64                    `json:"updated_at"`
+	ChannelCount       int                      `json:"channel_count"`
+	AccountCount       int                      `json:"account_count"`
+	SyncedAccountCount int                      `json:"synced_account_count"`
+	Partial            bool                     `json:"partial"`
+	Subscription       *KimiSubscriptionBalance `json:"subscription,omitempty"`
 }
 
 type DashboardProviderBalances struct {
@@ -33,7 +34,7 @@ type DashboardProviderBalances struct {
 func GetDashboardProviderBalances(ctx context.Context) (DashboardProviderBalances, error) {
 	var channels []*model.Channel
 	if err := model.DB.WithContext(ctx).
-		Select("id", "key", "type", "base_url", "group", "status", "balance", "balance_updated_time").
+		Select("id", "key", "type", "base_url", "group", "status", "balance", "balance_updated_time", "models", "model_mapping", "other_info").
 		Where("status = ?", common.ChannelStatusEnabled).
 		Find(&channels).Error; err != nil {
 		return DashboardProviderBalances{}, err
@@ -50,9 +51,23 @@ func GetDashboardProviderBalances(ctx context.Context) (DashboardProviderBalance
 
 func summarizeDashboardProviderBalances(channels []*model.Channel) DashboardProviderBalances {
 	deepSeekSetting := currentDeepSeekBalanceSetting()
+	kimi := summarizeProviderAccountBalance(channels, isOfficialKimiChannel)
+	for _, channel := range channels {
+		if channel == nil || channel.Status != common.ChannelStatusEnabled || !IsKimiCPAChannel(channel) {
+			continue
+		}
+		kimi.ChannelCount++
+		snapshot := kimiSubscriptionSnapshot(channel)
+		if snapshot == nil {
+			snapshot = &KimiSubscriptionBalance{Source: kimiCPASubscriptionInfoKey, ChannelCount: 1, Partial: true}
+		}
+		if kimi.Subscription == nil || snapshot.UpdatedAt > kimi.Subscription.UpdatedAt {
+			kimi.Subscription = snapshot
+		}
+	}
 	return DashboardProviderBalances{
 		ASXS: ASXSAccountDailyBalance{Currency: "USD"},
-		Kimi: summarizeProviderAccountBalance(channels, isOfficialKimiChannel),
+		Kimi: kimi,
 		DeepSeek: summarizeProviderAccountBalance(channels, func(channel *model.Channel) bool {
 			return isDeepSeekBalanceChannel(channel, deepSeekSetting)
 		}),

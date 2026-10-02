@@ -193,6 +193,20 @@ type CliproxyCPAQuotaMeta = {
   accounts: CliproxyCPAQuotaAccount[]
 }
 
+type KimiSubscriptionWindow = {
+  name: string
+  remainingPercent: number | null
+  resetAt: number | null
+}
+
+type KimiSubscriptionMeta = {
+  remainingPercent: number | null
+  windows: KimiSubscriptionWindow[]
+  updatedAt: number | null
+  partial: boolean
+  error: string | null
+}
+
 function asObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object'
     ? (value as Record<string, unknown>)
@@ -240,6 +254,117 @@ function timestampValue(value: unknown): number | null {
     return Number.isFinite(parsed) ? Math.round(parsed / 1000) : null
   }
   return null
+}
+
+function isKimiCPAChannel(channel: Channel): boolean {
+  const baseURL = channel.base_url?.trim()
+  if (!baseURL) return false
+  let hostname: string
+  try {
+    hostname = new URL(baseURL).hostname.toLowerCase()
+  } catch {
+    return false
+  }
+  if (!hostname.includes('cliproxy')) return false
+
+  const hasKimiModel = (value: string) =>
+    value
+      .split(',')
+      .some((model) => model.trim().toLowerCase().startsWith('kimi-'))
+  if (hasKimiModel(channel.models)) return true
+
+  if (!channel.model_mapping) return false
+  try {
+    const parsed = JSON.parse(channel.model_mapping)
+    const mapping = asObject(parsed)
+    return Boolean(
+      mapping &&
+        Object.values(mapping).some(
+          (model) =>
+            typeof model === 'string' &&
+            model.trim().toLowerCase().startsWith('kimi-')
+        )
+    )
+  } catch {
+    return false
+  }
+}
+
+function parseKimiSubscriptionMeta(
+  otherInfo: string | null | undefined
+): KimiSubscriptionMeta | null {
+  if (!otherInfo) return null
+  try {
+    const parsed = asObject(JSON.parse(otherInfo))
+    const raw = asObject(parsed?.kimi_cpa_subscription)
+    if (!raw) return null
+    const rawWindows = Array.isArray(raw.windows) ? raw.windows : []
+    const windows = rawWindows
+      .map((value): KimiSubscriptionWindow | null => {
+        const item = asObject(value)
+        if (!item || typeof item.name !== 'string') return null
+        return {
+          name: item.name,
+          remainingPercent: numberValue(item.remaining_percent),
+          resetAt: timestampValue(item.reset_at),
+        }
+      })
+      .filter((item): item is KimiSubscriptionWindow => item != null)
+    return {
+      remainingPercent: numberValue(raw.remaining_percent),
+      windows,
+      updatedAt: timestampValue(raw.updated_at),
+      partial: booleanValue(raw.partial) ?? false,
+      error: typeof raw.error === 'string' ? raw.error : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+function kimiSubscriptionPrimaryPercent(
+  meta: KimiSubscriptionMeta | null
+): number | null {
+  if (!meta) return null
+  if (meta.remainingPercent != null) return meta.remainingPercent
+  const remaining = meta.windows
+    .map((item) => item.remainingPercent)
+    .filter((value): value is number => value != null)
+  return remaining.length > 0 ? Math.min(...remaining) : null
+}
+
+function kimiSubscriptionWindowLabel(name: string): string {
+  switch (name) {
+    case '5h':
+      return '5h'
+    case 'week':
+    case '7d':
+      return '7d'
+    case 'month_total':
+      return '月度总额'
+    case 'month_code':
+      return '月度代码'
+    default:
+      return name
+  }
+}
+
+function formatKimiSubscriptionSummary(
+  meta: KimiSubscriptionMeta | null
+): string {
+  if (!meta) return '-'
+  const preferredNames = ['5h', 'month_code', 'month_total', 'week', '7d']
+  const selected = preferredNames
+    .map((name) => meta.windows.find((item) => item.name === name))
+    .filter((item): item is KimiSubscriptionWindow => item != null)
+  const windows = selected.length > 0 ? selected.slice(0, 2) : meta.windows.slice(0, 2)
+  if (windows.length === 0) return formatPercent(kimiSubscriptionPrimaryPercent(meta))
+  return windows
+    .map(
+      (item) =>
+        `${kimiSubscriptionWindowLabel(item.name)} ${formatPercent(item.remainingPercent)}`
+    )
+    .join(' · ')
 }
 
 function getCliproxyCPAResetAt(
@@ -1826,14 +1951,22 @@ function BalanceCell({ channel }: { channel: Channel }) {
   const storedRemainingDisplay = withSuffix(formatBalance(balance, channel))
   const maskedUsedLabel = `${t('Used:')} ${SENSITIVE_MASK}`
   const maskedRemainingLabel = `${t('Remaining:')} ${SENSITIVE_MASK}`
-  const cliproxyCPAQuota = parseCliproxyCPAQuotaMeta(channel.other_info)
+  const isKimiCPA = isKimiCPAChannel(channel)
+  const kimiSubscription = isKimiCPA
+    ? parseKimiSubscriptionMeta(channel.other_info)
+    : null
+  const cliproxyCPAQuota = isKimiCPA
+    ? null
+    : parseCliproxyCPAQuotaMeta(channel.other_info)
   const cliproxyCPAModelQuota =
     cliproxyCPAQuota != null && isCliproxyCPAModelQuota(cliproxyCPAQuota)
   const cliproxyCPALunaReserve =
     cliproxyCPAQuota != null && isCliproxyCPALunaReserve(cliproxyCPAQuota)
-  const remainingDisplay = cliproxyCPAModelQuota
-    ? formatPercent(getCliproxyCPAModelQuotaPercent(cliproxyCPAQuota))
-    : storedRemainingDisplay
+  const remainingDisplay = isKimiCPA
+    ? formatPercent(kimiSubscriptionPrimaryPercent(kimiSubscription))
+    : cliproxyCPAModelQuota
+      ? formatPercent(getCliproxyCPAModelQuotaPercent(cliproxyCPAQuota))
+      : storedRemainingDisplay
 
   // Tag row: only show cumulative used quota
   if (isTagRow) {
@@ -1881,7 +2014,7 @@ function BalanceCell({ channel }: { channel: Channel }) {
       <div
         className={cn(
           'flex text-xs font-medium',
-          cliproxyCPAQuota
+          cliproxyCPAQuota || kimiSubscription
             ? 'flex-col items-start gap-0.5'
             : 'items-center gap-1.5'
         )}
@@ -1935,13 +2068,17 @@ function BalanceCell({ channel }: { channel: Channel }) {
             </TooltipTrigger>
             <TooltipContent
               className={
-                cliproxyCPAQuota ? CPA_TOOLTIP_CONTENT_CLASS : undefined
+                cliproxyCPAQuota || kimiSubscription
+                  ? CPA_TOOLTIP_CONTENT_CLASS
+                  : undefined
               }
             >
               <p>
                 {sensitiveVisible
                   ? channel.type === 57
                     ? t('Click to view Codex usage')
+                    : isKimiCPA
+                      ? `${t('Kimi subscription remaining')}: ${remainingDisplay}`
                     : cliproxyCPAQuota
                       ? cliproxyCPAModelQuota
                         ? `${getCliproxyCPAModelQuotaLabel(cliproxyCPAQuota)}: ${remainingDisplay}`
@@ -1951,6 +2088,23 @@ function BalanceCell({ channel }: { channel: Channel }) {
                       : `${t('Remaining:')} ${remainingDisplay}`
                   : maskedRemainingLabel}
               </p>
+              {kimiSubscription && (
+                <div className='space-y-0.5'>
+                  {kimiSubscription.windows.map((window) => (
+                    <p key={window.name}>
+                      {kimiSubscriptionWindowLabel(window.name)}{' '}
+                      {t('remaining')}{' '}
+                      {formatPercent(window.remainingPercent)}
+                      {window.resetAt
+                        ? ` · ${formatCompactTimestamp(window.resetAt)}`
+                        : ''}
+                    </p>
+                  ))}
+                  {kimiSubscription.partial && (
+                    <p>{t('Latest subscription data may be incomplete')}</p>
+                  )}
+                </div>
+              )}
               {cliproxyCPAQuota && (
                 <CliproxyCPAQuotaDetails
                   meta={cliproxyCPAQuota}
@@ -1975,9 +2129,9 @@ function BalanceCell({ channel }: { channel: Channel }) {
             </>
           )}
         </div>
-        {cliproxyCPAQuota && (
+        {(cliproxyCPAQuota || kimiSubscription) && (
           <div className='flex max-w-full flex-wrap items-center gap-x-2 gap-y-0.5'>
-            {cliproxyCPAQuota.manualForceUnlockActive && (
+            {cliproxyCPAQuota?.manualForceUnlockActive && (
               <CliproxyCPAForceUnlockIndicator meta={cliproxyCPAQuota} />
             )}
             <Tooltip>
@@ -1991,14 +2145,33 @@ function BalanceCell({ channel }: { channel: Channel }) {
                   />
                 }
               >
-                {formatCliproxyCPASummary(cliproxyCPAQuota)}
+                {kimiSubscription
+                  ? formatKimiSubscriptionSummary(kimiSubscription)
+                  : cliproxyCPAQuota
+                    ? formatCliproxyCPASummary(cliproxyCPAQuota)
+                    : null}
               </TooltipTrigger>
               <TooltipContent className={CPA_TOOLTIP_CONTENT_CLASS}>
-                <CliproxyCPAQuotaDetails
-                  meta={cliproxyCPAQuota}
-                  channelId={channel.id}
-                  onRequestResetCredit={setResetCreditAccount}
-                />
+                {kimiSubscription ? (
+                  <div className='space-y-0.5'>
+                    {kimiSubscription.windows.map((window) => (
+                      <p key={window.name}>
+                        {kimiSubscriptionWindowLabel(window.name)}{' '}
+                        {t('remaining')}{' '}
+                        {formatPercent(window.remainingPercent)}
+                        {window.resetAt
+                          ? ` · ${formatCompactTimestamp(window.resetAt)}`
+                          : ''}
+                      </p>
+                    ))}
+                  </div>
+                ) : cliproxyCPAQuota ? (
+                  <CliproxyCPAQuotaDetails
+                    meta={cliproxyCPAQuota}
+                    channelId={channel.id}
+                    onRequestResetCredit={setResetCreditAccount}
+                  />
+                ) : null}
               </TooltipContent>
             </Tooltip>
           </div>
