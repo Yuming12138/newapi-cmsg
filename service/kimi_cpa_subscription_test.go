@@ -1,7 +1,10 @@
 package service
 
 import (
+	"context"
 	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -79,6 +82,36 @@ func TestIsKimiCPAChannelUsesModelMapping(t *testing.T) {
 	}
 	if !IsKimiCPAChannel(channel) {
 		t.Fatal("IsKimiCPAChannel() = false, want true")
+	}
+}
+
+func TestKimiCPAManagementRequestUsesBothAuthHeaders(t *testing.T) {
+	const managementKey = "test-management-key"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+managementKey {
+			t.Errorf("Authorization = %q, want bearer management key", got)
+		}
+		if got := r.Header.Get("X-Management-Key"); got != managementKey {
+			t.Errorf("X-Management-Key = %q, want management key", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	client := &kimiCPAManagementClient{
+		baseURL: server.URL,
+		key:     managementKey,
+		client:  server.Client(),
+	}
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	if err := client.request(context.Background(), "/v0/management/config", nil, &result); err != nil {
+		t.Fatalf("management request error = %v", err)
+	}
+	if !result.OK {
+		t.Fatal("management request did not decode response")
 	}
 }
 

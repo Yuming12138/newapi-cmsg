@@ -127,6 +127,9 @@ func (client *kimiCPAManagementClient) request(ctx context.Context, path string,
 		return err
 	}
 	req.Header.Set("X-Management-Key", client.key)
+	// CPA's management API authenticates with the bearer header. Keep the
+	// legacy header as well because older CPA builds still inspect it.
+	req.Header.Set("Authorization", "Bearer "+client.key)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.client.Do(req)
 	if err != nil {
