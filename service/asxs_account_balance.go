@@ -22,7 +22,9 @@ const asxsAccountTokenFileDefault = "/data/ops/asxs-account-token"
 
 // ASXSAccountDailyBalance is the account-wide subscription remainder. Channel
 // balances can use this same account total when the channel guard is configured
-// with the asxs_account source.
+// with the asxs_account source. DailyLimitUSD is kept for compatibility with
+// the guard settings and contains the selected subscription limits, including
+// total subscriptions when no daily window exists.
 type ASXSAccountDailyBalance struct {
 	Balance           *float64 `json:"balance"`
 	Currency          string   `json:"currency"`
@@ -249,9 +251,9 @@ func parseASXSAccountDailyBalance(raw []byte, now time.Time) (ASXSAccountDailyBa
 		if len(windows) == 0 && state.Subscription != nil && subscription.ID == state.Subscription.ID {
 			windows = state.Windows
 		}
-		window, runtime := asxsDailyWindow(windows)
+		window, runtime := asxsPreferredWindow(windows)
 		if !runtime {
-			window, _ = asxsDailyWindow(subscription.Limits)
+			window, _ = asxsPreferredWindow(subscription.Limits)
 			if window == nil {
 				continue
 			}
@@ -281,9 +283,19 @@ func parseASXSAccountDailyBalance(raw []byte, now time.Time) (ASXSAccountDailyBa
 	return result, nil
 }
 
-func asxsDailyWindow(windows []asxsBillingWindow) (*asxsBillingWindow, bool) {
+// asxsPreferredWindow selects one active quota window per subscription. ASXS
+// can expose both daily and total windows, and counting both would double the
+// same subscription's allowance. Daily windows describe the normal account
+// pool, while total windows are the fallback for subscriptions without a daily
+// allowance.
+func asxsPreferredWindow(windows []asxsBillingWindow) (*asxsBillingWindow, bool) {
 	for index := range windows {
 		if windows[index].LimitType == "daily" {
+			return &windows[index], true
+		}
+	}
+	for index := range windows {
+		if windows[index].LimitType == "total" {
 			return &windows[index], true
 		}
 	}

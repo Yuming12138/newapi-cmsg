@@ -1,11 +1,14 @@
 # ASXS account subscription balance
 
 The admin dashboard's ASXS card reads `GET /api/me/billing/state` with an ASXS
-account session token. It totals each distinct active subscription's `daily`
-`leftMicros` from `subscriptionWindows`, using the subscription's own `limits`
-only when a runtime window is unavailable. The result is shown in USD. The
-account cash balance (`balanceMicros`) is intentionally excluded. ASXS uses
-5,000,000 `leftMicros` units per US dollar; the displayed sum is rounded to cents.
+account session token. It totals one preferred window for each distinct active
+subscription: `daily` from `subscriptionWindows` when present, otherwise
+`total`; the subscription's own `limits` are used only when a runtime window is
+unavailable. This prevents a subscription exposing both windows from being
+counted twice, while still including a total-only subscription such as a $200
+account plan. The result is shown in USD. The account cash balance
+(`balanceMicros`) is intentionally excluded. ASXS uses 5,000,000 `leftMicros`
+units per US dollar; the displayed sum is rounded to cents.
 
 This display value is separate from channel `/api/usage` balances and the
 channel budget guard. Multiple channel keys can report the same quota pool, so
