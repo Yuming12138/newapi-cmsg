@@ -128,6 +128,9 @@ type DailyQuotaPoolGroup struct {
 	ReserveBucketRemainingQuota int64   `json:"reserve_bucket_remaining_quota,omitempty"`
 	ForceUnlockActive           bool    `json:"force_unlock_active,omitempty"`
 	ForceUnlockRemainingUSD     float64 `json:"force_unlock_remaining_usd,omitempty"`
+	// cpaIdentityKey is kept internal so the same CPA account exposed through
+	// multiple channel rows is counted only once in the spendable pool.
+	cpaIdentityKey string
 }
 
 func GetDailyQuotaPoolSnapshot(ctx context.Context) (DailyQuotaPoolSummary, bool, error) {
@@ -179,11 +182,32 @@ func summarizeDailyQuotaPool(asxs ChannelBudgetPoolSummary, asxsHandled bool, ch
 		summary.AvailableChannelCount += asxs.AvailableChannelCount
 		summary.FailedChannelCount += asxs.FailedChannelCount
 	}
+	// A CPA account can be mirrored by multiple New API channels (for example
+	// a general CPA row and a Kimi row). Build the candidates first so duplicate
+	// account snapshots do not inflate the shared balance. Disabled channels
+	// are never spendable and must not contribute to this pool.
+	cpaGroups := make([]DailyQuotaPoolGroup, 0, len(channels))
+	cpaIdentityIndexes := make(map[string]int)
 	for _, channel := range channels {
+		if channel == nil || channel.Status != common.ChannelStatusEnabled {
+			continue
+		}
 		group, ok := cliproxyCPADailyQuotaPoolGroup(channel)
 		if !ok {
 			continue
 		}
+		if key := group.cpaIdentityKey; key != "" {
+			if index, exists := cpaIdentityIndexes[key]; exists {
+				if group.UpdatedAt > cpaGroups[index].UpdatedAt {
+					cpaGroups[index] = group
+				}
+				continue
+			}
+			cpaIdentityIndexes[key] = len(cpaGroups)
+		}
+		cpaGroups = append(cpaGroups, group)
+	}
+	for _, group := range cpaGroups {
 		appendDailyQuotaPoolGroup(&summary, &group, quotaPerUSD)
 		groups[group.Group] = struct{}{}
 		if group.Available {
@@ -254,6 +278,7 @@ func cliproxyCPADailyQuotaPoolGroup(channel *model.Channel) (DailyQuotaPoolGroup
 	if applied, exists := guardObjectBool(daily, "applied"); exists && !applied {
 		return DailyQuotaPoolGroup{}, false
 	}
+	cpaIdentityKey := cliproxyCPAIdentityKey(health)
 	limitPercent, okLimit := guardObjectFloat(daily, "daily_limit_percent")
 	remainingPercent, okRemaining := guardObjectFloat(daily, "remaining_today_percent")
 	if !okLimit || !okRemaining {
@@ -375,7 +400,34 @@ func cliproxyCPADailyQuotaPoolGroup(channel *model.Channel) (DailyQuotaPoolGroup
 		ReserveBucketRemainingQuota: int64(math.Round(reserveBucketRemainingUSD * common.QuotaPerUnit)),
 		ForceUnlockActive:           forceUnlockActive,
 		ForceUnlockRemainingUSD:     forceUnlockRemainingUSD,
+		cpaIdentityKey:              cpaIdentityKey,
 	}, true
+}
+
+// cliproxyCPAIdentityKey returns a stable, secret-free identity for the CPA
+// accounts represented by a channel's health snapshot. If the snapshot does
+// not contain account hashes, return an empty key and leave the channel
+// independent rather than guessing that two channels share an account.
+func cliproxyCPAIdentityKey(health map[string]interface{}) string {
+	accounts, ok := health["accounts"].([]interface{})
+	if !ok || len(accounts) == 0 {
+		return ""
+	}
+	identities := make([]string, 0, len(accounts))
+	for _, raw := range accounts {
+		account, ok := raw.(map[string]interface{})
+		if !ok {
+			return ""
+		}
+		identity, ok := account["account_id_hash"].(string)
+		identity = strings.TrimSpace(identity)
+		if !ok || identity == "" {
+			return ""
+		}
+		identities = append(identities, identity)
+	}
+	sort.Strings(identities)
+	return strings.Join(identities, ",")
 }
 
 func cliproxyCPADailyUSDPerPercent(daily map[string]interface{}) (float64, bool) {

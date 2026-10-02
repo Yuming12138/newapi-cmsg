@@ -195,6 +195,41 @@ func TestSummarizeDailyQuotaPoolUsesCPADailyBudgetNotWeeklyBalance(t *testing.T)
 	}
 }
 
+func TestSummarizeDailyQuotaPoolExcludesDisabledAndDuplicateCPAAccounts(t *testing.T) {
+	cpaSnapshot := `{
+  "cliproxy_cpa_quota_guard": {
+    "updated_at": 201,
+    "health": {
+      "ok": true,
+      "accounts": [{"account_id_hash":"same-cpa-account"}],
+      "dynamic_daily_budget": {
+        "applied": true,
+        "daily_limit_percent": 13,
+        "consumed_today_percent": 6,
+        "remaining_today_percent": 2,
+        "baseline_account_plans": [{"plan_type":"Pro 20x","remaining_percent":87,"days_remaining":7}]
+      }
+    }
+  }
+}`
+	channels := []*model.Channel{
+		{Id: 12, Group: "cliproxy-codex", Status: common.ChannelStatusEnabled, OtherInfo: cpaSnapshot},
+		{Id: 34, Group: "asxs,kimi", Status: common.ChannelStatusEnabled, OtherInfo: cpaSnapshot},
+		{Id: 35, Group: "retired", Status: common.ChannelStatusAutoDisabled, OtherInfo: cpaSnapshot},
+	}
+
+	got := summarizeDailyQuotaPool(ChannelBudgetPoolSummary{}, false, channels, 500000)
+	wantTotal := 13 * cliproxyCPAProUSDPerPercent
+	wantUsed := 6 * cliproxyCPAProUSDPerPercent
+	wantRemaining := 2 * cliproxyCPAProUSDPerPercent
+	if math.Abs(got.TotalUSD-wantTotal) > 0.000001 || math.Abs(got.UsedUSD-wantUsed) > 0.000001 || math.Abs(got.RemainingUSD-wantRemaining) > 0.000001 {
+		t.Fatalf("daily CPA pool = %+v, want total/used/remaining %.6f/%.6f/%.6f", got, wantTotal, wantUsed, wantRemaining)
+	}
+	if got.ChannelCount != 1 || got.AvailableChannelCount != 1 || len(got.GroupBreakdown) != 1 {
+		t.Fatalf("daily CPA pool counts = %+v, want one active unique channel", got)
+	}
+}
+
 func TestSummarizeDailyQuotaPoolIncludesActiveLunaReserve(t *testing.T) {
 	asxs := ChannelBudgetPoolSummary{
 		Group:                 "asxs",
