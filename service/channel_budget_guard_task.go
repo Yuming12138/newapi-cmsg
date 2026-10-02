@@ -921,7 +921,7 @@ func asxsAccountGuardUsage(account ASXSAccountDailyBalance) (asxsUsageResult, er
 		return asxsUsageResult{}, fmt.Errorf("ASXS account daily balance is unavailable")
 	}
 	return asxsUsageResult{
-		PlanName:     "ASXS account daily subscriptions",
+		PlanName:     "ASXS account subscriptions",
 		TotalUSD:     account.DailyLimitUSD,
 		UsedUSD:      math.Max(account.DailyLimitUSD-*account.Balance, 0),
 		RemainingUSD: *account.Balance,

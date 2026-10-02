@@ -22,15 +22,50 @@ func TestParseASXSAccountDailyBalanceSumsDistinctActiveSubscriptions(t *testing.
 		"windows":[{"limitType":"daily","limitMicros":300000000,"leftMicros":216950000}],
 		"subscriptionWindows":[
 			{"subscriptionId":"sixty","windows":[{"limitType":"daily","limitMicros":300000000,"leftMicros":216950000}]},
-			{"subscriptionId":"thirty-six","windows":[{"limitType":"daily","limitMicros":180000000,"leftMicros":180000000}]}
+			{"subscriptionId":"thirty-six","windows":[{"limitType":"daily","limitMicros":180000000,"leftMicros":180000000}]},
+			{"subscriptionId":"non-daily","windows":[{"limitType":"total","limitMicros":5000000,"leftMicros":5000000}]}
 		]
 	}`)
 	got, err := parseASXSAccountDailyBalance(raw, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Balance == nil || math.Abs(*got.Balance-79.39) > 0.000001 || got.SubscriptionCount != 3 || got.Partial || got.Currency != "USD" || got.DailyLimitUSD != 96 {
-		t.Fatalf("ASXS account daily balance = %+v, want $79.39 from two daily subscriptions", got)
+	if got.Balance == nil || math.Abs(*got.Balance-80.39) > 0.000001 || got.SubscriptionCount != 3 || got.Partial || got.Currency != "USD" || got.DailyLimitUSD != 97 {
+		t.Fatalf("ASXS account balance = %+v, want $80.39 from two daily and one total subscription", got)
+	}
+}
+
+func TestParseASXSAccountDailyBalanceUsesTotalSubscription(t *testing.T) {
+	now := time.Date(2026, time.October, 2, 10, 0, 0, 0, time.UTC)
+	raw := []byte(`{
+		"balanceMicros":0,
+		"subscription":{"id":"two-hundred","expiresAt":"2026-11-01T12:17:14+08:00","limits":[{"limitType":"total","limitMicros":1000000000,"leftMicros":968112206}]},
+		"subscriptions":[{"id":"two-hundred","expiresAt":"2026-11-01T12:17:14+08:00","limits":[{"limitType":"total","limitMicros":1000000000,"leftMicros":968112206}]}],
+		"windows":[{"limitType":"total","limitMicros":1000000000,"leftMicros":968112206}],
+		"subscriptionWindows":[{"subscriptionId":"two-hundred","windows":[{"limitType":"total","limitMicros":1000000000,"leftMicros":968112206}]}]
+	}`)
+	got, err := parseASXSAccountDailyBalance(raw, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Balance == nil || math.Abs(*got.Balance-193.62) > 0.000001 || got.SubscriptionCount != 1 || got.Partial || got.DailyLimitUSD != 200 {
+		t.Fatalf("ASXS total subscription balance = %+v, want $193.62 from a $200 total subscription", got)
+	}
+}
+
+func TestParseASXSAccountDailyBalancePrefersDailyWindow(t *testing.T) {
+	now := time.Date(2026, time.October, 2, 10, 0, 0, 0, time.UTC)
+	raw := []byte(`{
+		"balanceMicros":0,
+		"subscriptions":[{"id":"mixed","limits":[{"limitType":"daily","limitMicros":300000000,"leftMicros":250000000},{"limitType":"total","limitMicros":1000000000,"leftMicros":900000000}]}],
+		"subscriptionWindows":[{"subscriptionId":"mixed","windows":[{"limitType":"total","limitMicros":1000000000,"leftMicros":900000000},{"limitType":"daily","limitMicros":300000000,"leftMicros":250000000}]}]
+	}`)
+	got, err := parseASXSAccountDailyBalance(raw, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Balance == nil || math.Abs(*got.Balance-50) > 0.000001 || got.DailyLimitUSD != 60 {
+		t.Fatalf("ASXS mixed windows balance = %+v, want the daily window only", got)
 	}
 }
 
