@@ -350,10 +350,19 @@ func saveKimiSubscriptionSnapshot(channel *model.Channel, summary KimiSubscripti
 func UpdateKimiCPASubscriptionBalance(ctx context.Context, channel *model.Channel) (float64, error) {
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	client, err := newKimiCPAManagementClient()
 	summary := KimiSubscriptionBalance{Source: kimiCPASubscriptionInfoKey, ChannelCount: 1}
-	if err == nil {
-		summary, err = client.fetch(ctx)
+	var err error
+	if homeClient, homeErr := newKimiCPAHomeClient(); homeErr == nil {
+		summary, err = homeClient.fetch(ctx, channel)
+		homeClient.Close()
+	}
+	if err != nil || summary.RemainingPercent == nil {
+		client, managementErr := newKimiCPAManagementClient()
+		if managementErr == nil {
+			summary, err = client.fetch(ctx)
+		} else if err == nil {
+			err = managementErr
+		}
 	}
 	if err != nil {
 		if previous := kimiSubscriptionSnapshot(channel); previous != nil {
