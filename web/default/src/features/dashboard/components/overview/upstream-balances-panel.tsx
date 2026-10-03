@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { getDashboardProviderBalances } from '@/features/dashboard/api'
@@ -110,20 +111,45 @@ function subscriptionWindowLabel(name: string): string {
   }
 }
 
+function formatKimiResetCountdown(
+  resetAt: number | null | undefined,
+  nowMs: number
+): string | null {
+  if (resetAt == null || !Number.isFinite(resetAt) || resetAt <= 0) {
+    return null
+  }
+  const remainingMinutes = Math.max(
+    0,
+    Math.ceil((resetAt * 1000 - nowMs) / 60_000)
+  )
+  if (remainingMinutes <= 0) return null
+  const hours = Math.floor(remainingMinutes / 60)
+  const minutes = remainingMinutes % 60
+  if (hours > 0) return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`
+  return `${remainingMinutes}m`
+}
+
 function KimiSubscriptionRow(props: {
   subscription: KimiSubscriptionBalance
   officialBalance: number | null | undefined
   loading: boolean
 }) {
   const { t, i18n } = useTranslation()
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
+  const windows =
+    props.subscription.windows.length > 0
+      ? props.subscription.windows
+      : props.subscription.accounts.length === 1
+        ? props.subscription.accounts[0].windows
+        : []
   const remaining =
     props.subscription.remaining_percent ??
-    (props.subscription.windows.length > 0
-      ? Math.min(
-          ...props.subscription.windows.map(
-            (window) => window.remaining_percent
-          )
-        )
+    (windows.length > 0
+      ? Math.min(...windows.map((window) => window.remaining_percent))
       : null)
   const formattedRemaining =
     remaining != null && Number.isFinite(remaining)
@@ -166,15 +192,30 @@ function KimiSubscriptionRow(props: {
         </span>
       </div>
       <div className='text-muted-foreground mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px]'>
-        {props.subscription.windows.map((window) => (
-          <span key={window.name}>
-            {subscriptionWindowLabel(window.name)}{' '}
-            {new Intl.NumberFormat(i18n.language, {
+        {windows.map((window) => {
+          const resetCountdown =
+            window.name === '5h'
+              ? formatKimiResetCountdown(window.reset_at, nowMs)
+              : null
+          const formattedWindowRemaining = new Intl.NumberFormat(
+            i18n.language,
+            {
               minimumFractionDigits: 1,
               maximumFractionDigits: 1,
-            }).format(window.remaining_percent)}%
-          </span>
-        ))}
+            }
+          ).format(window.remaining_percent)
+          return (
+            <span key={window.name}>
+              {subscriptionWindowLabel(window.name)} {formattedWindowRemaining}%
+              {resetCountdown && (
+                <>
+                  {' · '}
+                  {t('Resets in {{time}}', { time: resetCountdown })}
+                </>
+              )}
+            </span>
+          )
+        })}
       </div>
       {props.officialBalance != null && (
         <div className='text-muted-foreground mt-1 text-[10px]'>

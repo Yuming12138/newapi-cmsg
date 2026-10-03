@@ -3476,6 +3476,7 @@
     "Reset to Default": "重置为默认",
     "Reset to default configuration": "已重置为默认配置",
     "Reset Two-Factor Authentication": "重置 2FA",
+    "Resets in {{time}}": "{{time}} 后重置",
     "Resets in:": "将于以下时间重置：",
     "Resolve Conflicts": "解决冲突",
     "Resource Configuration": "资源配置",
