@@ -21,11 +21,17 @@ const (
 	codexRadarSourceURL      = "https://codexradar.com/"
 	codexRadarCacheTTL       = 10 * time.Minute
 	codexRadarStaleTTL       = 24 * time.Hour
-	// The published dataset is currently over 4 MiB and can take a few seconds
-	// to arrive from the CDN. Keep enough headroom for growth without allowing
-	// an unexpectedly large response to consume unbounded memory.
-	codexRadarHTTPTimeout  = 30 * time.Second
-	codexRadarMaxBodyBytes = 8 << 20
+	// The published dataset keeps growing (it was ~4 MiB when this limit was
+	// first set and has since crossed 9 MiB), and the CDN is slow enough that a
+	// full body transfer can take tens of seconds. The limit therefore needs
+	// headroom for further growth, and the timeout must tolerate a slow but
+	// healthy download.
+	//
+	// Requests send "Accept-Encoding: gzip" below, so the wire size stays near
+	// 700 KiB even though the decoded JSON is much larger. The limits here apply
+	// to the decoded body.
+	codexRadarHTTPTimeout  = 120 * time.Second
+	codexRadarMaxBodyBytes = 64 << 20
 )
 
 type CodexRadarMetric struct {
@@ -229,6 +235,12 @@ func (provider *codexRadarProvider) fetch(ctx context.Context) (CodexRadarOvervi
 		return CodexRadarOverview{}, "", false, err
 	}
 	req.Header.Set("Accept", "application/json")
+	// The dataset is a single large JSON document that compresses extremely
+	// well. Without this the CDN transfers the full ~9 MiB body, which is slow
+	// enough to trip the client timeout. Go's transport transparently
+	// decompresses the response, so the size checks below still apply to the
+	// decoded JSON.
+	req.Header.Set("Accept-Encoding", "gzip")
 	req.Header.Set("User-Agent", "new-api-cmsg codex-radar overview")
 	if etag := provider.cachedETag(); etag != "" {
 		req.Header.Set("If-None-Match", etag)
@@ -246,6 +258,10 @@ func (provider *codexRadarProvider) fetch(ctx context.Context) (CodexRadarOvervi
 	if resp.StatusCode != http.StatusOK {
 		return CodexRadarOverview{}, "", false, fmt.Errorf("codex radar returned status %d", resp.StatusCode)
 	}
+	// Fast-fail when the server declares an oversized body up front. This is
+	// only a shortcut: with gzip negotiated ContentLength is the compressed
+	// size (or -1 when unknown), so the authoritative check is the LimitReader
+	// + len() test on the decoded body below.
 	if resp.ContentLength > codexRadarMaxBodyBytes {
 		return CodexRadarOverview{}, "", false, fmt.Errorf("codex radar response exceeds size limit")
 	}

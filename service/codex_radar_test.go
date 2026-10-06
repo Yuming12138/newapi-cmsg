@@ -163,6 +163,65 @@ func TestCodexRadarProviderAcceptsExpandedPayload(t *testing.T) {
 	}
 }
 
+// The published dataset grew past 9 MiB, which used to trip the body size
+// guard and made /api/codex-radar/overview return 502. This test pins the two
+// properties that keep it working: a body well beyond the old 8 MiB limit is
+// accepted, and the request negotiates gzip so the transfer stays small.
+func TestCodexRadarProviderAcceptsCurrentPublishedDatasetSize(t *testing.T) {
+	const publishedSize = 10<<20 + (1 << 20) // ~11 MiB, above the observed 9.25 MiB
+	payload := strings.Replace(
+		codexRadarTestPayload,
+		"{",
+		`{"padding":"`+strings.Repeat("x", publishedSize)+`",`,
+		1,
+	)
+	if len(payload) <= 8<<20 {
+		t.Fatalf("payload size = %d, want above the old 8 MiB limit", len(payload))
+	}
+
+	var gotEncoding atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEncoding.Store(r.Header.Get("Accept-Encoding"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(payload))
+	}))
+	t.Cleanup(server.Close)
+
+	provider := newCodexRadarProvider(server.URL, server.Client())
+	overview, err := provider.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if len(overview.Metrics) != 5 {
+		t.Fatalf("metrics count = %d, want 5", len(overview.Metrics))
+	}
+	if enc, _ := gotEncoding.Load().(string); !strings.Contains(enc, "gzip") {
+		t.Fatalf("Accept-Encoding = %q, want it to include gzip", enc)
+	}
+}
+
+func TestCodexRadarProviderRejectsOversizedBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Stream past the guard without ever declaring a Content-Length so the
+		// LimitReader check is what has to catch it.
+		chunk := strings.Repeat("y", 1<<20)
+		_, _ = w.Write([]byte(`{"padding":"`))
+		for written := 0; written <= codexRadarMaxBodyBytes; written += len(chunk) {
+			if _, err := w.Write([]byte(chunk)); err != nil {
+				return
+			}
+		}
+		_, _ = w.Write([]byte(`","points":[]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	provider := newCodexRadarProvider(server.URL, server.Client())
+	if _, err := provider.Get(context.Background()); err == nil {
+		t.Fatal("Get() error = nil, want a size limit rejection")
+	}
+}
+
 func TestBuildCodexRadarOverviewIncludesCompletePublishedCatalog(t *testing.T) {
 	source := codexRadarSource{
 		Schema:          2,
