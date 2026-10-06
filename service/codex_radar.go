@@ -1,6 +1,8 @@
 package service
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -235,12 +237,12 @@ func (provider *codexRadarProvider) fetch(ctx context.Context) (CodexRadarOvervi
 		return CodexRadarOverview{}, "", false, err
 	}
 	req.Header.Set("Accept", "application/json")
-	// The dataset is a single large JSON document that compresses extremely
-	// well. Without this the CDN transfers the full ~9 MiB body, which is slow
-	// enough to trip the client timeout. Go's transport transparently
-	// decompresses the response, so the size checks below still apply to the
-	// decoded JSON.
-	req.Header.Set("Accept-Encoding", "gzip")
+	// Do NOT set Accept-Encoding by hand. Go's transport only transparently
+	// decompresses when it negotiates the encoding itself; once the header is
+	// set explicitly the response arrives still compressed and json decoding
+	// fails with "invalid character '\x1f'". Leaving it unset lets the transport
+	// add "Accept-Encoding: gzip", which keeps the wire size near 700 KiB
+	// instead of ~9 MiB, and decompress the body for us.
 	req.Header.Set("User-Agent", "new-api-cmsg codex-radar overview")
 	if etag := provider.cachedETag(); etag != "" {
 		req.Header.Set("If-None-Match", etag)
@@ -259,9 +261,10 @@ func (provider *codexRadarProvider) fetch(ctx context.Context) (CodexRadarOvervi
 		return CodexRadarOverview{}, "", false, fmt.Errorf("codex radar returned status %d", resp.StatusCode)
 	}
 	// Fast-fail when the server declares an oversized body up front. This is
-	// only a shortcut: with gzip negotiated ContentLength is the compressed
-	// size (or -1 when unknown), so the authoritative check is the LimitReader
-	// + len() test on the decoded body below.
+	// only a shortcut: when the transport negotiates gzip it clears
+	// ContentLength (leaving -1, since the length is only known after
+	// inflation), so the authoritative check is the LimitReader + len() test on
+	// the decoded body below.
 	if resp.ContentLength > codexRadarMaxBodyBytes {
 		return CodexRadarOverview{}, "", false, fmt.Errorf("codex radar response exceeds size limit")
 	}
@@ -272,6 +275,25 @@ func (provider *codexRadarProvider) fetch(ctx context.Context) (CodexRadarOvervi
 	}
 	if len(body) > codexRadarMaxBodyBytes {
 		return CodexRadarOverview{}, "", false, fmt.Errorf("codex radar response exceeds size limit")
+	}
+	// Defensive: Go's transport decompresses transparently for encodings it
+	// negotiated itself, but if a response ever arrives gzip-encoded anyway the
+	// raw body would fail to parse. Unwrap it here rather than erroring out, and
+	// re-apply the size guard to the expanded body.
+	if len(body) > 2 && body[0] == 0x1f && body[1] == 0x8b {
+		reader, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return CodexRadarOverview{}, "", false, fmt.Errorf("decompress codex radar response: %w", err)
+		}
+		defer reader.Close()
+		expanded, err := io.ReadAll(io.LimitReader(reader, codexRadarMaxBodyBytes+1))
+		if err != nil {
+			return CodexRadarOverview{}, "", false, fmt.Errorf("decompress codex radar response: %w", err)
+		}
+		if len(expanded) > codexRadarMaxBodyBytes {
+			return CodexRadarOverview{}, "", false, fmt.Errorf("codex radar response exceeds size limit")
+		}
+		body = expanded
 	}
 
 	var source codexRadarSource

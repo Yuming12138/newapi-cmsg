@@ -1,6 +1,7 @@
 package service
 
 import (
+	"compress/gzip"
 	"context"
 	"math"
 	"net/http"
@@ -166,7 +167,7 @@ func TestCodexRadarProviderAcceptsExpandedPayload(t *testing.T) {
 // The published dataset grew past 9 MiB, which used to trip the body size
 // guard and made /api/codex-radar/overview return 502. This test pins the two
 // properties that keep it working: a body well beyond the old 8 MiB limit is
-// accepted, and the request negotiates gzip so the transfer stays small.
+// accepted, and gzip is used on the wire while the decoded body still parses.
 func TestCodexRadarProviderAcceptsCurrentPublishedDatasetSize(t *testing.T) {
 	const publishedSize = 10<<20 + (1 << 20) // ~11 MiB, above the observed 9.25 MiB
 	payload := strings.Replace(
@@ -195,8 +196,39 @@ func TestCodexRadarProviderAcceptsCurrentPublishedDatasetSize(t *testing.T) {
 	if len(overview.Metrics) != 5 {
 		t.Fatalf("metrics count = %d, want 5", len(overview.Metrics))
 	}
+	// The transport must add the gzip header itself and transparently inflate
+	// the response: the handler sees "gzip" precisely because Go negotiated it
+	// (setting the header by hand would suppress that and leave the body
+	// compressed), and decoding below succeeds only if it inflated again.
 	if enc, _ := gotEncoding.Load().(string); !strings.Contains(enc, "gzip") {
-		t.Fatalf("Accept-Encoding = %q, want it to include gzip", enc)
+		t.Fatalf("Accept-Encoding = %q, want the transport to negotiate gzip", enc)
+	}
+}
+
+// A proxy or CDN can hand back a gzip body regardless of what the transport
+// negotiated. The provider must still inflate it instead of failing to parse
+// raw gzip bytes as JSON.
+func TestCodexRadarProviderDecodesGzipEncodedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Encoding", "gzip")
+		zw := gzip.NewWriter(w)
+		defer zw.Close()
+		_, _ = zw.Write([]byte(codexRadarTestPayload))
+	}))
+	t.Cleanup(server.Close)
+
+	provider := newCodexRadarProvider(server.URL, &http.Client{
+		// Disable transparent decompression so the handler's gzip body reaches
+		// the provider untouched, mimicking the real failure.
+		Transport: &http.Transport{DisableCompression: true},
+	})
+	overview, err := provider.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Get() error = %v, want the gzip body to be inflated", err)
+	}
+	if len(overview.Metrics) != 5 {
+		t.Fatalf("metrics count = %d, want 5", len(overview.Metrics))
 	}
 }
 
