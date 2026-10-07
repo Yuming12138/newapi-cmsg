@@ -768,8 +768,8 @@ attemptLoop:
 				lastStatus = httpResp.StatusCode
 				lastBody = append([]byte(nil), bodyBytes...)
 				lastErr = nil
-				if httpResp.StatusCode == http.StatusTooManyRequests && idx+1 < len(baseURLs) {
-					log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+				if (httpResp.StatusCode == http.StatusTooManyRequests || (httpResp.StatusCode == http.StatusBadRequest && strings.Contains(strings.ToLower(string(bodyBytes)), "location"))) && idx+1 < len(baseURLs) {
+					log.Debugf("antigravity executor: rate limited or location rejected on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
 					continue
 				}
 				if antigravityShouldRetryTransientResourceExhausted429(httpResp.StatusCode, bodyBytes) && attempt+1 < attempts {
@@ -993,8 +993,8 @@ attemptLoop:
 				lastStatus = httpResp.StatusCode
 				lastBody = append([]byte(nil), bodyBytes...)
 				lastErr = nil
-				if httpResp.StatusCode == http.StatusTooManyRequests && idx+1 < len(baseURLs) {
-					log.Debugf("antigravity executor: rate limited on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
+				if (httpResp.StatusCode == http.StatusTooManyRequests || (httpResp.StatusCode == http.StatusBadRequest && strings.Contains(strings.ToLower(string(bodyBytes)), "location"))) && idx+1 < len(baseURLs) {
+					log.Debugf("antigravity executor: rate limited or location rejected on base url %s, retrying with fallback base url: %s", baseURL, baseURLs[idx+1])
 					continue
 				}
 				if antigravityShouldRetryTransientResourceExhausted429(httpResp.StatusCode, bodyBytes) && attempt+1 < attempts {
@@ -2411,7 +2411,7 @@ func buildBaseURL(auth *cliproxyauth.Auth) string {
 	if baseURLs := antigravityBaseURLFallbackOrder(auth); len(baseURLs) > 0 {
 		return baseURLs[0]
 	}
-	return antigravityBaseURLDaily
+	return antigravityBaseURLProd
 }
 
 func antigravityLoadCodeAssistBaseURL(auth *cliproxyauth.Auth) string {
@@ -2731,8 +2731,8 @@ var antigravityBaseURLFallbackOrder = func(auth *cliproxyauth.Auth) []string {
 		return []string{base}
 	}
 	return []string{
-		antigravityBaseURLDaily,
 		antigravityBaseURLProd,
+		antigravityBaseURLDaily,
 		// antigravitySandboxBaseURLDaily,
 	}
 }

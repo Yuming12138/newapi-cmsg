@@ -412,6 +412,24 @@ var defaultCompletionRatio = map[string]float64{
 	"kimi-k2.6":                27.0 / 6.5,
 	"kimi-k2.7-code":           27.0 / 6.5,
 	"kimi-k2.7-code-highspeed": 54.0 / 13.0,
+	"claude-opus-5.5":          5,
+	"claude-opus-5-5-high":     5,
+	"claude-opus-5-5-medium":   5,
+	"claude-opus-5-5-low":      5,
+	"claude-sonnet-5.5":        5,
+	"claude-sonnet-5-5-high":   5,
+	"claude-sonnet-5-5-medium": 5,
+	"claude-sonnet-5-5-low":    5,
+	"gemini-3.8-flash":         4,
+	"gemini-3.8-flash-high":    4,
+	"gemini-3.8-flash-tiered":  4,
+	"gemini-3.7-flash":         4,
+	"gemini-3.7-flash-high":    4,
+	"gemini-3.6-flash":         4,
+	"gemini-3.6-flash-high":    4,
+	"gemini-3-flash":           4,
+	"gemini-3.5-flash-lite":    4,
+	"gemini-3.1-flash-lite":    4,
 }
 
 // InitRatioSettings initializes all model related settings maps
@@ -642,9 +660,7 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 		return 3, true
 	}
 
-	if strings.Contains(name, "claude-3") {
-		return 5, true
-	} else if strings.Contains(name, "claude-sonnet-4") || strings.Contains(name, "claude-opus-4") || strings.Contains(name, "claude-haiku-4") {
+	if strings.Contains(name, "claude-") {
 		return 5, true
 	}
 
@@ -682,11 +698,14 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 			return 2.5 / 0.3, false
 		} else if strings.HasPrefix(name, "gemini-robotics-er-1.5") {
 			return 2.5 / 0.3, false
-		} else if strings.HasPrefix(name, "gemini-3-pro") {
-			if strings.HasPrefix(name, "gemini-3-pro-image") {
-				return 60, false
+		} else if strings.HasPrefix(name, "gemini-3") {
+			if strings.HasPrefix(name, "gemini-3-pro") || strings.HasPrefix(name, "gemini-3.1-pro") {
+				if strings.HasPrefix(name, "gemini-3-pro-image") {
+					return 60, false
+				}
+				return 6, false
 			}
-			return 6, false
+			return 4, true
 		}
 		return 4, false
 	}

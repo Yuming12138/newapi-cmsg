@@ -90,7 +90,7 @@ func antigravityModelBaseURLs(auth *coreauth.Auth) []string {
 	if baseURL := resolveAntigravityModelBaseURL(auth); baseURL != "" {
 		return []string{baseURL}
 	}
-	return []string{antigravityModelBaseURLDaily, antigravityModelBaseURLProd}
+	return []string{antigravityModelBaseURLProd, antigravityModelBaseURLDaily}
 }
 
 func resolveAntigravityModelBaseURL(auth *coreauth.Auth) string {
