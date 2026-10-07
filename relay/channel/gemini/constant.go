@@ -2,6 +2,11 @@ package gemini
 
 var ModelList = []string{
 	// stable version
+	"gemini-3.8-flash", "gemini-3.8-flash-high", "gemini-3.8-flash-tiered",
+	"gemini-3.7-flash", "gemini-3.7-flash-high",
+	"gemini-3.6-flash", "gemini-3.6-flash-high",
+	"gemini-3-flash", "gemini-pro-agent", "gemini-3.1-pro-low",
+	"gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
 	"gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash",
 	"gemini-2.0-flash-001", "gemini-2.0-flash-lite-001", "gemini-2.0-flash-lite",
 	"gemini-2.5-flash-lite",
