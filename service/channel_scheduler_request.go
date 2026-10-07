@@ -19,10 +19,11 @@ const (
 )
 
 const (
-	channelTempUnschedTTLRateLimit = 3 * time.Minute
-	channelTempUnschedTTLTransport = 90 * time.Second
-	channelTempUnschedTTLQuota     = 10 * time.Minute
-	channelTempUnschedTTLChannel   = 10 * time.Minute
+	channelTempUnschedTTLRateLimit       = 3 * time.Minute
+	channelTempUnschedTTLTransport       = 90 * time.Second
+	channelTempUnschedTTLResponseTimeout = 60 * time.Second
+	channelTempUnschedTTLQuota           = 10 * time.Minute
+	channelTempUnschedTTLChannel         = 10 * time.Minute
 )
 
 func ExcludeChannelForRequest(c *gin.Context, channelID int, reason string) bool {
@@ -150,6 +151,13 @@ func ShouldClearChannelAffinityAfterError(err *types.NewAPIError) bool {
 func temporaryUnschedulableDecision(err *types.NewAPIError) (time.Duration, string, bool) {
 	if err == nil {
 		return 0, "", false
+	}
+
+	// A response-header timeout is transient even though its error code uses
+	// the channel namespace. Keep it out of the long channel-error cooldown so
+	// a healthy upstream can re-enter a small direct pool promptly.
+	if err.GetErrorCode() == types.ErrorCodeChannelResponseTimeExceeded {
+		return channelTempUnschedTTLResponseTimeout, "upstream_timeout", true
 	}
 
 	if types.IsChannelError(err) {
