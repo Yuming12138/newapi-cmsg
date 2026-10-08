@@ -2200,6 +2200,17 @@ func (e *AntigravityExecutor) updateAntigravityCreditsBalance(ctx context.Contex
 	}
 }
 
+func normalizeAntigravityUpstreamModel(modelName string) string {
+	switch strings.ToLower(strings.TrimSpace(modelName)) {
+	case "gemini-3.7-flash-high", "gemini-3.7-flash":
+		return "gemini-3.7-flash-tiered"
+	case "gemini-3.8-flash-high", "gemini-3.8-flash":
+		return "gemini-3.8-flash-tiered"
+	default:
+		return modelName
+	}
+}
+
 func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyauth.Auth, token, modelName string, payload []byte, stream bool, alt, baseURL string) (*http.Request, error) {
 	if token == "" {
 		return nil, statusErr{code: http.StatusUnauthorized, msg: "missing access token"}
@@ -2232,12 +2243,17 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 	if errProject != nil {
 		return nil, errProject
 	}
-	payload = geminiToAntigravity(modelName, payload, projectID)
-	payload, _ = sjson.SetBytes(payload, "model", modelName)
+	upstreamModel := normalizeAntigravityUpstreamModel(modelName)
+	payload = geminiToAntigravity(upstreamModel, payload, projectID)
+	payload, _ = sjson.SetBytes(payload, "model", upstreamModel)
 
 	// Cap maxOutputTokens to model's max_completion_tokens from registry
 	if maxOut := gjson.GetBytes(payload, "request.generationConfig.maxOutputTokens"); maxOut.Exists() && maxOut.Type == gjson.Number {
-		if modelInfo := registry.LookupModelInfo(modelName, "antigravity"); modelInfo != nil && modelInfo.MaxCompletionTokens > 0 {
+		modelInfo := registry.LookupModelInfo(modelName, "antigravity")
+		if modelInfo == nil {
+			modelInfo = registry.LookupModelInfo(upstreamModel, "antigravity")
+		}
+		if modelInfo != nil && modelInfo.MaxCompletionTokens > 0 {
 			if int(maxOut.Int()) > modelInfo.MaxCompletionTokens {
 				payload, _ = sjson.SetBytes(payload, "request.generationConfig.maxOutputTokens", modelInfo.MaxCompletionTokens)
 			}
