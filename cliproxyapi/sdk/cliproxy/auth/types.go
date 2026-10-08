@@ -710,3 +710,13 @@ func normaliseUnix(raw int64) time.Time {
 	}
 	return time.Unix(raw, 0)
 }
+
+// IsAntigravityGeminiModel reports whether model is a Gemini model under an Antigravity provider auth.
+func IsAntigravityGeminiModel(auth *Auth, model string) bool {
+	if auth != nil && strings.EqualFold(strings.TrimSpace(auth.Provider), "antigravity") {
+		m := strings.ToLower(strings.TrimSpace(model))
+		return strings.HasPrefix(m, "gemini-")
+	}
+	return false
+}
+

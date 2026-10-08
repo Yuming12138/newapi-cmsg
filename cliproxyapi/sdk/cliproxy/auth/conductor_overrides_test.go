@@ -1255,3 +1255,85 @@ func TestManager_RequestScopedNotFoundStopsRetryWithoutSuspendingAuth(t *testing
 		t.Fatalf("expected request-scoped 404 to avoid bad auth model cooldown state, got %#v", state)
 	}
 }
+
+func TestManager_MarkResult_AntigravityGeminiDoesNotCooldownOn429_ClaudeDoesCooldown(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+	auth := &Auth{
+		ID:       "ag-cooldown-test",
+		Provider: "antigravity",
+	}
+	if _, err := m.Register(context.Background(), auth); err != nil {
+		t.Fatalf("register auth: %v", err)
+	}
+
+	err429 := &Error{
+		HTTPStatus: http.StatusTooManyRequests,
+		Message:    `{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}`,
+	}
+
+	// 1. Gemini failure on Antigravity should NOT enter cooldown
+	m.MarkResult(context.Background(), Result{
+		AuthID:   auth.ID,
+		Provider: "antigravity",
+		Model:    "gemini-3.8-flash-tiered",
+		Success:  false,
+		Error:    err429,
+	})
+
+	updated, ok := m.GetByID(auth.ID)
+	if !ok || updated == nil {
+		t.Fatalf("expected auth to exist")
+	}
+	geminiState := updated.ModelStates["gemini-3.8-flash-tiered"]
+	if geminiState == nil {
+		t.Fatalf("expected gemini model state to exist")
+	}
+	if geminiState.Unavailable {
+		t.Fatalf("expected gemini model to NOT be unavailable")
+	}
+	if geminiState.Quota.Exceeded {
+		t.Fatalf("expected gemini quota to NOT be exceeded")
+	}
+	if updated.Quota.Exceeded {
+		t.Fatalf("expected whole auth quota to NOT be exceeded after gemini 429")
+	}
+
+	// 2. Claude failure on Antigravity SHOULD enter cooldown normally
+	m.MarkResult(context.Background(), Result{
+		AuthID:   auth.ID,
+		Provider: "antigravity",
+		Model:    "claude-opus-5.5",
+		Success:  false,
+		Error:    err429,
+	})
+
+	updated2, ok := m.GetByID(auth.ID)
+	if !ok || updated2 == nil {
+		t.Fatalf("expected auth to exist")
+	}
+	claudeState := updated2.ModelStates["claude-opus-5.5"]
+	if claudeState == nil {
+		t.Fatalf("expected claude model state to exist")
+	}
+	if !claudeState.Unavailable {
+		t.Fatalf("expected claude model to be unavailable after 429")
+	}
+	if !claudeState.Quota.Exceeded {
+		t.Fatalf("expected claude quota to be exceeded after 429")
+	}
+	if !claudeState.NextRetryAfter.After(time.Now()) {
+		t.Fatalf("expected claude cooldown retry time to be set")
+	}
+
+	// 3. Verify isAuthBlockedForModel: Claude is blocked, but Gemini is NOT blocked
+	blockedGemini, reasonG, _ := isAuthBlockedForModel(updated2, "gemini-3.8-flash-tiered", time.Now())
+	if blockedGemini {
+		t.Fatalf("expected gemini to NOT be blocked, got reason=%v", reasonG)
+	}
+
+	blockedClaude, reasonC, _ := isAuthBlockedForModel(updated2, "claude-opus-5.5", time.Now())
+	if !blockedClaude || reasonC != blockReasonCooldown {
+		t.Fatalf("expected claude to be blocked by cooldown, got blocked=%v reason=%v", blockedClaude, reasonC)
+	}
+}
+

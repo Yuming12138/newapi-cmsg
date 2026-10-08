@@ -3987,7 +3987,8 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 						case 429:
 							var next time.Time
 							backoffLevel := state.Quota.BackoffLevel
-							if !disableCooling {
+							skipCooldown := disableCooling || IsAntigravityGeminiModel(auth, result.Model)
+							if !skipCooldown {
 								if result.RetryAfter != nil {
 									next = now.Add(*result.RetryAfter)
 								} else {
@@ -3996,15 +3997,18 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 							}
 							state.NextRetryAfter = next
 							state.Quota = QuotaState{
-								Exceeded:      true,
+								Exceeded:      !skipCooldown,
 								Reason:        "quota",
 								NextRecoverAt: next,
 								BackoffLevel:  backoffLevel,
 							}
-							if !disableCooling {
+							if !skipCooldown {
 								suspendReason = "quota"
 								shouldSuspendModel = true
 								setModelQuota = true
+							} else {
+								state.Unavailable = false
+								state.Status = StatusActive
 							}
 						case 408, 500, 502, 503, 504:
 							if disableCooling {
@@ -4116,8 +4120,11 @@ func updateAggregatedAvailability(auth *Auth, now time.Time) {
 	quotaRecover := time.Time{}
 	maxBackoffLevel := 0
 	hasState := false
-	for _, state := range auth.ModelStates {
+	for modelName, state := range auth.ModelStates {
 		if state == nil {
+			continue
+		}
+		if IsAntigravityGeminiModel(auth, modelName) {
 			continue
 		}
 		hasState = true
