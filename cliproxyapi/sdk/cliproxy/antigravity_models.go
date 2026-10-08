@@ -88,9 +88,11 @@ func (s *Service) antigravityModelFetchProxyURL(auth *coreauth.Auth) string {
 
 func antigravityModelBaseURLs(auth *coreauth.Auth) []string {
 	if baseURL := resolveAntigravityModelBaseURL(auth); baseURL != "" {
-		return []string{baseURL}
+		if !strings.EqualFold(baseURL, antigravityModelBaseURLProd) && !strings.EqualFold(baseURL, antigravityModelBaseURLDaily) {
+			return []string{baseURL}
+		}
 	}
-	return []string{antigravityModelBaseURLProd}
+	return []string{antigravityModelBaseURLDaily}
 }
 
 func resolveAntigravityModelBaseURL(auth *coreauth.Auth) string {

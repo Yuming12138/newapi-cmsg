@@ -704,6 +704,7 @@ attemptLoop:
 				return resp, err
 			}
 
+			log.Infof("antigravity executor: Execute attempt=%d idx=%d baseURL=%s model=%s", attempt, idx, baseURL, baseModel)
 			httpResp, errDo := httpClient.Do(httpReq)
 			if errDo != nil {
 				helps.RecordAPIResponseError(ctx, e.cfg, errDo)
@@ -726,6 +727,7 @@ attemptLoop:
 			if errClose := httpResp.Body.Close(); errClose != nil {
 				log.Errorf("antigravity executor: close response body error: %v", errClose)
 			}
+			log.Infof("antigravity executor: Execute response status=%d on baseURL=%s body=%s", httpResp.StatusCode, baseURL, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
 			if errRead != nil {
 				helps.RecordAPIResponseError(ctx, e.cfg, errRead)
 				err = errRead
@@ -1394,6 +1396,7 @@ attemptLoop:
 				err = errReq
 				return nil, err
 			}
+			log.Infof("antigravity executor: ExecuteStream attempt=%d idx=%d baseURL=%s model=%s", attempt, idx, baseURL, baseModel)
 			httpResp, errDo := httpClient.Do(httpReq)
 			if errDo != nil {
 				helps.RecordAPIResponseError(ctx, e.cfg, errDo)
@@ -1416,6 +1419,7 @@ attemptLoop:
 				if errClose := httpResp.Body.Close(); errClose != nil {
 					log.Errorf("antigravity executor: close response body error: %v", errClose)
 				}
+				log.Infof("antigravity executor: ExecuteStream response status=%d on baseURL=%s body=%s", httpResp.StatusCode, baseURL, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
 				if errRead != nil {
 					helps.RecordAPIResponseError(ctx, e.cfg, errRead)
 					if errors.Is(errRead, context.Canceled) || errors.Is(errRead, context.DeadlineExceeded) {
@@ -2196,6 +2200,17 @@ func (e *AntigravityExecutor) updateAntigravityCreditsBalance(ctx context.Contex
 	}
 }
 
+func normalizeAntigravityUpstreamModel(modelName string) string {
+	switch strings.ToLower(strings.TrimSpace(modelName)) {
+	case "gemini-3.7-flash-high", "gemini-3.7-flash":
+		return "gemini-3.7-flash-tiered"
+	case "gemini-3.8-flash-high", "gemini-3.8-flash":
+		return "gemini-3.8-flash-tiered"
+	default:
+		return modelName
+	}
+}
+
 func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyauth.Auth, token, modelName string, payload []byte, stream bool, alt, baseURL string) (*http.Request, error) {
 	if token == "" {
 		return nil, statusErr{code: http.StatusUnauthorized, msg: "missing access token"}
@@ -2228,12 +2243,17 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 	if errProject != nil {
 		return nil, errProject
 	}
-	payload = geminiToAntigravity(modelName, payload, projectID)
-	payload, _ = sjson.SetBytes(payload, "model", modelName)
+	upstreamModel := normalizeAntigravityUpstreamModel(modelName)
+	payload = geminiToAntigravity(upstreamModel, payload, projectID)
+	payload, _ = sjson.SetBytes(payload, "model", upstreamModel)
 
 	// Cap maxOutputTokens to model's max_completion_tokens from registry
 	if maxOut := gjson.GetBytes(payload, "request.generationConfig.maxOutputTokens"); maxOut.Exists() && maxOut.Type == gjson.Number {
-		if modelInfo := registry.LookupModelInfo(modelName, "antigravity"); modelInfo != nil && modelInfo.MaxCompletionTokens > 0 {
+		modelInfo := registry.LookupModelInfo(modelName, "antigravity")
+		if modelInfo == nil {
+			modelInfo = registry.LookupModelInfo(upstreamModel, "antigravity")
+		}
+		if modelInfo != nil && modelInfo.MaxCompletionTokens > 0 {
 			if int(maxOut.Int()) > modelInfo.MaxCompletionTokens {
 				payload, _ = sjson.SetBytes(payload, "request.generationConfig.maxOutputTokens", modelInfo.MaxCompletionTokens)
 			}
@@ -2411,7 +2431,7 @@ func buildBaseURL(auth *cliproxyauth.Auth) string {
 	if baseURLs := antigravityBaseURLFallbackOrder(auth); len(baseURLs) > 0 {
 		return baseURLs[0]
 	}
-	return antigravityBaseURLProd
+	return antigravityBaseURLDaily
 }
 
 func antigravityLoadCodeAssistBaseURL(auth *cliproxyauth.Auth) string {
@@ -2467,8 +2487,8 @@ func antigravityRetryAttempts(auth *cliproxyauth.Auth, cfg *config.Config) int {
 			retry = override
 		}
 	}
-	if retry < 0 {
-		retry = 0
+	if retry < 3 {
+		retry = 3
 	}
 	attempts := retry + 1
 	if attempts < 1 {
@@ -2495,12 +2515,12 @@ func antigravityShouldRetryTransientResourceExhausted429(statusCode int, body []
 	if len(body) == 0 {
 		return false
 	}
-	if classifyAntigravity429(body) != antigravity429Unknown {
+	if classifyAntigravity429(body) == antigravity429QuotaExhausted {
 		return false
 	}
 	status := strings.TrimSpace(gjson.GetBytes(body, "error.status").String())
-	if !strings.EqualFold(status, "RESOURCE_EXHAUSTED") {
-		return false
+	if strings.EqualFold(status, "RESOURCE_EXHAUSTED") {
+		return true
 	}
 	msg := strings.ToLower(string(body))
 	return strings.Contains(msg, "resource has been exhausted")
@@ -2518,14 +2538,7 @@ func antigravityShouldBypassShortCooldown(ctx context.Context, cfg *config.Confi
 }
 
 func antigravitySoftRateLimitDelay(attempt int) time.Duration {
-	if attempt < 0 {
-		attempt = 0
-	}
-	base := time.Duration(attempt+1) * 500 * time.Millisecond
-	if base > 3*time.Second {
-		base = 3 * time.Second
-	}
-	return base
+	return antigravityTransient429RetryDelay(attempt)
 }
 
 func antigravityShortCooldownKey(auth *cliproxyauth.Auth, modelName string) string {
@@ -2698,11 +2711,14 @@ func antigravityTransient429RetryDelay(attempt int) time.Duration {
 	if attempt < 0 {
 		attempt = 0
 	}
-	delay := time.Duration(attempt+1) * 100 * time.Millisecond
-	if delay > 500*time.Millisecond {
-		delay = 500 * time.Millisecond
+	switch attempt {
+	case 0:
+		return 1 * time.Second
+	case 1:
+		return 2 * time.Second
+	default:
+		return 4 * time.Second
 	}
-	return delay
 }
 
 func antigravityInstantRetryDelay(wait time.Duration) time.Duration {
@@ -2728,10 +2744,12 @@ func antigravityWait(ctx context.Context, wait time.Duration) error {
 
 var antigravityBaseURLFallbackOrder = func(auth *cliproxyauth.Auth) []string {
 	if base := resolveCustomAntigravityBaseURL(auth); base != "" {
-		return []string{base}
+		if !strings.EqualFold(base, antigravityBaseURLProd) && !strings.EqualFold(base, antigravityBaseURLDaily) {
+			return []string{base}
+		}
 	}
 	return []string{
-		antigravityBaseURLProd,
+		antigravityBaseURLDaily,
 	}
 }
 

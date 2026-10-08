@@ -42,15 +42,17 @@ type dsmlConversion struct {
 }
 
 type nativeResponsesStreamState struct {
-	toolMap        map[string]nativeResponseTool
-	buffer         strings.Builder
-	buffering      bool
-	pendingText    string
-	lastText       string
-	nextOutput     int
-	completedTools []dto.ResponsesOutput
-	request        *dto.OpenAIResponsesRequest
-	sessionErr     error
+	toolMap           map[string]nativeResponseTool
+	buffer            strings.Builder
+	buffering         bool
+	pendingText       string
+	lastText          string
+	nextOutput        int
+	completedTools    []dto.ResponsesOutput
+	request           *dto.OpenAIResponsesRequest
+	sessionErr        error
+	continuity        nativeReasoningWriter
+	continuityWarning bool
 }
 
 func setNativeResponsesToolMap(c *gin.Context, tools []map[string]any) {
@@ -209,6 +211,11 @@ func handleNativeResponsesResponse(c *gin.Context, resp *http.Response, info *re
 			return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 		}
 	}
+	// Cache the client-visible call IDs, including tools created by DSML
+	// conversion. The reasoning text itself still comes only from the upstream.
+	if err := rememberNativeResponsesReasoning(info, response.Output); err != nil {
+		logger.LogWarn(c, "DeepSeek reasoning continuity cache write failed")
+	}
 	if request, ok := getNativeResponsesRequest(c); ok {
 		if err := commitNativeResponsesSession(info, request, &response); err != nil {
 			return nil, types.NewOpenAIError(err, types.ErrorCodeUpdateDataError, http.StatusInternalServerError)
@@ -221,7 +228,10 @@ func handleNativeResponsesResponse(c *gin.Context, resp *http.Response, info *re
 func handleNativeResponsesStream(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 	usage := &dto.Usage{}
-	state := &nativeResponsesStreamState{toolMap: getNativeResponsesToolMap(c)}
+	state := &nativeResponsesStreamState{
+		toolMap:    getNativeResponsesToolMap(c),
+		continuity: nativeReasoningWriter{info: info},
+	}
 	if request, ok := getNativeResponsesRequest(c); ok {
 		state.request = &request
 	}
@@ -234,6 +244,14 @@ func handleNativeResponsesStream(c *gin.Context, resp *http.Response, info *rela
 		}
 		if event.OutputIndex != nil && *event.OutputIndex >= state.nextOutput {
 			state.nextOutput = *event.OutputIndex + 1
+		}
+		// Persist completed items before forwarding them. Clients can disconnect
+		// after receiving a tool call, before response.completed ever arrives.
+		if event.Type == dto.ResponsesOutputTypeItemDone && event.Item != nil {
+			state.warnContinuity(c, state.continuity.remember([]dto.ResponsesOutput{*event.Item}))
+		}
+		if event.Type == "response.reasoning_text.done" {
+			state.warnContinuity(c, state.continuity.rememberTextDone(event))
 		}
 		if event.Type == "response.output_text.delta" {
 			consumed, outputText := state.consumeTextDelta(event.Delta)
@@ -306,6 +324,7 @@ func handleNativeResponsesStream(c *gin.Context, resp *http.Response, info *rela
 				event.Response.Output = converted
 			}
 			event.Response.Output = mergeNativeResponseTools(event.Response.Output, state.completedTools)
+			state.warnContinuity(c, rememberNativeResponsesReasoning(info, event.Response.Output))
 			if state.request != nil {
 				if err := commitNativeResponsesSession(info, *state.request, event.Response); err != nil {
 					state.sessionErr = err
@@ -386,11 +405,19 @@ func (s *nativeResponsesStreamState) emitConversion(c *gin.Context, converted ds
 	}
 	for _, tool := range converted.Tools {
 		s.completedTools = append(s.completedTools, tool)
+		s.warnContinuity(c, s.continuity.remember([]dto.ResponsesOutput{tool}))
 		if err := s.writeToolEvents(c, tool); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s *nativeResponsesStreamState) warnContinuity(c *gin.Context, err error) {
+	if err != nil && !s.continuityWarning {
+		logger.LogWarn(c, "DeepSeek reasoning continuity cache write failed")
+		s.continuityWarning = true
+	}
 }
 
 func (s *nativeResponsesStreamState) writeToolEvents(c *gin.Context, tool dto.ResponsesOutput) error {
