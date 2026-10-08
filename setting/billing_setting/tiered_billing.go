@@ -29,6 +29,13 @@ type BillingSetting struct {
 const deepSeekFlashExpr = `deepseekPeak() ? tier("peak", p * 0.2739726027397260 + cr * 0.0054794520547945 + c * 1.0958904109589040) : tier("offpeak", p * 0.1369863013698630 + cr * 0.0027397260273973 + c * 0.5479452054794520)`
 const deepSeekProExpr = `deepseekPeak() ? tier("peak", p * 1.2328767123287672 + cr * 0.0410958904109589 + c * 3.6986301369863015) : tier("offpeak", p * 0.6164383561643836 + cr * 0.0205479452054795 + c * 1.8493150684931507)`
 
+const (
+	geminiFlashExpr    = `tier("standard", p * 0.30 + c * 1.20 + cr * 0.075)`
+	geminiProExpr      = `tier("standard", p * 1.25 + c * 5.00 + cr * 0.3125)`
+	claudeSonnet55Expr = `tier("standard", p * 3.00 + c * 15.00 + cr * 0.30 + cc * 3.75)`
+	claudeOpus55Expr   = `tier("standard", p * 5.00 + c * 25.00 + cr * 0.50 + cc * 6.25)`
+)
+
 // Official GPT-5.6/GPT-6 Codex pricing uses a higher rate once the complete
 // input context exceeds 272K tokens. Keep these defaults in the source tree so
 // a fresh deployment and an existing deployment with an older/empty option
@@ -45,6 +52,41 @@ var defaultBillingMode = map[string]string{
 	"deepseek-v4-flash":   BillingModeTieredExpr,
 	"deepseek-v4-pro":     BillingModeTieredExpr,
 	"deepseek-v4-pro[1m]": BillingModeTieredExpr,
+
+	// Gemini 3 Flash family
+	"gemini-3.8-flash":        BillingModeTieredExpr,
+	"gemini-3.8-flash-tiered": BillingModeTieredExpr,
+	"gemini-3.8-flash-high":   BillingModeTieredExpr,
+	"gemini-3.8-flash-medium": BillingModeTieredExpr,
+	"gemini-3.8-flash-low":    BillingModeTieredExpr,
+	"gemini-3.7-flash":        BillingModeTieredExpr,
+	"gemini-3.7-flash-tiered": BillingModeTieredExpr,
+	"gemini-3.7-flash-high":   BillingModeTieredExpr,
+	"gemini-3.7-flash-medium": BillingModeTieredExpr,
+	"gemini-3.7-flash-low":    BillingModeTieredExpr,
+	"gemini-3.6-flash":        BillingModeTieredExpr,
+	"gemini-3.6-flash-tiered": BillingModeTieredExpr,
+	"gemini-3.6-flash-high":   BillingModeTieredExpr,
+	"gemini-3.6-flash-medium": BillingModeTieredExpr,
+	"gemini-3.6-flash-low":    BillingModeTieredExpr,
+	"gemini-3.5-flash-lite":   BillingModeTieredExpr,
+	"gemini-3.1-flash-lite":   BillingModeTieredExpr,
+	"gemini-3-flash":          BillingModeTieredExpr,
+	"gemini-3-flash-agent":    BillingModeTieredExpr,
+
+	// Gemini Pro family
+	"gemini-pro-agent":   BillingModeTieredExpr,
+	"gemini-3.1-pro-low": BillingModeTieredExpr,
+
+	// Claude 5.5 family
+	"claude-sonnet-5.5":        BillingModeTieredExpr,
+	"claude-sonnet-5-5-high":   BillingModeTieredExpr,
+	"claude-sonnet-5-5-medium": BillingModeTieredExpr,
+	"claude-sonnet-5-5-low":    BillingModeTieredExpr,
+	"claude-opus-5.5":          BillingModeTieredExpr,
+	"claude-opus-5-5-high":     BillingModeTieredExpr,
+	"claude-opus-5-5-medium":   BillingModeTieredExpr,
+	"claude-opus-5-5-low":      BillingModeTieredExpr,
 }
 
 var defaultBillingExpr = map[string]string{
@@ -59,6 +101,41 @@ var defaultBillingExpr = map[string]string{
 	"deepseek-v4-flash":   deepSeekFlashExpr,
 	"deepseek-v4-pro":     deepSeekProExpr,
 	"deepseek-v4-pro[1m]": deepSeekProExpr,
+
+	// Gemini 3 Flash family
+	"gemini-3.8-flash":        geminiFlashExpr,
+	"gemini-3.8-flash-tiered": geminiFlashExpr,
+	"gemini-3.8-flash-high":   geminiFlashExpr,
+	"gemini-3.8-flash-medium": geminiFlashExpr,
+	"gemini-3.8-flash-low":    geminiFlashExpr,
+	"gemini-3.7-flash":        geminiFlashExpr,
+	"gemini-3.7-flash-tiered": geminiFlashExpr,
+	"gemini-3.7-flash-high":   geminiFlashExpr,
+	"gemini-3.7-flash-medium": geminiFlashExpr,
+	"gemini-3.7-flash-low":    geminiFlashExpr,
+	"gemini-3.6-flash":        geminiFlashExpr,
+	"gemini-3.6-flash-tiered": geminiFlashExpr,
+	"gemini-3.6-flash-high":   geminiFlashExpr,
+	"gemini-3.6-flash-medium": geminiFlashExpr,
+	"gemini-3.6-flash-low":    geminiFlashExpr,
+	"gemini-3.5-flash-lite":   geminiFlashExpr,
+	"gemini-3.1-flash-lite":   geminiFlashExpr,
+	"gemini-3-flash":          geminiFlashExpr,
+	"gemini-3-flash-agent":    geminiFlashExpr,
+
+	// Gemini Pro family
+	"gemini-pro-agent":   geminiProExpr,
+	"gemini-3.1-pro-low": geminiProExpr,
+
+	// Claude 5.5 family
+	"claude-sonnet-5.5":        claudeSonnet55Expr,
+	"claude-sonnet-5-5-high":   claudeSonnet55Expr,
+	"claude-sonnet-5-5-medium": claudeSonnet55Expr,
+	"claude-sonnet-5-5-low":    claudeSonnet55Expr,
+	"claude-opus-5.5":          claudeOpus55Expr,
+	"claude-opus-5-5-high":     claudeOpus55Expr,
+	"claude-opus-5-5-medium":   claudeOpus55Expr,
+	"claude-opus-5-5-low":      claudeOpus55Expr,
 }
 
 func cloneStringMap(src map[string]string) map[string]string {

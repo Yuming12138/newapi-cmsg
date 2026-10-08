@@ -159,3 +159,43 @@ func TestBillingSettingPersistedValuesOverrideWithoutDroppingDefaults(t *testing
 		t.Fatal("default gpt-6-luna expression was dropped")
 	}
 }
+
+func TestDefaultGeminiAndClaudeTieredPricing(t *testing.T) {
+	tests := []struct {
+		model              string
+		standardInput      float64
+		standardCached     float64
+		standardCacheWrite float64
+		standardOutput     float64
+	}{
+		{model: "gemini-3.8-flash", standardInput: 0.30, standardCached: 0.075, standardCacheWrite: 0, standardOutput: 1.20},
+		{model: "gemini-3.7-flash", standardInput: 0.30, standardCached: 0.075, standardCacheWrite: 0, standardOutput: 1.20},
+		{model: "gemini-3.5-flash-lite", standardInput: 0.30, standardCached: 0.075, standardCacheWrite: 0, standardOutput: 1.20},
+		{model: "gemini-pro-agent", standardInput: 1.25, standardCached: 0.3125, standardCacheWrite: 0, standardOutput: 5.00},
+		{model: "gemini-3.1-pro-low", standardInput: 1.25, standardCached: 0.3125, standardCacheWrite: 0, standardOutput: 5.00},
+		{model: "claude-sonnet-5.5", standardInput: 3.00, standardCached: 0.30, standardCacheWrite: 3.75, standardOutput: 15.00},
+		{model: "claude-opus-5.5", standardInput: 5.00, standardCached: 0.50, standardCacheWrite: 6.25, standardOutput: 25.00},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			if mode := defaultBillingMode[tt.model]; mode != BillingModeTieredExpr {
+				t.Fatalf("billing mode = %q, want %q", mode, BillingModeTieredExpr)
+			}
+			expr, ok := defaultBillingExpr[tt.model]
+			if !ok {
+				t.Fatalf("missing default billing expression for %s", tt.model)
+			}
+			if err := SmokeTestExpr(expr); err != nil {
+				t.Fatalf("billing expression smoke test failed: %v", err)
+			}
+
+			assertTierPrice(t, expr, 1000, "standard", billingexpr.TokenParams{P: 1}, tt.standardInput)
+			assertTierPrice(t, expr, 1000, "standard", billingexpr.TokenParams{CR: 1}, tt.standardCached)
+			if tt.standardCacheWrite > 0 {
+				assertTierPrice(t, expr, 1000, "standard", billingexpr.TokenParams{CC: 1}, tt.standardCacheWrite)
+			}
+			assertTierPrice(t, expr, 1000, "standard", billingexpr.TokenParams{C: 1}, tt.standardOutput)
+		})
+	}
+}
