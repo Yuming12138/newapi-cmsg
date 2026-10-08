@@ -2471,8 +2471,8 @@ func antigravityRetryAttempts(auth *cliproxyauth.Auth, cfg *config.Config) int {
 			retry = override
 		}
 	}
-	if retry < 0 {
-		retry = 0
+	if retry < 3 {
+		retry = 3
 	}
 	attempts := retry + 1
 	if attempts < 1 {
@@ -2499,12 +2499,12 @@ func antigravityShouldRetryTransientResourceExhausted429(statusCode int, body []
 	if len(body) == 0 {
 		return false
 	}
-	if classifyAntigravity429(body) != antigravity429Unknown {
+	if classifyAntigravity429(body) == antigravity429QuotaExhausted {
 		return false
 	}
 	status := strings.TrimSpace(gjson.GetBytes(body, "error.status").String())
-	if !strings.EqualFold(status, "RESOURCE_EXHAUSTED") {
-		return false
+	if strings.EqualFold(status, "RESOURCE_EXHAUSTED") {
+		return true
 	}
 	msg := strings.ToLower(string(body))
 	return strings.Contains(msg, "resource has been exhausted")
@@ -2522,14 +2522,7 @@ func antigravityShouldBypassShortCooldown(ctx context.Context, cfg *config.Confi
 }
 
 func antigravitySoftRateLimitDelay(attempt int) time.Duration {
-	if attempt < 0 {
-		attempt = 0
-	}
-	base := time.Duration(attempt+1) * 500 * time.Millisecond
-	if base > 3*time.Second {
-		base = 3 * time.Second
-	}
-	return base
+	return antigravityTransient429RetryDelay(attempt)
 }
 
 func antigravityShortCooldownKey(auth *cliproxyauth.Auth, modelName string) string {
@@ -2702,11 +2695,14 @@ func antigravityTransient429RetryDelay(attempt int) time.Duration {
 	if attempt < 0 {
 		attempt = 0
 	}
-	delay := time.Duration(attempt+1) * 100 * time.Millisecond
-	if delay > 500*time.Millisecond {
-		delay = 500 * time.Millisecond
+	switch attempt {
+	case 0:
+		return 1 * time.Second
+	case 1:
+		return 2 * time.Second
+	default:
+		return 4 * time.Second
 	}
-	return delay
 }
 
 func antigravityInstantRetryDelay(wait time.Duration) time.Duration {
