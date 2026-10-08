@@ -5533,8 +5533,8 @@ func (m *Manager) homeRuntimeAuthByID(sessionID string, authID string) (*Auth, P
 
 func normalizeHomeDispatchModel(model string) string {
 	switch strings.ToLower(strings.TrimSpace(model)) {
-	case "gemini-3.7-flash-tiered":
-		return "gemini-3.7-flash-high"
+	case "gemini-3.7-flash-high":
+		return "gemini-3.7-flash-tiered"
 	case "gemini-3.6-flash-tiered":
 		return "gemini-3.6-flash-high"
 	case "gemini-3.6-flash-medium":

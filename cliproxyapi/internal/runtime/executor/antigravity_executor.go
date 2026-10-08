@@ -704,7 +704,7 @@ attemptLoop:
 				return resp, err
 			}
 
-			log.Debugf("antigravity executor: Execute attempt=%d idx=%d baseURL=%s model=%s", attempt, idx, baseURL, baseModel)
+			log.Infof("antigravity executor: Execute attempt=%d idx=%d baseURL=%s model=%s", attempt, idx, baseURL, baseModel)
 			httpResp, errDo := httpClient.Do(httpReq)
 			if errDo != nil {
 				helps.RecordAPIResponseError(ctx, e.cfg, errDo)
@@ -727,7 +727,7 @@ attemptLoop:
 			if errClose := httpResp.Body.Close(); errClose != nil {
 				log.Errorf("antigravity executor: close response body error: %v", errClose)
 			}
-			log.Debugf("antigravity executor: Execute response status=%d on baseURL=%s body=%s", httpResp.StatusCode, baseURL, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
+			log.Infof("antigravity executor: Execute response status=%d on baseURL=%s body=%s", httpResp.StatusCode, baseURL, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
 			if errRead != nil {
 				helps.RecordAPIResponseError(ctx, e.cfg, errRead)
 				err = errRead
@@ -1396,7 +1396,7 @@ attemptLoop:
 				err = errReq
 				return nil, err
 			}
-			log.Debugf("antigravity executor: ExecuteStream attempt=%d idx=%d baseURL=%s model=%s", attempt, idx, baseURL, baseModel)
+			log.Infof("antigravity executor: ExecuteStream attempt=%d idx=%d baseURL=%s model=%s", attempt, idx, baseURL, baseModel)
 			httpResp, errDo := httpClient.Do(httpReq)
 			if errDo != nil {
 				helps.RecordAPIResponseError(ctx, e.cfg, errDo)
@@ -1419,7 +1419,7 @@ attemptLoop:
 				if errClose := httpResp.Body.Close(); errClose != nil {
 					log.Errorf("antigravity executor: close response body error: %v", errClose)
 				}
-				log.Debugf("antigravity executor: ExecuteStream response status=%d on baseURL=%s body=%s", httpResp.StatusCode, baseURL, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
+				log.Infof("antigravity executor: ExecuteStream response status=%d on baseURL=%s body=%s", httpResp.StatusCode, baseURL, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
 				if errRead != nil {
 					helps.RecordAPIResponseError(ctx, e.cfg, errRead)
 					if errors.Is(errRead, context.Canceled) || errors.Is(errRead, context.DeadlineExceeded) {
@@ -2415,7 +2415,7 @@ func buildBaseURL(auth *cliproxyauth.Auth) string {
 	if baseURLs := antigravityBaseURLFallbackOrder(auth); len(baseURLs) > 0 {
 		return baseURLs[0]
 	}
-	return antigravityBaseURLProd
+	return antigravityBaseURLDaily
 }
 
 func antigravityLoadCodeAssistBaseURL(auth *cliproxyauth.Auth) string {
@@ -2738,7 +2738,6 @@ var antigravityBaseURLFallbackOrder = func(auth *cliproxyauth.Auth) []string {
 	}
 	return []string{
 		antigravityBaseURLDaily,
-		antigravityBaseURLProd,
 	}
 }
 
