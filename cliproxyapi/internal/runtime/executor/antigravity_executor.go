@@ -1446,7 +1446,7 @@ attemptLoop:
 
 					switch decision.kind {
 					case antigravity429DecisionInstantRetrySameAuth:
-						if attempt+1 < attempts {
+						if !cliproxyexecutor.RateLimitFailoverEnabled(ctx) && attempt+1 < attempts {
 							if decision.retryAfter != nil && *decision.retryAfter > 0 {
 								wait := antigravityInstantRetryDelay(*decision.retryAfter)
 								log.Debugf("antigravity executor: instant retry for model %s, waiting %s", baseModel, wait)
@@ -1469,6 +1469,10 @@ attemptLoop:
 							markAntigravityCreditsPermanentlyDisabled(auth)
 						}
 						// No credits logic - just fall through to error return below
+					}
+					if cliproxyexecutor.RateLimitFailoverEnabled(ctx) {
+						err = newAntigravityStatusErr(httpResp.StatusCode, bodyBytes)
+						return nil, err
 					}
 				}
 
@@ -2780,13 +2784,14 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 
 	isImageModel := strings.Contains(modelName, "image")
 	reqType := strings.TrimSpace(gjson.GetBytes(template, "requestType").String())
+	// Ordinary requests leave requestType to the upstream unless explicitly set.
 	if reqType == "" {
 		if isImageModel {
 			reqType = "image_gen"
+			template, _ = sjson.SetBytes(template, "requestType", reqType)
 		} else {
-			reqType = "agent"
+			template, _ = sjson.DeleteBytes(template, "requestType")
 		}
-		template, _ = sjson.SetBytes(template, "requestType", reqType)
 	}
 
 	if projectID != "" {

@@ -111,6 +111,35 @@ func TestAntigravityBuildRequest_UsesAuthProjectID(t *testing.T) {
 	}
 }
 
+func TestAntigravityBuildRequest_RequestTypeDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		model       string
+		payload     string
+		requestType string
+	}{
+		{name: "flash omits request type", model: "gemini-3-flash", payload: `{"request":{"contents":[]}}`},
+		{name: "blank request type is removed", model: "gemini-3-flash", payload: `{"requestType":"  ","request":{"contents":[]}}`},
+		{name: "pro omits request type", model: "gemini-3.1-pro", payload: `{"request":{"contents":[]}}`},
+		{name: "explicit agent is preserved", model: "gemini-3-flash", payload: `{"requestType":"agent","request":{"contents":[]}}`, requestType: "agent"},
+		{name: "explicit web search is preserved", model: "gemini-3-flash", payload: `{"requestType":"web_search","request":{"contents":[]}}`, requestType: "web_search"},
+		{name: "image keeps image generation default", model: "gemini-3.1-flash-image", payload: `{"request":{"contents":[]}}`, requestType: "image_gen"},
+		{name: "image preserves explicit type", model: "gemini-3.1-flash-image", payload: `{"requestType":"custom","request":{"contents":[]}}`, requestType: "custom"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := buildRequestBodyFromRawPayload(t, tc.model, []byte(tc.payload))
+			got, exists := body["requestType"]
+			if tc.requestType == "" {
+				if exists {
+					t.Fatalf("ordinary request should omit requestType, got %v", got)
+				}
+			} else if got != tc.requestType {
+				t.Fatalf("requestType = %v, want %q", got, tc.requestType)
+			}
+		})
+	}
+}
+
 func TestAntigravityBuildRequest_UsesRouteModelWhenPayloadContainsDifferentModel(t *testing.T) {
 	body := buildRequestBodyFromRawPayload(t, "gemini-3-flash-agent", []byte(`{
 		"model": "gemini-3.1-flash-lite",

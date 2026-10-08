@@ -1865,6 +1865,9 @@ func (m *Manager) wrapStreamResult(ctx context.Context, auth *Auth, provider, re
 				rerr := resultErrorFromError(chunk.Err)
 				m.logStreamFailure(ctx, authID, provider, resultModel, false, chunk.Err)
 				m.MarkResult(ctx, Result{AuthID: authID, Provider: provider, Model: resultModel, Success: false, Error: rerr})
+				if statusCodeFromError(chunk.Err) == http.StatusTooManyRequests {
+					m.invalidateSessionAffinity(authID)
+				}
 			}
 			if !forward {
 				return false
@@ -1969,7 +1972,10 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
 			result.RetryAfter = retryAfterFromError(errStream)
 			m.MarkResult(ctx, result)
-			if isRequestInvalidError(errStream) {
+			if statusCodeFromError(errStream) == http.StatusTooManyRequests {
+				m.invalidateSessionAffinity(auth.ID)
+			}
+			if isRequestInvalidError(errStream) || (cliproxyexecutor.RateLimitFailoverEnabled(ctx) && statusCodeFromError(errStream) == http.StatusTooManyRequests) {
 				return nil, errStream
 			}
 			lastErr = errStream
@@ -1977,7 +1983,9 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 		}
 		// Home requests must inspect the bootstrap chunk so a pre-payload 401 can
 		// refresh and replay once. After the first payload, the stream is committed.
-		if !homeMode && m.streamingEagerHeadersEnabled() {
+		// Inspect bootstrap errors before committing headers when another auth can
+		// handle a 429, even when eager headers are enabled.
+		if !homeMode && m.streamingEagerHeadersEnabled() && !cliproxyexecutor.RateLimitFailoverEnabled(ctx) {
 			return m.wrapStreamResult(ctx, auth.Clone(), provider, resultModel, streamResult.Headers, nil, streamResult.Chunks, aliasResult), nil
 		}
 
@@ -2038,7 +2046,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 				discardStreamChunks(streamResult.Chunks)
 				return nil, bootstrapErr
 			}
-			if idx < len(execModels)-1 {
+			if idx < len(execModels)-1 && !(cliproxyexecutor.RateLimitFailoverEnabled(ctx) && statusCodeFromError(bootstrapErr) == http.StatusTooManyRequests) {
 				rerr := resultErrorFromError(bootstrapErr)
 				m.logStreamFailure(ctx, auth.ID, provider, resultModel, true, bootstrapErr)
 				result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
@@ -2053,6 +2061,9 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: false, Error: rerr}
 			result.RetryAfter = retryAfterFromError(bootstrapErr)
 			m.MarkResult(ctx, result)
+			if statusCodeFromError(bootstrapErr) == http.StatusTooManyRequests {
+				m.invalidateSessionAffinity(auth.ID)
+			}
 			discardStreamChunks(streamResult.Chunks)
 			return nil, newStreamBootstrapError(bootstrapErr, streamResult.Headers)
 		}
@@ -2400,7 +2411,10 @@ func (m *Manager) invalidateSessionAffinity(authID string) {
 	if m == nil || authID == "" {
 		return
 	}
-	if invalidator, ok := m.selector.(interface{ InvalidateAuth(string) }); ok && invalidator != nil {
+	m.mu.RLock()
+	selector := m.selector
+	m.mu.RUnlock()
+	if invalidator, ok := selector.(interface{ InvalidateAuth(string) }); ok && invalidator != nil {
 		invalidator.InvalidateAuth(authID)
 	}
 }
@@ -2911,6 +2925,7 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 	homeAuthCount := 1
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
+	rateLimitFailover := false
 	var lastErr error
 	for {
 		if !homeMode && maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
@@ -2960,6 +2975,12 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			continue
 		}
 		execReq := sanitizeDownstreamWebsocketFallbackRequest(execCtx, auth, req)
+		if !rateLimitFailover && (homeMode || maxRetryCredentials <= 0 || len(attempted) < maxRetryCredentials) {
+			rateLimitFailover = m.hasStreamAuthAlternative(providers, routeModel, opts, tried)
+		}
+		if rateLimitFailover {
+			execCtx = cliproxyexecutor.WithRateLimitFailover(execCtx)
+		}
 		streamResult, errStream := m.executeStreamWithModelPool(execCtx, executor, auth, provider, execReq, opts, routeModel, models, pooled, aliasResult, homeMode)
 		if errStream != nil {
 			if errCtx := execCtx.Err(); errCtx != nil {
@@ -2976,6 +2997,47 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		}
 		return streamResult, nil
 	}
+}
+
+func (m *Manager) hasStreamAuthAlternative(providers []string, routeModel string, opts cliproxyexecutor.Options, tried map[string]struct{}) bool {
+	if pinnedAuthIDFromMetadata(opts.Metadata) != "" {
+		return false
+	}
+	if m.HomeEnabled() {
+		// Home owns the candidate pool and enforces its retry budget on dispatch.
+		return true
+	}
+	providerSet := make(map[string]struct{}, len(providers))
+	for _, provider := range providers {
+		providerSet[strings.ToLower(strings.TrimSpace(provider))] = struct{}{}
+	}
+	disallowFreeAuth := disallowFreeAuthFromMetadata(opts.Metadata)
+	registryRef := registry.GetGlobalRegistry()
+	now := time.Now()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, candidate := range m.auths {
+		if candidate == nil || candidate.Disabled {
+			continue
+		}
+		if _, used := tried[candidate.ID]; used {
+			continue
+		}
+		providerKey := executorKeyFromAuth(candidate)
+		if _, allowed := providerSet[providerKey]; !allowed || m.executors[providerKey] == nil {
+			continue
+		}
+		if disallowFreeAuth && isFreeCodexAuth(candidate) {
+			continue
+		}
+		if !m.authSupportsRouteModel(registryRef, candidate, routeModel) {
+			continue
+		}
+		if blocked, _, _ := isAuthBlockedForModel(candidate, m.selectionModelForAuth(candidate, routeModel), now); !blocked {
+			return true
+		}
+	}
+	return false
 }
 
 func sanitizeDownstreamWebsocketFallbackRequest(ctx context.Context, auth *Auth, req cliproxyexecutor.Request) cliproxyexecutor.Request {
