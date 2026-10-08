@@ -172,6 +172,10 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if err != nil {
 		return nil, err
 	}
+	request, err = restoreNativeResponsesReasoning(info, request)
+	if err != nil {
+		return nil, err
+	}
 	setNativeResponsesToolMapForRequest(c, request)
 	setNativeResponsesRequest(c, request)
 	request, err = normalizeNativeResponsesToolsForUpstream(request)
