@@ -243,7 +243,7 @@ func addAdditionalPropertiesHints(jsonStr string) string {
 var unsupportedConstraints = []string{
 	"minLength", "maxLength", "exclusiveMinimum", "exclusiveMaximum",
 	"pattern", "minItems", "maxItems", "uniqueItems", "format",
-	"default", "examples", // Claude rejects these in VALIDATED mode
+	"default", "examples", "example", // Claude/Gemini reject these in schemas
 }
 
 func moveConstraintsToDescription(jsonStr string) string {
@@ -441,6 +441,7 @@ func removeUnsupportedKeywords(jsonStr string) string {
 		"$schema", "$defs", "definitions", "const", "$ref", "$id", "additionalProperties",
 		"propertyNames", "patternProperties", // Gemini doesn't support these schema keywords
 		"$comment", "enumDescriptions", "enumTitles", "prefill", "deprecated", // Schema metadata fields unsupported by Gemini
+		"encrypted", "strict", "readOnly", "writeOnly", "contentEncoding", "contentMediaType", "contentSchema", // Metadata unsupported by Gemini
 	)
 
 	deletePaths := make([]string, 0)

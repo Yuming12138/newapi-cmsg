@@ -940,6 +940,42 @@ func TestCleanJSONSchemaForGemini_RemovesGeminiUnsupportedMetadataFields(t *test
 	compareJSON(t, expected, result)
 }
 
+func TestCleanJSONSchemaForGemini_RemovesEncryptedAndOpenAIFields(t *testing.T) {
+	input := `{
+		"type": "object",
+		"properties": {
+			"query": {
+				"type": "string",
+				"description": "The search query",
+				"encrypted": true,
+				"strict": true,
+				"readOnly": false
+			},
+			"encrypted": {
+				"type": "boolean",
+				"description": "Should preserve property actually named encrypted"
+			}
+		}
+	}`
+
+	expected := `{
+		"type": "object",
+		"properties": {
+			"query": {
+				"type": "string",
+				"description": "The search query"
+			},
+			"encrypted": {
+				"type": "boolean",
+				"description": "Should preserve property actually named encrypted"
+			}
+		}
+	}`
+
+	result := CleanJSONSchemaForGemini(input)
+	compareJSON(t, expected, result)
+}
+
 func TestRemoveExtensionFields(t *testing.T) {
 	tests := []struct {
 		name     string
