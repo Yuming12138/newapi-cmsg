@@ -704,6 +704,7 @@ attemptLoop:
 				return resp, err
 			}
 
+			log.Debugf("antigravity executor: Execute attempt=%d idx=%d baseURL=%s model=%s", attempt, idx, baseURL, baseModel)
 			httpResp, errDo := httpClient.Do(httpReq)
 			if errDo != nil {
 				helps.RecordAPIResponseError(ctx, e.cfg, errDo)
@@ -726,6 +727,7 @@ attemptLoop:
 			if errClose := httpResp.Body.Close(); errClose != nil {
 				log.Errorf("antigravity executor: close response body error: %v", errClose)
 			}
+			log.Debugf("antigravity executor: Execute response status=%d on baseURL=%s body=%s", httpResp.StatusCode, baseURL, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
 			if errRead != nil {
 				helps.RecordAPIResponseError(ctx, e.cfg, errRead)
 				err = errRead
@@ -1394,6 +1396,7 @@ attemptLoop:
 				err = errReq
 				return nil, err
 			}
+			log.Debugf("antigravity executor: ExecuteStream attempt=%d idx=%d baseURL=%s model=%s", attempt, idx, baseURL, baseModel)
 			httpResp, errDo := httpClient.Do(httpReq)
 			if errDo != nil {
 				helps.RecordAPIResponseError(ctx, e.cfg, errDo)
@@ -1416,6 +1419,7 @@ attemptLoop:
 				if errClose := httpResp.Body.Close(); errClose != nil {
 					log.Errorf("antigravity executor: close response body error: %v", errClose)
 				}
+				log.Debugf("antigravity executor: ExecuteStream response status=%d on baseURL=%s body=%s", httpResp.StatusCode, baseURL, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
 				if errRead != nil {
 					helps.RecordAPIResponseError(ctx, e.cfg, errRead)
 					if errors.Is(errRead, context.Canceled) || errors.Is(errRead, context.DeadlineExceeded) {
@@ -2728,9 +2732,12 @@ func antigravityWait(ctx context.Context, wait time.Duration) error {
 
 var antigravityBaseURLFallbackOrder = func(auth *cliproxyauth.Auth) []string {
 	if base := resolveCustomAntigravityBaseURL(auth); base != "" {
-		return []string{base}
+		if !strings.EqualFold(base, antigravityBaseURLProd) && !strings.EqualFold(base, antigravityBaseURLDaily) {
+			return []string{base}
+		}
 	}
 	return []string{
+		antigravityBaseURLDaily,
 		antigravityBaseURLProd,
 	}
 }
