@@ -176,6 +176,17 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if err != nil {
 		return nil, err
 	}
+	request, reasoningCompat, err := normalizeForeignResponsesReasoning(request)
+	if err != nil {
+		return nil, err
+	}
+	if reasoningCompat.changed() {
+		// Count only. Never log reasoning text, summaries, ciphertext, or IDs.
+		if c != nil {
+			c.Set("deepseek_reasoning_compat_summary", reasoningCompat.Summary)
+			c.Set("deepseek_reasoning_compat_placeholder", reasoningCompat.Placeholder)
+		}
+	}
 	setNativeResponsesToolMapForRequest(c, request)
 	setNativeResponsesRequest(c, request)
 	request, err = normalizeNativeResponsesToolsForUpstream(request)

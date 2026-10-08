@@ -245,6 +245,16 @@ type nativeReasoningRecord struct {
 	ExpiresAt int64            `json:"expires_at"`
 }
 
+type nativeReasoningCompatCounts struct {
+	Changed     bool
+	Summary     int
+	Placeholder int
+}
+
+func (counts nativeReasoningCompatCounts) changed() bool {
+	return counts.Changed || counts.Summary > 0 || counts.Placeholder > 0
+}
+
 func marshalNativeReasoningRecord(items []map[string]any) ([]byte, error) {
 	return common.Marshal(nativeReasoningRecord{Items: items, ExpiresAt: time.Now().Add(nativeReasoningTTL).UnixMilli()})
 }
@@ -366,4 +376,153 @@ func restoreNativeResponsesReasoning(info *relaycommon.RelayInfo, request dto.Op
 		request.Input, err = common.Marshal(restored)
 	}
 	return request, err
+}
+
+// normalizeForeignResponsesReasoning adapts reasoning items for DeepSeek's
+// stateless plaintext input contract. It preserves genuine caller plaintext,
+// converts missing plaintext to a compatibility summary or placeholder, and
+// removes foreign summaries, ciphertext, output-only status, and item IDs.
+// A compatibility summary is never raw reasoning and is not written to the
+// native plaintext cache.
+func normalizeForeignResponsesReasoning(request dto.OpenAIResponsesRequest) (dto.OpenAIResponsesRequest, nativeReasoningCompatCounts, error) {
+	items, err := normalizeResponsesInput(request.Input)
+	if err != nil {
+		return request, nativeReasoningCompatCounts{}, err
+	}
+	var counts nativeReasoningCompatCounts
+	for _, item := range items {
+		if common.Interface2String(item["type"]) != "reasoning" {
+			continue
+		}
+		if normalizeForeignResponsesReasoningItem(item, &counts) {
+			counts.Changed = true
+		}
+	}
+	if !counts.changed() {
+		return request, counts, nil
+	}
+	request.Input, err = common.Marshal(items)
+	return request, counts, err
+}
+
+func normalizeForeignResponsesReasoningItem(item map[string]any, counts *nativeReasoningCompatCounts) bool {
+	if item == nil || counts == nil {
+		return false
+	}
+	parts := mapSlice(item["content"])
+	foreignMetadata := false
+	if _, ok := item["summary"]; ok {
+		foreignMetadata = true
+	}
+	if _, ok := item["encrypted_content"]; ok {
+		foreignMetadata = true
+	}
+	contentWasString := false
+	if len(parts) == 0 {
+		if contentText, ok := item["content"].(string); ok {
+			if text := contentText; strings.TrimSpace(text) != "" {
+				parts = []map[string]any{{"type": "text", "text": text}}
+				contentWasString = true
+			}
+		}
+	}
+	texts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		partType := common.Interface2String(part["type"])
+		text := common.Interface2String(part["text"])
+		switch partType {
+		case "reasoning_text", "text":
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			texts = append(texts, text)
+		default:
+			// Unknown content parts are not retained: DeepSeek only accepts
+			// plaintext reasoning content in this input shape.
+		}
+	}
+	if len(texts) > 0 {
+		changed := false
+		normalizedParts := make([]any, 0, len(texts))
+		for _, part := range parts {
+			partType := common.Interface2String(part["type"])
+			text := common.Interface2String(part["text"])
+			if partType != "reasoning_text" && partType != "text" {
+				continue
+			}
+			if strings.TrimSpace(text) == "" {
+				continue
+			}
+			normalizedType := "reasoning_text"
+			if partType != normalizedType {
+				changed = true
+			}
+			normalizedParts = append(normalizedParts, map[string]any{"type": normalizedType, "text": text})
+		}
+		if contentWasString || len(normalizedParts) != len(parts) {
+			changed = true
+		}
+		if changed {
+			item["content"] = normalizedParts
+		}
+		if foreignMetadata {
+			delete(item, "summary")
+			delete(item, "encrypted_content")
+			delete(item, "id")
+			changed = true
+		}
+		if _, ok := item["status"]; ok {
+			delete(item, "status")
+			changed = true
+		}
+		return changed
+	}
+
+	if len(texts) == 0 {
+		summary := foreignReasoningSummaryTexts(item["summary"])
+		if len(summary) > 0 {
+			texts = summary
+			counts.Summary++
+		} else {
+			texts = []string{" "}
+			counts.Placeholder++
+		}
+	}
+
+	normalizedParts := make([]any, 0, len(texts))
+	for _, text := range texts {
+		normalizedParts = append(normalizedParts, map[string]any{"type": "reasoning_text", "text": text})
+	}
+	item["content"] = normalizedParts
+	delete(item, "summary")
+	delete(item, "encrypted_content")
+	delete(item, "status")
+	// GPT/Kimi item identifiers are foreign to DeepSeek and are not useful
+	// without their original raw reasoning.
+	delete(item, "id")
+	return true
+}
+
+func foreignReasoningSummaryTexts(summary any) []string {
+	if summary == nil {
+		return nil
+	}
+	if text, ok := summary.(string); ok {
+		if strings.TrimSpace(text) != "" {
+			return []string{text}
+		}
+		return nil
+	}
+	texts := make([]string, 0)
+	for _, part := range mapSlice(summary) {
+		text := common.Interface2String(part["text"])
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		switch common.Interface2String(part["type"]) {
+		case "summary_text", "text", "":
+			texts = append(texts, text)
+		}
+	}
+	return texts
 }

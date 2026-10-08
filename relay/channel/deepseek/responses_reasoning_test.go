@@ -107,16 +107,167 @@ func TestRestoreNativeReasoningByOutputAnchors(t *testing.T) {
 	}
 }
 
-func TestRestoreNativeReasoningNeverPromotesForeignSummaryOrCiphertext(t *testing.T) {
+func TestNormalizeForeignReasoningSummaryForDeepSeek(t *testing.T) {
 	useNativeReasoningCache(t)
 	request := nativeReasoningTestRequest(t,
 		map[string]any{"type": "reasoning", "id": "rs_foreign", "content": []any{}, "summary": []any{map[string]any{"type": "summary_text", "text": "foreign summary"}}, "encrypted_content": "foreign-ciphertext"},
 		map[string]any{"type": "function_call", "call_id": "call_foreign", "name": "lookup", "arguments": "{}"},
 	)
-	got, err := restoreNativeResponsesReasoning(nativeReasoningTestInfo(), request)
+	got, counts, err := normalizeForeignResponsesReasoning(request)
 	require.NoError(t, err)
-	require.Equal(t, request.Input, got.Input)
+	require.True(t, counts.changed())
+	require.Equal(t, 1, counts.Summary, "counts=%+v input=%s", counts, string(got.Input))
+	require.Equal(t, 0, counts.Placeholder, "counts=%+v input=%s", counts, string(got.Input))
 	require.Equal(t, request.Reasoning, got.Reasoning)
+	items, err := normalizeResponsesInput(got.Input)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	require.Equal(t, "foreign summary", nativeReasoningTestText(t, items[0]))
+	require.NotContains(t, items[0], "summary")
+	require.NotContains(t, items[0], "encrypted_content")
+	require.NotContains(t, items[0], "status")
+	require.NotContains(t, items[0], "id")
+	require.Equal(t, "function_call", items[1]["type"])
+	require.Equal(t, "call_foreign", items[1]["call_id"])
+}
+
+func TestNormalizeForeignReasoningCiphertextWithPlaceholder(t *testing.T) {
+	useNativeReasoningCache(t)
+	request := nativeReasoningTestRequest(t,
+		map[string]any{"type": "reasoning", "id": "rs_encrypted", "status": "completed", "content": []any{}, "encrypted_content": "foreign-ciphertext"},
+		map[string]any{"type": "message", "role": "assistant", "content": "continue"},
+	)
+	got, counts, err := normalizeForeignResponsesReasoning(request)
+	require.NoError(t, err)
+	require.Equal(t, 0, counts.Summary, "counts=%+v input=%s", counts, string(got.Input))
+	require.Equal(t, 1, counts.Placeholder, "counts=%+v input=%s", counts, string(got.Input))
+	items, err := normalizeResponsesInput(got.Input)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	require.Equal(t, " ", nativeReasoningTestText(t, items[0]))
+	require.NotContains(t, items[0], "encrypted_content")
+	require.NotContains(t, items[0], "status")
+	require.NotContains(t, items[0], "id")
+}
+
+func TestNormalizeNativeReasoningKeepsPlaintextBytes(t *testing.T) {
+	useNativeReasoningCache(t)
+	original := "\n  actual plaintext\t原文  "
+	request := nativeReasoningTestRequest(t,
+		map[string]any{"type": "reasoning", "id": "rs_plain", "status": "completed", "content": []any{map[string]any{"type": "text", "text": original}}, "summary": []any{map[string]any{"type": "summary_text", "text": "different summary"}}, "encrypted_content": "foreign-ciphertext"},
+	)
+	got, counts, err := normalizeForeignResponsesReasoning(request)
+	require.NoError(t, err)
+	require.True(t, counts.changed())
+	require.Equal(t, 0, counts.Summary)
+	require.Equal(t, 0, counts.Placeholder)
+	items, err := normalizeResponsesInput(got.Input)
+	require.NoError(t, err)
+	require.Equal(t, original, nativeReasoningTestText(t, items[0]))
+	require.NotContains(t, items[0], "summary")
+	require.NotContains(t, items[0], "encrypted_content")
+	require.NotContains(t, items[0], "status")
+	require.NotContains(t, items[0], "id")
+}
+
+func TestNormalizeForeignReasoningStripsUnsupportedFields(t *testing.T) {
+	useNativeReasoningCache(t)
+	request := nativeReasoningTestRequest(t,
+		map[string]any{"type": "reasoning", "id": "rs_foreign", "status": "completed", "content": []any{
+			map[string]any{"type": "image", "image_url": "https://example.invalid/1.png"},
+			map[string]any{"type": "text", "text": "keep this exact text"},
+		}, "summary": []any{map[string]any{"type": "summary_text", "text": "summary"}}, "encrypted_content": "foreign-ciphertext"},
+	)
+	got, counts, err := normalizeForeignResponsesReasoning(request)
+	require.NoError(t, err)
+	require.True(t, counts.changed())
+	require.Equal(t, 0, counts.Summary)
+	require.Equal(t, 0, counts.Placeholder)
+	items, err := normalizeResponsesInput(got.Input)
+	require.NoError(t, err)
+	require.Equal(t, "keep this exact text", nativeReasoningTestText(t, items[0]))
+	parts := mapSlice(items[0]["content"])
+	require.Len(t, parts, 1)
+	require.Equal(t, "reasoning_text", parts[0]["type"])
+	require.NotContains(t, items[0], "summary")
+	require.NotContains(t, items[0], "encrypted_content")
+	require.NotContains(t, items[0], "status")
+	require.NotContains(t, items[0], "id")
+}
+
+func TestNormalizeForeignReasoningKeepsNativePlaintextID(t *testing.T) {
+	useNativeReasoningCache(t)
+	request := nativeReasoningTestRequest(t,
+		map[string]any{"type": "reasoning", "id": "rs_native", "content": []any{map[string]any{"type": "reasoning_text", "text": "native plaintext"}}},
+	)
+	got, counts, err := normalizeForeignResponsesReasoning(request)
+	require.NoError(t, err)
+	require.False(t, counts.changed())
+	require.Equal(t, request.Input, got.Input)
+	items, err := normalizeResponsesInput(got.Input)
+	require.NoError(t, err)
+	require.Equal(t, "rs_native", items[0]["id"])
+	require.Equal(t, "native plaintext", nativeReasoningTestText(t, items[0]))
+}
+
+func TestCrossProviderReasoningToolTranscript(t *testing.T) {
+	useNativeReasoningCache(t)
+	info := nativeReasoningTestInfo()
+	request := nativeReasoningTestRequest(t,
+		map[string]any{"type": "reasoning", "id": "rs_gpt", "status": "completed", "content": []any{}, "summary": []any{map[string]any{"type": "summary_text", "text": "GPT summary"}}, "encrypted_content": "gpt-ciphertext"},
+		map[string]any{"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "lookup", "arguments": "{\"query\":\"x\"}"},
+		map[string]any{"type": "function_call_output", "call_id": "call_1", "output": "done"},
+		map[string]any{"type": "message", "id": "msg_1", "role": "assistant", "content": "tool finished"},
+		map[string]any{"type": "message", "role": "user", "content": "continue"},
+	)
+	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, request)
+	require.NoError(t, err)
+	got := converted.(dto.OpenAIResponsesRequest)
+	items, err := normalizeResponsesInput(got.Input)
+	require.NoError(t, err)
+	require.Len(t, items, 5)
+	require.Equal(t, "reasoning", items[0]["type"])
+	require.Equal(t, "GPT summary", nativeReasoningTestText(t, items[0]))
+	require.NotContains(t, items[0], "summary")
+	require.NotContains(t, items[0], "encrypted_content")
+	require.NotContains(t, items[0], "status")
+	require.NotContains(t, items[0], "id")
+	require.Equal(t, "function_call", items[1]["type"])
+	require.Equal(t, "call_1", items[1]["call_id"])
+	require.Equal(t, "function_call_output", items[2]["type"])
+	require.Equal(t, "call_1", items[2]["call_id"])
+	require.Equal(t, "assistant", items[3]["role"])
+	require.Equal(t, "user", items[4]["role"])
+}
+
+func TestCrossProviderReasoningDoesNotWriteForeignTextToCache(t *testing.T) {
+	useNativeReasoningCache(t)
+	info := nativeReasoningTestInfo()
+	request := nativeReasoningTestRequest(t,
+		map[string]any{"type": "reasoning", "id": "rs_foreign", "content": []any{}, "summary": []any{map[string]any{"type": "summary_text", "text": "foreign summary"}}, "encrypted_content": "foreign-ciphertext"},
+		map[string]any{"type": "function_call", "call_id": "call_foreign", "name": "lookup", "arguments": "{}"},
+	)
+	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, request)
+	require.NoError(t, err)
+	require.NotNil(t, converted)
+	got := converted.(dto.OpenAIResponsesRequest)
+	items, err := normalizeResponsesInput(got.Input)
+	require.NoError(t, err)
+	require.Equal(t, "foreign summary", nativeReasoningTestText(t, items[0]))
+
+	keys := []string{
+		nativeReasoningKey(info, "reasoning|rs_foreign"),
+		nativeReasoningKey(info, "call|call_foreign"),
+	}
+	for _, key := range keys {
+		_, found, _ := nativeReasoningMemory().Get(key)
+		require.False(t, found)
+		if common.RedisEnabled && common.RDB != nil {
+			exists, err := common.RDB.Exists(t.Context(), key).Result()
+			require.NoError(t, err)
+			require.Zero(t, exists)
+		}
+	}
 }
 
 func TestRestoreNativeReasoningNormalizesTextWithoutChangingBytes(t *testing.T) {
