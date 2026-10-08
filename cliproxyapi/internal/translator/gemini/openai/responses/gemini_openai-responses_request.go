@@ -47,7 +47,12 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 				itemType = "message"
 			}
 
-			if itemType == "function_call" {
+			if itemType == "additional_tools" {
+				i++
+				continue
+			}
+
+			if itemType == "function_call" || itemType == "custom_tool_call" {
 				var calls []gjson.Result
 				var outputs []gjson.Result
 
@@ -58,7 +63,7 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 					if nextType == "" && nextRole != "" {
 						nextType = "message"
 					}
-					if nextType != "function_call" {
+					if nextType != "function_call" && nextType != "custom_tool_call" {
 						break
 					}
 					calls = append(calls, next)
@@ -72,7 +77,7 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 					if nextType == "" && nextRole != "" {
 						nextType = "message"
 					}
-					if nextType != "function_call_output" {
+					if nextType != "function_call_output" && nextType != "custom_tool_call_output" {
 						break
 					}
 					outputs = append(outputs, next)
@@ -101,7 +106,7 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 				}
 			}
 
-			if itemType == "function_call_output" {
+			if itemType == "function_call_output" || itemType == "custom_tool_call_output" {
 				normalized = append(normalized, item)
 				i++
 				continue
@@ -293,10 +298,11 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 					out, _ = sjson.SetRawBytes(out, "contents.-1", one)
 				}
 
-			case "function_call":
-				// Handle function calls - convert to model message with functionCall
-				name := util.SanitizeFunctionName(item.Get("name").String())
-				arguments := item.Get("arguments").String()
+			case "function_call", "custom_tool_call":
+				// Handle function / custom tool calls - convert to model message with functionCall
+				rawName := item.Get("name").String()
+				ns := item.Get("namespace").String()
+				name := util.SanitizeFunctionName(namespacedToolName(ns, rawName))
 
 				modelContent := []byte(`{"role":"model","parts":[]}`)
 				functionCall := []byte(`{"functionCall":{"name":"","args":{}}}`)
@@ -304,35 +310,47 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 				functionCall, _ = sjson.SetBytes(functionCall, "thoughtSignature", geminiResponsesThoughtSignature)
 				functionCall, _ = sjson.SetBytes(functionCall, "functionCall.id", item.Get("call_id").String())
 
-				// Parse arguments JSON string and set as args object
-				if arguments != "" {
-					argsResult := gjson.Parse(arguments)
-					functionCall, _ = sjson.SetRawBytes(functionCall, "functionCall.args", []byte(argsResult.Raw))
+				if itemType == "function_call" {
+					arguments := item.Get("arguments").String()
+					if arguments != "" {
+						argsResult := gjson.Parse(arguments)
+						if argsResult.Exists() && argsResult.Type == gjson.JSON {
+							functionCall, _ = sjson.SetRawBytes(functionCall, "functionCall.args", []byte(argsResult.Raw))
+						}
+					}
+				} else {
+					inputStr := item.Get("input").String()
+					if inputStr != "" {
+						argsResult := gjson.Parse(inputStr)
+						if argsResult.Exists() && argsResult.Type == gjson.JSON && strings.HasPrefix(strings.TrimSpace(inputStr), "{") {
+							functionCall, _ = sjson.SetRawBytes(functionCall, "functionCall.args", []byte(argsResult.Raw))
+						} else {
+							functionCall, _ = sjson.SetBytes(functionCall, "functionCall.args.input", inputStr)
+						}
+					}
 				}
 
 				modelContent, _ = sjson.SetRawBytes(modelContent, "parts.-1", functionCall)
 				out, _ = sjson.SetRawBytes(out, "contents.-1", modelContent)
 
-			case "function_call_output":
-				// Handle function call outputs - convert to function message with functionResponse
+			case "function_call_output", "custom_tool_call_output":
+				// Handle function / custom call outputs - convert to function message with functionResponse
 				callID := item.Get("call_id").String()
-				// Use .Raw to preserve the JSON encoding (includes quotes for strings)
-				outputRaw := item.Get("output").Str
+				outputResult := item.Get("output")
 
 				functionContent := []byte(`{"role":"function","parts":[]}`)
 				functionResponse := []byte(`{"functionResponse":{"name":"","response":{}}}`)
 
-				// We need to extract the function name from the previous function_call
-				// For now, we'll use a placeholder or extract from context if available
-				functionName := "unknown" // This should ideally be matched with the corresponding function_call
-
+				functionName := "unknown"
 				// Find the corresponding function call name by matching call_id
-				// We need to look back through the input array to find the matching call
 				if inputArray := root.Get("input"); inputArray.Exists() && inputArray.IsArray() {
 					inputArray.ForEach(func(_, prevItem gjson.Result) bool {
-						if prevItem.Get("type").String() == "function_call" && prevItem.Get("call_id").String() == callID {
-							functionName = prevItem.Get("name").String()
-							return false // Stop iteration
+						prevType := prevItem.Get("type").String()
+						if (prevType == "function_call" || prevType == "custom_tool_call") && prevItem.Get("call_id").String() == callID {
+							prevName := prevItem.Get("name").String()
+							prevNs := prevItem.Get("namespace").String()
+							functionName = namespacedToolName(prevNs, prevName)
+							return false
 						}
 						return true
 					})
@@ -342,13 +360,11 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 				functionResponse, _ = sjson.SetBytes(functionResponse, "functionResponse.name", functionName)
 				functionResponse, _ = sjson.SetBytes(functionResponse, "functionResponse.id", callID)
 
-				// Set the raw JSON output directly (preserves string encoding)
-				if outputRaw != "" && outputRaw != "null" {
-					output := gjson.Parse(outputRaw)
-					if output.Type == gjson.JSON && json.Valid([]byte(output.Raw)) {
-						functionResponse, _ = sjson.SetRawBytes(functionResponse, "functionResponse.response.result", []byte(output.Raw))
+				if outputResult.Exists() {
+					if (outputResult.IsArray() || outputResult.IsObject()) && json.Valid([]byte(outputResult.Raw)) {
+						functionResponse, _ = sjson.SetRawBytes(functionResponse, "functionResponse.response.result", []byte(outputResult.Raw))
 					} else {
-						functionResponse, _ = sjson.SetBytes(functionResponse, "functionResponse.response.result", outputRaw)
+						functionResponse, _ = sjson.SetBytes(functionResponse, "functionResponse.response.result", outputResult.String())
 					}
 				}
 				functionContent, _ = sjson.SetRawBytes(functionContent, "parts.-1", functionResponse)
@@ -389,31 +405,51 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 		}
 	}
 
-	// Convert tools to Gemini functionDeclarations format
-	if tools := root.Get("tools"); tools.Exists() && tools.IsArray() {
+	// Convert tools to Gemini functionDeclarations format (from tools and input.additional_tools)
+	allTools := extractAllOpenAIResponsesTools(root)
+	if len(allTools) > 0 {
 		geminiTools := []byte(`[{"functionDeclarations":[]}]`)
+		seenDecls := make(map[string]int)
 
-		tools.ForEach(func(_, tool gjson.Result) bool {
-			if tool.Get("type").String() == "function" {
-				funcDecl := []byte(`{"name":"","description":"","parametersJsonSchema":{}}`)
+		for _, tool := range allTools {
+			fullName := namespacedToolName(tool.Namespace, tool.Name)
+			sanitizedName := util.SanitizeFunctionName(fullName)
 
-				if name := tool.Get("name"); name.Exists() {
-					funcDecl, _ = sjson.SetBytes(funcDecl, "name", util.SanitizeFunctionName(name.String()))
-				}
-				if desc := tool.Get("description"); desc.Exists() {
-					funcDecl, _ = sjson.SetBytes(funcDecl, "description", desc.String())
-				}
-				if params := tool.Get("parameters"); params.Exists() {
-					funcDecl, _ = sjson.SetRawBytes(funcDecl, "parametersJsonSchema", []byte(util.CleanJSONSchemaForGemini(params.Raw)))
-				}
+			funcDecl := []byte(`{"name":"","description":"","parametersJsonSchema":{}}`)
+			funcDecl, _ = sjson.SetBytes(funcDecl, "name", sanitizedName)
 
+			if tool.Type == "custom" {
+				desc := tool.Description
+				if desc == "" {
+					desc = "Execute custom command or JavaScript code."
+				}
+				if tool.Name == "exec" {
+					desc += "\nYou can pass 'cmd' with a shell command to execute directly (e.g. bash or powershell script to create/edit files or run commands), or 'code' / 'input' with JavaScript source code."
+				} else {
+					desc += "\nPass tool parameters via 'cmd', 'code', or 'input'."
+				}
+				funcDecl, _ = sjson.SetBytes(funcDecl, "description", desc)
+
+				customSchema := `{"type":"object","properties":{"cmd":{"type":"string","description":"Shell command to run directly (e.g. creating/modifying files or running scripts)"},"code":{"type":"string","description":"JavaScript code to execute"},"input":{"type":"string","description":"Tool input string"}}}`
+				funcDecl, _ = sjson.SetRawBytes(funcDecl, "parametersJsonSchema", []byte(customSchema))
+			} else {
+				if tool.Description != "" {
+					funcDecl, _ = sjson.SetBytes(funcDecl, "description", tool.Description)
+				}
+				if tool.Parameters != "" {
+					funcDecl, _ = sjson.SetRawBytes(funcDecl, "parametersJsonSchema", []byte(util.CleanJSONSchemaForGemini(tool.Parameters)))
+				}
+			}
+
+			if idx, exists := seenDecls[sanitizedName]; exists {
+				geminiTools, _ = sjson.SetRawBytes(geminiTools, fmt.Sprintf("0.functionDeclarations.%d", idx), funcDecl)
+			} else {
+				seenDecls[sanitizedName] = len(seenDecls)
 				geminiTools, _ = sjson.SetRawBytes(geminiTools, "0.functionDeclarations.-1", funcDecl)
 			}
-			return true
-		})
+		}
 
-		// Only add tools if there are function declarations
-		if funcDecls := gjson.GetBytes(geminiTools, "0.functionDeclarations"); funcDecls.Exists() && len(funcDecls.Array()) > 0 {
+		if len(seenDecls) > 0 {
 			out, _ = sjson.SetRawBytes(out, "tools", geminiTools)
 		}
 	}
@@ -623,4 +659,139 @@ func ensureGeminiGenerationConfig(out []byte) []byte {
 		out, _ = sjson.SetRawBytes(out, "generationConfig", []byte(`{}`))
 	}
 	return out
+}
+
+type responsesToolMeta struct {
+	OriginalName string
+	Namespace    string
+	IsCustom     bool
+}
+
+func namespacedToolName(namespace, name string) string {
+	namespace = strings.TrimSpace(namespace)
+	name = strings.TrimSpace(name)
+	if namespace == "" || name == "" {
+		return name
+	}
+	if strings.HasPrefix(name, "mcp__") {
+		return name
+	}
+	prefix := namespace
+	if !strings.HasSuffix(prefix, "__") {
+		prefix += "__"
+	}
+	if strings.HasPrefix(name, prefix) {
+		return name
+	}
+	return prefix + name
+}
+
+type openAIResponsesToolDef struct {
+	Type        string
+	Name        string
+	Namespace   string
+	Description string
+	Parameters  string
+}
+
+func extractAllOpenAIResponsesTools(root gjson.Result) []openAIResponsesToolDef {
+	var results []openAIResponsesToolDef
+
+	var processTool func(tool gjson.Result, ns string)
+	processTool = func(tool gjson.Result, ns string) {
+		toolType := tool.Get("type").String()
+		if toolType == "namespace" {
+			currentNs := strings.TrimSpace(tool.Get("name").String())
+			if currentNs == "" {
+				currentNs = ns
+			}
+			if children := tool.Get("tools"); children.Exists() && children.IsArray() {
+				children.ForEach(func(_, child gjson.Result) bool {
+					processTool(child, currentNs)
+					return true
+				})
+			}
+			return
+		}
+
+		name := strings.TrimSpace(tool.Get("name").String())
+		if name == "" {
+			return
+		}
+
+		desc := tool.Get("description").String()
+		params := tool.Get("parameters").Raw
+
+		if toolType == "" {
+			toolType = "function"
+		}
+
+		results = append(results, openAIResponsesToolDef{
+			Type:        toolType,
+			Name:        name,
+			Namespace:   ns,
+			Description: desc,
+			Parameters:  params,
+		})
+	}
+
+	if tools := root.Get("tools"); tools.Exists() && tools.IsArray() {
+		tools.ForEach(func(_, tool gjson.Result) bool {
+			processTool(tool, "")
+			return true
+		})
+	}
+
+	if input := root.Get("input"); input.Exists() && input.IsArray() {
+		input.ForEach(func(_, item gjson.Result) bool {
+			if item.Get("type").String() == "additional_tools" {
+				if tools := item.Get("tools"); tools.Exists() && tools.IsArray() {
+					tools.ForEach(func(_, tool gjson.Result) bool {
+						processTool(tool, "")
+						return true
+					})
+				}
+			}
+			return true
+		})
+	}
+
+	return results
+}
+
+func parseResponsesToolMetaMap(reqJSON []byte) map[string]responsesToolMeta {
+	if len(reqJSON) == 0 || !gjson.ValidBytes(reqJSON) {
+		return nil
+	}
+	root := unwrapRequestRoot(gjson.ParseBytes(reqJSON))
+	allTools := extractAllOpenAIResponsesTools(root)
+	if len(allTools) == 0 {
+		return nil
+	}
+
+	metaMap := make(map[string]responsesToolMeta)
+	for _, tool := range allTools {
+		fullName := namespacedToolName(tool.Namespace, tool.Name)
+		sanitizedName := util.SanitizeFunctionName(fullName)
+		isCustom := tool.Type == "custom"
+
+		meta := responsesToolMeta{
+			OriginalName: tool.Name,
+			Namespace:    tool.Namespace,
+			IsCustom:     isCustom,
+		}
+
+		metaMap[sanitizedName] = meta
+		metaMap[fullName] = meta
+		if tool.Namespace != "" {
+			if _, exists := metaMap[tool.Name]; !exists {
+				metaMap[tool.Name] = meta
+			}
+			sanitizedOrig := util.SanitizeFunctionName(tool.Name)
+			if _, exists := metaMap[sanitizedOrig]; !exists {
+				metaMap[sanitizedOrig] = meta
+			}
+		}
+	}
+	return metaMap
 }
