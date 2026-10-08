@@ -5531,6 +5531,21 @@ func (m *Manager) homeRuntimeAuthByID(sessionID string, authID string) (*Auth, P
 	return auth.Clone(), executor, providerKey, true
 }
 
+func normalizeHomeDispatchModel(model string) string {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "gemini-3.7-flash-tiered":
+		return "gemini-3.7-flash-high"
+	case "gemini-3.6-flash-tiered":
+		return "gemini-3.6-flash-high"
+	case "gemini-3.6-flash-medium":
+		return "gemini-3.6-flash"
+	case "gemini-3.1-pro-high":
+		return "gemini-pro-agent"
+	default:
+		return model
+	}
+}
+
 func (m *Manager) pickNextViaHome(ctx context.Context, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, string, error) {
 	if m == nil {
 		return nil, nil, "", &Error{Code: "auth_not_found", Message: "no auth available"}
@@ -5556,7 +5571,7 @@ func (m *Manager) pickNextViaHome(ctx context.Context, model string, opts clipro
 		return nil, nil, "", &Error{Code: "home_unavailable", Message: "home control center unavailable", HTTPStatus: http.StatusServiceUnavailable}
 	}
 
-	requestedModel := requestedModelFromMetadata(opts.Metadata, model)
+	requestedModel := normalizeHomeDispatchModel(requestedModelFromMetadata(opts.Metadata, model))
 	sessionID := ExtractSessionID(opts.Headers, opts.OriginalRequest, opts.Metadata)
 	dispatchHeaders := homeDispatchHeaders(ctx, opts.Headers)
 
