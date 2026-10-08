@@ -423,15 +423,22 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 				if desc == "" {
 					desc = "Execute custom command or JavaScript code."
 				}
-				if tool.Name == "exec" {
+				if tool.Name == "apply_patch" {
+					desc = "Apply a patch to create, modify, or delete files. Pass the patch content in unified diff or patch format via 'input' or 'patch'."
+					funcDecl, _ = sjson.SetBytes(funcDecl, "description", desc)
+					patchSchema := `{"type":"object","properties":{"input":{"type":"string","description":"Patch content in unified diff format (e.g. *** Begin Patch ...)"},"patch":{"type":"string","description":"Patch content in unified diff format"}},"required":["input"]}`
+					funcDecl, _ = sjson.SetRawBytes(funcDecl, "parametersJsonSchema", []byte(patchSchema))
+				} else if tool.Name == "exec" {
 					desc += "\nYou can pass 'cmd' with a shell command to execute directly (e.g. bash or powershell script to create/edit files or run commands), or 'code' / 'input' with JavaScript source code."
+					funcDecl, _ = sjson.SetBytes(funcDecl, "description", desc)
+					customSchema := `{"type":"object","properties":{"cmd":{"type":"string","description":"Shell command to run directly (e.g. creating/modifying files or running scripts)"},"code":{"type":"string","description":"JavaScript code to execute"},"input":{"type":"string","description":"Tool input string"}}}`
+					funcDecl, _ = sjson.SetRawBytes(funcDecl, "parametersJsonSchema", []byte(customSchema))
 				} else {
-					desc += "\nPass tool parameters via 'cmd', 'code', or 'input'."
+					desc += "\nPass tool parameters via 'input'."
+					funcDecl, _ = sjson.SetBytes(funcDecl, "description", desc)
+					genericSchema := `{"type":"object","properties":{"input":{"type":"string","description":"Tool input string"}}}`
+					funcDecl, _ = sjson.SetRawBytes(funcDecl, "parametersJsonSchema", []byte(genericSchema))
 				}
-				funcDecl, _ = sjson.SetBytes(funcDecl, "description", desc)
-
-				customSchema := `{"type":"object","properties":{"cmd":{"type":"string","description":"Shell command to run directly (e.g. creating/modifying files or running scripts)"},"code":{"type":"string","description":"JavaScript code to execute"},"input":{"type":"string","description":"Tool input string"}}}`
-				funcDecl, _ = sjson.SetRawBytes(funcDecl, "parametersJsonSchema", []byte(customSchema))
 			} else {
 				if tool.Description != "" {
 					funcDecl, _ = sjson.SetBytes(funcDecl, "description", tool.Description)

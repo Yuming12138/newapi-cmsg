@@ -577,3 +577,46 @@ func TestConvertGeminiResponseToOpenAIResponses_NamespacedFunctionCall(t *testin
 		t.Fatalf("expected output[0].id to start with fc_, got %s", outItem.Get("id").String())
 	}
 }
+
+func TestConvertGeminiResponseToOpenAIResponses_ApplyPatchCustomToolCall(t *testing.T) {
+	reqJSON := []byte(`{
+		"model": "gpt-5.6-sol",
+		"tools": [
+			{
+				"type": "custom",
+				"name": "apply_patch"
+			}
+		]
+	}`)
+
+	respJSON := []byte(`{
+		"candidates": [{
+			"content": {
+				"role": "model",
+				"parts": [{
+					"functionCall": {
+						"name": "apply_patch",
+						"args": {"input": "*** Begin Patch\n*** Add File: index.html\n+<html></html>\n*** End Patch"}
+					}
+				}]
+			},
+			"finishReason": "STOP"
+		}],
+		"responseId": "resp_patch_1"
+	}`)
+
+	result := ConvertGeminiResponseToOpenAIResponsesNonStream(context.Background(), "gpt-5.6-sol", reqJSON, nil, respJSON, nil)
+	parsed := gjson.ParseBytes(result)
+
+	outItem := parsed.Get("output.0")
+	if outItem.Get("type").String() != "custom_tool_call" {
+		t.Fatalf("expected output[0].type custom_tool_call, got %s", outItem.Get("type").String())
+	}
+	if outItem.Get("name").String() != "apply_patch" {
+		t.Fatalf("expected output[0].name apply_patch, got %s", outItem.Get("name").String())
+	}
+	expectedInput := "*** Begin Patch\n*** Add File: index.html\n+<html></html>\n*** End Patch"
+	if outItem.Get("input").String() != expectedInput {
+		t.Fatalf("expected raw patch input %q, got %q", expectedInput, outItem.Get("input").String())
+	}
+}

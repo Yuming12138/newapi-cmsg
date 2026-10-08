@@ -100,50 +100,92 @@ func formatCustomToolInput(meta responsesToolMeta, argsJSON string) string {
 		return argsJSON
 	}
 
-	// 1. Direct cmd / command
-	if cmd := parsed.Get("cmd"); cmd.Exists() && cmd.String() != "" {
-		cmdStr := cmd.String()
-		encodedCmd := jsonQuoteNoHTMLEscape(cmdStr)
-		workdirClause := ""
-		if wd := parsed.Get("workdir"); wd.Exists() && wd.String() != "" {
-			encodedWd := jsonQuoteNoHTMLEscape(wd.String())
-			workdirClause = fmt.Sprintf(", workdir: %s", encodedWd)
+	// For apply_patch, return raw patch/diff content directly
+	if meta.OriginalName == "apply_patch" {
+		if patch := parsed.Get("patch"); patch.Exists() && patch.String() != "" {
+			return patch.String()
 		}
-		return fmt.Sprintf("const r = await tools.exec_command({ cmd: %s%s }); text(r?.output ?? JSON.stringify(r));", encodedCmd, workdirClause)
-	}
-	if command := parsed.Get("command"); command.Exists() && command.String() != "" {
-		cmdStr := command.String()
-		encodedCmd := jsonQuoteNoHTMLEscape(cmdStr)
-		workdirClause := ""
-		if wd := parsed.Get("workdir"); wd.Exists() && wd.String() != "" {
-			encodedWd := jsonQuoteNoHTMLEscape(wd.String())
-			workdirClause = fmt.Sprintf(", workdir: %s", encodedWd)
+		if input := parsed.Get("input"); input.Exists() && input.String() != "" {
+			return input.String()
 		}
-		return fmt.Sprintf("const r = await tools.exec_command({ cmd: %s%s }); text(r?.output ?? JSON.stringify(r));", encodedCmd, workdirClause)
+		if content := parsed.Get("content"); content.Exists() && content.String() != "" {
+			return content.String()
+		}
+		if diff := parsed.Get("diff"); diff.Exists() && diff.String() != "" {
+			return diff.String()
+		}
+		if cmd := parsed.Get("cmd"); cmd.Exists() && cmd.String() != "" {
+			return cmd.String()
+		}
+		if code := parsed.Get("code"); code.Exists() && code.String() != "" {
+			return code.String()
+		}
+		return argsJSON
 	}
 
-	// 2. JavaScript code or input
-	var raw string
-	if code := parsed.Get("code"); code.Exists() && code.String() != "" {
-		raw = code.String()
-	} else if input := parsed.Get("input"); input.Exists() && input.String() != "" {
-		raw = input.String()
-	} else if script := parsed.Get("script"); script.Exists() && script.String() != "" {
-		raw = script.String()
-	}
-
-	if raw != "" {
-		trimmed := strings.TrimSpace(raw)
-		if isLikelyJavaScript(trimmed) {
-			if !strings.Contains(trimmed, "text(") && !strings.Contains(trimmed, "image(") {
-				if strings.HasPrefix(trimmed, "await ") || strings.HasPrefix(trimmed, "tools.") {
-					return fmt.Sprintf("const r = %s; text(typeof r === 'object' ? (r?.output ?? JSON.stringify(r)) : String(r));", trimmed)
-				}
+	// For exec, format for Codex V8 isolate
+	if meta.OriginalName == "exec" || meta.OriginalName == "" {
+		// 1. Direct cmd / command
+		if cmd := parsed.Get("cmd"); cmd.Exists() && cmd.String() != "" {
+			cmdStr := cmd.String()
+			encodedCmd := jsonQuoteNoHTMLEscape(cmdStr)
+			workdirClause := ""
+			if wd := parsed.Get("workdir"); wd.Exists() && wd.String() != "" {
+				encodedWd := jsonQuoteNoHTMLEscape(wd.String())
+				workdirClause = fmt.Sprintf(", workdir: %s", encodedWd)
 			}
-			return trimmed
+			return fmt.Sprintf("const r = await tools.exec_command({ cmd: %s%s }); text(r?.output ?? JSON.stringify(r));", encodedCmd, workdirClause)
 		}
-		encodedCmd := jsonQuoteNoHTMLEscape(trimmed)
-		return fmt.Sprintf("const r = await tools.exec_command({ cmd: %s }); text(r?.output ?? JSON.stringify(r));", encodedCmd)
+		if command := parsed.Get("command"); command.Exists() && command.String() != "" {
+			cmdStr := command.String()
+			encodedCmd := jsonQuoteNoHTMLEscape(cmdStr)
+			workdirClause := ""
+			if wd := parsed.Get("workdir"); wd.Exists() && wd.String() != "" {
+				encodedWd := jsonQuoteNoHTMLEscape(wd.String())
+				workdirClause = fmt.Sprintf(", workdir: %s", encodedWd)
+			}
+			return fmt.Sprintf("const r = await tools.exec_command({ cmd: %s%s }); text(r?.output ?? JSON.stringify(r));", encodedCmd, workdirClause)
+		}
+
+		// 2. JavaScript code or input
+		var raw string
+		if code := parsed.Get("code"); code.Exists() && code.String() != "" {
+			raw = code.String()
+		} else if input := parsed.Get("input"); input.Exists() && input.String() != "" {
+			raw = input.String()
+		} else if script := parsed.Get("script"); script.Exists() && script.String() != "" {
+			raw = script.String()
+		}
+
+		if raw != "" {
+			trimmed := strings.TrimSpace(raw)
+			if isLikelyJavaScript(trimmed) {
+				if !strings.Contains(trimmed, "text(") && !strings.Contains(trimmed, "image(") {
+					if strings.HasPrefix(trimmed, "await ") || strings.HasPrefix(trimmed, "tools.") {
+						return fmt.Sprintf("const r = %s; text(typeof r === 'object' ? (r?.output ?? JSON.stringify(r)) : String(r));", trimmed)
+					}
+				}
+				return trimmed
+			}
+			encodedCmd := jsonQuoteNoHTMLEscape(trimmed)
+			return fmt.Sprintf("const r = await tools.exec_command({ cmd: %s }); text(r?.output ?? JSON.stringify(r));", encodedCmd)
+		}
+
+		return argsJSON
+	}
+
+	// Other custom tools: extract raw input or string without JS wrapping
+	if input := parsed.Get("input"); input.Exists() && input.String() != "" {
+		return input.String()
+	}
+	if patch := parsed.Get("patch"); patch.Exists() && patch.String() != "" {
+		return patch.String()
+	}
+	if code := parsed.Get("code"); code.Exists() && code.String() != "" {
+		return code.String()
+	}
+	if cmd := parsed.Get("cmd"); cmd.Exists() && cmd.String() != "" {
+		return cmd.String()
 	}
 
 	return argsJSON
