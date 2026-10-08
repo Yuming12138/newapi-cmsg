@@ -2,6 +2,7 @@ package responses
 
 import (
 	"encoding/base64"
+	"strings"
 	"testing"
 
 	"github.com/tidwall/gjson"
@@ -483,4 +484,141 @@ func validResponsesGPTReasoningSignature() string {
 		raw[i] = byte(i)
 	}
 	return base64.URLEncoding.EncodeToString(raw)
+}
+
+func TestConvertOpenAIResponsesRequestToGemini_AdditionalToolsAndCustomTool(t *testing.T) {
+	inputJSON := `{
+		"model": "gpt-5.6-sol",
+		"input": [
+			{
+				"type": "additional_tools",
+				"role": "developer",
+				"tools": [
+					{
+						"type": "namespace",
+						"name": "functions",
+						"tools": [
+							{
+								"type": "custom",
+								"name": "exec",
+								"description": "Run JavaScript code to orchestrate/compose tool calls"
+							},
+							{
+								"type": "function",
+								"name": "wait",
+								"description": "Wait for time",
+								"parameters": {
+									"type": "object",
+									"properties": {
+										"duration": {"type": "number"}
+									}
+								}
+							}
+						]
+					}
+				]
+			},
+			{
+				"type": "message",
+				"role": "user",
+				"content": "create index.html"
+			}
+		]
+	}`
+
+	output := ConvertOpenAIResponsesRequestToGemini("gpt-5.6-sol", []byte(inputJSON), false)
+	result := gjson.ParseBytes(output)
+
+	// Verify tools were generated
+	funcDecls := result.Get("tools.0.functionDeclarations").Array()
+	if len(funcDecls) != 2 {
+		t.Fatalf("expected 2 functionDeclarations, got %d: %s", len(funcDecls), result.Get("tools").Raw)
+	}
+
+	execDecl := result.Get("tools.0.functionDeclarations.#(name==\"functions__exec\")")
+	if !execDecl.Exists() {
+		t.Fatalf("expected functions__exec function declaration, got: %s", result.Get("tools").Raw)
+	}
+	if !strings.Contains(execDecl.Get("description").String(), "cmd") {
+		t.Fatalf("expected functions__exec description to mention cmd, got: %s", execDecl.Get("description").String())
+	}
+	if !execDecl.Get("parametersJsonSchema.properties.cmd").Exists() {
+		t.Fatalf("expected parametersJsonSchema to have 'cmd' property, got: %s", execDecl.Get("parametersJsonSchema").Raw)
+	}
+
+	waitDecl := result.Get("tools.0.functionDeclarations.#(name==\"functions__wait\")")
+	if !waitDecl.Exists() {
+		t.Fatalf("expected functions__wait function declaration, got: %s", result.Get("tools").Raw)
+	}
+
+	// Verify additional_tools did not leak into contents
+	contents := result.Get("contents").Array()
+	if len(contents) != 1 {
+		t.Fatalf("expected 1 content item (user message), got %d: %s", len(contents), result.Get("contents").Raw)
+	}
+	if contents[0].Get("role").String() != "user" {
+		t.Fatalf("expected contents[0].role to be user, got %s", contents[0].Get("role").String())
+	}
+}
+
+func TestConvertOpenAIResponsesRequestToGemini_MultiTurnCustomToolCallHistory(t *testing.T) {
+	inputJSON := `{
+		"model": "gpt-5.6-sol",
+		"input": [
+			{
+				"type": "message",
+				"role": "user",
+				"content": "create file"
+			},
+			{
+				"type": "custom_tool_call",
+				"call_id": "call_123",
+				"name": "exec",
+				"namespace": "functions",
+				"input": "const r = await tools.exec_command({cmd: 'echo hello'}); text(r.output);"
+			},
+			{
+				"type": "custom_tool_call_output",
+				"call_id": "call_123",
+				"output": [{"type": "input_text", "text": "hello"}]
+			}
+		]
+	}`
+
+	output := ConvertOpenAIResponsesRequestToGemini("gpt-5.6-sol", []byte(inputJSON), false)
+	result := gjson.ParseBytes(output)
+
+	contents := result.Get("contents").Array()
+	if len(contents) != 3 {
+		t.Fatalf("expected 3 content items, got %d: %s", len(contents), result.Get("contents").Raw)
+	}
+
+	// Turn 1: user
+	if contents[0].Get("role").String() != "user" {
+		t.Fatalf("contents[0] want role user, got %s", contents[0].Get("role").String())
+	}
+
+	// Turn 2: model functionCall
+	if contents[1].Get("role").String() != "model" {
+		t.Fatalf("contents[1] want role model, got %s", contents[1].Get("role").String())
+	}
+	fc := contents[1].Get("parts.0.functionCall")
+	if fc.Get("name").String() != "functions__exec" {
+		t.Fatalf("functionCall want name functions__exec, got %s", fc.Get("name").String())
+	}
+	if fc.Get("id").String() != "call_123" {
+		t.Fatalf("functionCall want id call_123, got %s", fc.Get("id").String())
+	}
+
+	// Turn 3: function functionResponse
+	if contents[2].Get("role").String() != "function" {
+		t.Fatalf("contents[2] want role function, got %s", contents[2].Get("role").String())
+	}
+	fr := contents[2].Get("parts.0.functionResponse")
+	if fr.Get("name").String() != "functions__exec" {
+		t.Fatalf("functionResponse want name functions__exec, got %s", fr.Get("name").String())
+	}
+	if fr.Get("id").String() != "call_123" {
+		t.Fatalf("functionResponse want id call_123, got %s", fr.Get("id").String())
+	}
 }

@@ -351,3 +351,229 @@ func TestConvertGeminiResponseToOpenAIResponses_ResponseOutputOrdering(t *testin
 		t.Fatalf("expected response.completed after message added: msgAdded=%d completed=%d", posMsgAdded, posCompleted)
 	}
 }
+
+func TestConvertGeminiResponseToOpenAIResponses_CustomToolCallStream(t *testing.T) {
+	reqJSON := []byte(`{
+		"model": "gpt-5.6-sol",
+		"input": [
+			{
+				"type": "additional_tools",
+				"role": "developer",
+				"tools": [
+					{
+						"type": "namespace",
+						"name": "functions",
+						"tools": [
+							{
+								"type": "custom",
+								"name": "exec",
+								"description": "Run JavaScript"
+							}
+						]
+					}
+				]
+			},
+			{
+				"type": "message",
+				"role": "user",
+				"content": "create index.html"
+			}
+		]
+	}`)
+
+	streamChunks := []string{
+		`data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"functions__exec","args":{"cmd":"echo hello > index.html"}}}]}}],"modelVersion":"gemini-2.5-flash","responseId":"resp_123"}`,
+		`data: {"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15},"modelVersion":"gemini-2.5-flash","responseId":"resp_123"}`,
+	}
+
+	var param any
+	var out [][]byte
+	for _, chunk := range streamChunks {
+		out = append(out, ConvertGeminiResponseToOpenAIResponses(context.Background(), "gpt-5.6-sol", reqJSON, nil, []byte(chunk), &param)...)
+	}
+
+	var (
+		gotItemAdded   bool
+		gotInputDelta  bool
+		gotInputDone   bool
+		gotItemDone    bool
+		gotCompleted   bool
+		addedItemType  string
+		addedItemName  string
+		addedItemNs    string
+		addedItemID    string
+		deltaInput     string
+		doneInput      string
+		completedType  string
+		completedInput string
+	)
+
+	for _, chunk := range out {
+		ev, data := parseSSEEvent(t, chunk)
+		switch ev {
+		case "response.output_item.added":
+			gotItemAdded = true
+			addedItemType = data.Get("item.type").String()
+			addedItemName = data.Get("item.name").String()
+			addedItemNs = data.Get("item.namespace").String()
+			addedItemID = data.Get("item.id").String()
+		case "response.custom_tool_call_input.delta":
+			gotInputDelta = true
+			deltaInput = data.Get("delta").String()
+		case "response.custom_tool_call_input.done":
+			gotInputDone = true
+			doneInput = data.Get("input").String()
+		case "response.output_item.done":
+			gotItemDone = true
+		case "response.completed":
+			gotCompleted = true
+			completedType = data.Get("response.output.0.type").String()
+			completedInput = data.Get("response.output.0.input").String()
+		}
+	}
+
+	if !gotItemAdded || addedItemType != "custom_tool_call" {
+		t.Fatalf("expected output_item.added with custom_tool_call, got %v, type=%q", gotItemAdded, addedItemType)
+	}
+	if addedItemName != "exec" {
+		t.Fatalf("expected item.name 'exec', got %q", addedItemName)
+	}
+	if addedItemNs != "functions" {
+		t.Fatalf("expected item.namespace 'functions', got %q", addedItemNs)
+	}
+	if !strings.HasPrefix(addedItemID, "ctc_") {
+		t.Fatalf("expected item.id to start with ctc_, got %q", addedItemID)
+	}
+	if !gotInputDelta || !strings.Contains(deltaInput, "tools.exec_command") {
+		t.Fatalf("expected custom_tool_call_input.delta with tools.exec_command, got %v, delta=%q", gotInputDelta, deltaInput)
+	}
+	if !gotInputDone || !strings.Contains(doneInput, "echo hello > index.html") {
+		t.Fatalf("expected custom_tool_call_input.done with command, got %v, input=%q", gotInputDone, doneInput)
+	}
+	if !gotItemDone {
+		t.Fatalf("expected output_item.done")
+	}
+	if !gotCompleted || completedType != "custom_tool_call" {
+		t.Fatalf("expected response.completed with custom_tool_call output, got %v, type=%q", gotCompleted, completedType)
+	}
+	if !strings.Contains(completedInput, "echo hello > index.html") {
+		t.Fatalf("expected response.completed output input to contain command, got %q", completedInput)
+	}
+}
+
+func TestConvertGeminiResponseToOpenAIResponses_CustomToolCallNonStream(t *testing.T) {
+	reqJSON := []byte(`{
+		"model": "gpt-5.6-sol",
+		"input": [
+			{
+				"type": "additional_tools",
+				"role": "developer",
+				"tools": [
+					{
+						"type": "namespace",
+						"name": "functions",
+						"tools": [
+							{
+								"type": "custom",
+								"name": "exec"
+							}
+						]
+					}
+				]
+			}
+		]
+	}`)
+
+	respJSON := []byte(`{
+		"candidates": [{
+			"content": {
+				"role": "model",
+				"parts": [{
+					"functionCall": {
+						"name": "functions__exec",
+						"args": {"cmd": "cat << 'EOF' > index.html\nhello\nEOF"}
+					}
+				}]
+			},
+			"finishReason": "STOP"
+		}],
+		"responseId": "resp_nonstream_1"
+	}`)
+
+	result := ConvertGeminiResponseToOpenAIResponsesNonStream(context.Background(), "gpt-5.6-sol", reqJSON, nil, respJSON, nil)
+	parsed := gjson.ParseBytes(result)
+
+	outItem := parsed.Get("output.0")
+	if outItem.Get("type").String() != "custom_tool_call" {
+		t.Fatalf("expected output[0].type custom_tool_call, got %s", outItem.Get("type").String())
+	}
+	if outItem.Get("name").String() != "exec" {
+		t.Fatalf("expected output[0].name exec, got %s", outItem.Get("name").String())
+	}
+	if outItem.Get("namespace").String() != "functions" {
+		t.Fatalf("expected output[0].namespace functions, got %s", outItem.Get("namespace").String())
+	}
+	if !strings.HasPrefix(outItem.Get("id").String(), "ctc_") {
+		t.Fatalf("expected output[0].id to start with ctc_, got %s", outItem.Get("id").String())
+	}
+	if !strings.Contains(outItem.Get("input").String(), "tools.exec_command") {
+		t.Fatalf("expected output[0].input to contain tools.exec_command, got %s", outItem.Get("input").String())
+	}
+}
+
+func TestConvertGeminiResponseToOpenAIResponses_NamespacedFunctionCall(t *testing.T) {
+	reqJSON := []byte(`{
+		"model": "gpt-5.6-sol",
+		"input": [
+			{
+				"type": "additional_tools",
+				"tools": [
+					{
+						"type": "namespace",
+						"name": "functions",
+						"tools": [
+							{
+								"type": "function",
+								"name": "wait",
+								"parameters": {"type": "object"}
+							}
+						]
+					}
+				]
+			}
+		]
+	}`)
+
+	respJSON := []byte(`{
+		"candidates": [{
+			"content": {
+				"role": "model",
+				"parts": [{
+					"functionCall": {
+						"name": "functions__wait",
+						"args": {"seconds": 5}
+					}
+				}]
+			},
+			"finishReason": "STOP"
+		}],
+		"responseId": "resp_wait_1"
+	}`)
+
+	result := ConvertGeminiResponseToOpenAIResponsesNonStream(context.Background(), "gpt-5.6-sol", reqJSON, nil, respJSON, nil)
+	parsed := gjson.ParseBytes(result)
+
+	outItem := parsed.Get("output.0")
+	if outItem.Get("type").String() != "function_call" {
+		t.Fatalf("expected output[0].type function_call, got %s", outItem.Get("type").String())
+	}
+	if outItem.Get("name").String() != "wait" {
+		t.Fatalf("expected output[0].name wait, got %s", outItem.Get("name").String())
+	}
+	if outItem.Get("namespace").String() != "functions" {
+		t.Fatalf("expected output[0].namespace functions, got %s", outItem.Get("namespace").String())
+	}
+	if !strings.HasPrefix(outItem.Get("id").String(), "fc_") {
+		t.Fatalf("expected output[0].id to start with fc_, got %s", outItem.Get("id").String())
+	}
+}
