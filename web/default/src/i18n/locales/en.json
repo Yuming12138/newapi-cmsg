@@ -1,5 +1,27 @@
 {
   "translation": {
+    "kimiSubscriptionDetails": {
+      "availableQuota": "Available quota",
+      "availableTotalAccounts": "Available / total accounts",
+      "availableAccounts": "Available accounts",
+      "accountSummary": "Accounts {{value}}",
+      "account": "Kimi account {{id}}",
+      "subscription": "Kimi subscription",
+      "remaining": "Kimi subscription remaining",
+      "credentials": "Credentials {{count}}",
+      "windowQuota": "Subscription window remaining quota",
+      "windowRemaining": "{{window}} remaining",
+      "monthlyTotal": "Monthly total",
+      "monthlyCode": "Monthly code",
+      "resetAt": "Resets {{time}}",
+      "updatedAt": "Data updated at",
+      "quotaUnavailable": "Subscription quota unavailable",
+      "quotaExhausted": "Subscription quota exhausted",
+      "unavailableAccounts": "Unavailable accounts · {{count}}",
+      "unavailableDescription": "Subscription quota exhausted or unavailable",
+      "syncFailed": "Current quota sync failed. Showing the last successful Kimi subscription snapshot.",
+      "partial": "Some accounts could not be checked. The data may be incomplete."
+    },
     "360": "360",
     "1000": "1000",
     "10000": "10000",

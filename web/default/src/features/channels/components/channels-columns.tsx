@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { type ColumnDef } from '@tanstack/react-table'
+import type { TFunction } from 'i18next'
 import {
   AlertTriangle,
   ChevronDown,
@@ -199,9 +200,19 @@ type KimiSubscriptionWindow = {
   resetAt: number | null
 }
 
+type KimiSubscriptionAccount = {
+  id: string
+  remainingPercent: number | null
+  windows: KimiSubscriptionWindow[]
+}
+
 type KimiSubscriptionMeta = {
   remainingPercent: number | null
   windows: KimiSubscriptionWindow[]
+  accounts: KimiSubscriptionAccount[]
+  accountCount: number | null
+  availableAccountCount: number | null
+  credentialCount: number | null
   updatedAt: number | null
   partial: boolean
   error: string | null
@@ -279,11 +290,11 @@ function isKimiCPAChannel(channel: Channel): boolean {
     const mapping = asObject(parsed)
     return Boolean(
       mapping &&
-        Object.values(mapping).some(
-          (model) =>
-            typeof model === 'string' &&
-            model.trim().toLowerCase().startsWith('kimi-')
-        )
+      Object.values(mapping).some(
+        (model) =>
+          typeof model === 'string' &&
+          model.trim().toLowerCase().startsWith('kimi-')
+      )
     )
   } catch {
     return false
@@ -298,21 +309,44 @@ function parseKimiSubscriptionMeta(
     const parsed = asObject(JSON.parse(otherInfo))
     const raw = asObject(parsed?.kimi_cpa_subscription)
     if (!raw) return null
-    const rawWindows = Array.isArray(raw.windows) ? raw.windows : []
-    const windows = rawWindows
-      .map((value): KimiSubscriptionWindow | null => {
+    const parseWindows = (value: unknown): KimiSubscriptionWindow[] => {
+      if (!Array.isArray(value)) return []
+      return value
+        .map((windowValue): KimiSubscriptionWindow | null => {
+          const item = asObject(windowValue)
+          if (!item || typeof item.name !== 'string') return null
+          return {
+            name: item.name,
+            remainingPercent: numberValue(item.remaining_percent),
+            resetAt: timestampValue(item.reset_at),
+          }
+        })
+        .filter((item): item is KimiSubscriptionWindow => item != null)
+    }
+    const windows = parseWindows(raw.windows)
+    const accounts = (Array.isArray(raw.accounts) ? raw.accounts : [])
+      .map((value): KimiSubscriptionAccount | null => {
         const item = asObject(value)
-        if (!item || typeof item.name !== 'string') return null
+        if (!item) return null
+        const id =
+          typeof item.id === 'string' && item.id.trim() !== ''
+            ? item.id.trim()
+            : ''
+        if (!id) return null
         return {
-          name: item.name,
+          id,
           remainingPercent: numberValue(item.remaining_percent),
-          resetAt: timestampValue(item.reset_at),
+          windows: parseWindows(item.windows),
         }
       })
-      .filter((item): item is KimiSubscriptionWindow => item != null)
+      .filter((item): item is KimiSubscriptionAccount => item != null)
     return {
       remainingPercent: numberValue(raw.remaining_percent),
       windows,
+      accounts,
+      accountCount: numberValue(raw.account_count),
+      availableAccountCount: numberValue(raw.available_account_count),
+      credentialCount: numberValue(raw.credential_count),
       updatedAt: timestampValue(raw.updated_at),
       partial: booleanValue(raw.partial) ?? false,
       error: typeof raw.error === 'string' ? raw.error : null,
@@ -333,7 +367,7 @@ function kimiSubscriptionPrimaryPercent(
   return remaining.length > 0 ? Math.min(...remaining) : null
 }
 
-function kimiSubscriptionWindowLabel(name: string): string {
+function kimiSubscriptionWindowLabel(name: string, t: TFunction): string {
   switch (name) {
     case '5h':
       return '5h'
@@ -341,30 +375,285 @@ function kimiSubscriptionWindowLabel(name: string): string {
     case '7d':
       return '7d'
     case 'month_total':
-      return '月度总额'
+      return t('kimiSubscriptionDetails.monthlyTotal')
     case 'month_code':
-      return '月度代码'
+      return t('kimiSubscriptionDetails.monthlyCode')
     default:
       return name
   }
 }
 
 function formatKimiSubscriptionSummary(
-  meta: KimiSubscriptionMeta | null
+  meta: KimiSubscriptionMeta | null,
+  t: TFunction
 ): string {
   if (!meta) return '-'
   const preferredNames = ['5h', 'month_code', 'month_total', 'week', '7d']
   const selected = preferredNames
     .map((name) => meta.windows.find((item) => item.name === name))
     .filter((item): item is KimiSubscriptionWindow => item != null)
-  const windows = selected.length > 0 ? selected.slice(0, 2) : meta.windows.slice(0, 2)
-  if (windows.length === 0) return formatPercent(kimiSubscriptionPrimaryPercent(meta))
-  return windows
-    .map(
-      (item) =>
-        `${kimiSubscriptionWindowLabel(item.name)} ${formatPercent(item.remainingPercent)}`
+  const windows =
+    selected.length > 0 ? selected.slice(0, 2) : meta.windows.slice(0, 2)
+  if (windows.length === 0)
+    return formatPercent(kimiSubscriptionPrimaryPercent(meta))
+  const parts = windows.map(
+    (item) =>
+      `${kimiSubscriptionWindowLabel(item.name, t)} ${formatPercent(item.remainingPercent)}`
+  )
+  if (meta.accountCount != null) {
+    parts.push(
+      t('kimiSubscriptionDetails.accountSummary', {
+        value: formatKimiSubscriptionAccountCount(meta),
+      })
     )
-    .join(' · ')
+  }
+  return parts.join(' · ')
+}
+
+function formatKimiSubscriptionAccountCount(
+  meta: KimiSubscriptionMeta
+): string {
+  if (meta.accountCount == null) return '-'
+  if (meta.availableAccountCount == null) return String(meta.accountCount)
+  return `${meta.availableAccountCount}/${meta.accountCount}`
+}
+
+function getKimiSubscriptionAccountPercent(
+  account: KimiSubscriptionAccount
+): number | null {
+  if (account.remainingPercent != null) return account.remainingPercent
+  const remaining = account.windows
+    .map((item) => item.remainingPercent)
+    .filter((value): value is number => value != null)
+  return remaining.length > 0 ? Math.min(...remaining) : null
+}
+
+function isKimiSubscriptionAccountAvailable(
+  account: KimiSubscriptionAccount
+): boolean {
+  const percent = getKimiSubscriptionAccountPercent(account)
+  return percent != null && percent > 0
+}
+
+function getKimiSubscriptionNextResetAt(
+  meta: KimiSubscriptionMeta
+): number | null {
+  const candidates = [
+    ...meta.windows,
+    ...meta.accounts.flatMap((account) => account.windows),
+  ]
+    .map((item) => item.resetAt)
+    .filter((value): value is number => value != null && value > 0)
+  return candidates.length > 0 ? Math.min(...candidates) : null
+}
+
+function KimiSubscriptionStaleNotice({ meta }: { meta: KimiSubscriptionMeta }) {
+  const { t } = useTranslation()
+  if (!meta.partial && !meta.error) return null
+  return (
+    <div className='flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-700 dark:text-amber-300'>
+      <AlertTriangle className='mt-0.5 size-3.5 shrink-0' aria-hidden='true' />
+      <span>
+        {meta.error
+          ? t('kimiSubscriptionDetails.syncFailed')
+          : t('kimiSubscriptionDetails.partial')}
+      </span>
+    </div>
+  )
+}
+
+function KimiSubscriptionProgress({
+  label,
+  window,
+}: {
+  label: string
+  window: KimiSubscriptionWindow
+}) {
+  const percent = window.remainingPercent
+
+  return (
+    <div className='space-y-1'>
+      <div className='flex items-center justify-between gap-2 text-[11px] leading-none'>
+        <span className='text-foreground/75 font-medium'>{label}</span>
+        <span className='flex shrink-0 items-center gap-1 tabular-nums'>
+          <span className='text-foreground font-semibold'>
+            {formatPercent(percent)}
+          </span>
+          <span className='text-foreground/70'>
+            {window.resetAt != null
+              ? formatCompactTimestamp(window.resetAt)
+              : '-'}
+          </span>
+        </span>
+      </div>
+      <Progress
+        value={percent == null ? null : clampPercent(percent)}
+        aria-label={label}
+        className={cn(
+          '[&_[data-slot=progress-track]]:bg-foreground/20 h-1.5',
+          getCliproxyCPAProgressColor(percent)
+        )}
+      />
+    </div>
+  )
+}
+
+function KimiSubscriptionAccountRow({
+  account,
+}: {
+  account: KimiSubscriptionAccount
+}) {
+  const { t } = useTranslation()
+  const percent = getKimiSubscriptionAccountPercent(account)
+  const available = isKimiSubscriptionAccountAvailable(account)
+
+  return (
+    <div className='bg-muted/30 border-border/80 space-y-1 rounded border p-1.5'>
+      <div className='flex items-start justify-between gap-2'>
+        <div className='min-w-0'>
+          <p className='text-foreground truncate text-[11px] font-medium'>
+            {t('kimiSubscriptionDetails.account', { id: account.id.slice(-6) })}
+          </p>
+          {!available && (
+            <p className='text-destructive text-[10px]'>
+              {percent == null
+                ? t('kimiSubscriptionDetails.quotaUnavailable')
+                : t('kimiSubscriptionDetails.quotaExhausted')}
+            </p>
+          )}
+        </div>
+        <span className='text-foreground shrink-0 text-[11px] font-semibold tabular-nums'>
+          {formatPercent(percent)}
+        </span>
+      </div>
+      {account.windows.length > 0 && (
+        <div className='text-foreground/70 flex flex-wrap gap-x-2 gap-y-0.5 text-[10px] tabular-nums'>
+          {account.windows.map((window) => (
+            <span key={window.name}>
+              {t('kimiSubscriptionDetails.windowRemaining', {
+                window: kimiSubscriptionWindowLabel(window.name, t),
+              })}{' '}
+              {formatPercent(window.remainingPercent)}
+              {window.resetAt != null
+                ? ` · ${t('kimiSubscriptionDetails.resetAt', { time: formatCompactTimestamp(window.resetAt) })}`
+                : ''}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function KimiSubscriptionDetails({ meta }: { meta: KimiSubscriptionMeta }) {
+  const { t } = useTranslation()
+  const availablePercent = kimiSubscriptionPrimaryPercent(meta)
+  const availableAccounts = meta.accounts.filter(
+    isKimiSubscriptionAccountAvailable
+  )
+  const unavailableAccounts = meta.accounts.filter(
+    (account) => !isKimiSubscriptionAccountAvailable(account)
+  )
+  const nextResetAt = getKimiSubscriptionNextResetAt(meta)
+
+  return (
+    <div className='text-foreground max-h-[calc(100dvh-6rem)] w-[360px] max-w-[calc(100vw-3rem)] space-y-2 overflow-y-auto'>
+      <KimiSubscriptionStaleNotice meta={meta} />
+      <div className='grid grid-cols-2 gap-2'>
+        <div className='bg-background border-border rounded-md border p-2 shadow-sm'>
+          <p className='text-foreground/70 text-[11px]'>
+            {t('kimiSubscriptionDetails.availableQuota')}
+          </p>
+          <p className='text-sm font-semibold tabular-nums'>
+            {formatPercent(availablePercent)}
+          </p>
+        </div>
+        <div className='bg-background border-border rounded-md border p-2 shadow-sm'>
+          <p className='text-foreground/70 text-[11px]'>
+            {t('kimiSubscriptionDetails.availableTotalAccounts')}
+          </p>
+          <p className='text-sm font-semibold tabular-nums'>
+            {formatKimiSubscriptionAccountCount(meta)}
+          </p>
+        </div>
+      </div>
+      <div className='bg-background border-border space-y-2 rounded-md border p-2 shadow-sm'>
+        <div className='flex items-start justify-between gap-3'>
+          <div className='min-w-0'>
+            <p className='truncate text-xs font-semibold'>
+              {t('kimiSubscriptionDetails.subscription')}
+              {meta.credentialCount != null
+                ? ` · ${t('kimiSubscriptionDetails.credentials', { count: meta.credentialCount })}`
+                : ''}
+            </p>
+            <p className='text-foreground/70 text-[11px]'>
+              {t('kimiSubscriptionDetails.windowQuota')}
+            </p>
+          </div>
+          <div className='shrink-0 text-right tabular-nums'>
+            <p className='text-xs font-semibold'>
+              {formatPercent(availablePercent)}
+            </p>
+            <p className='text-foreground/70 text-[11px]'>
+              {t('kimiSubscriptionDetails.availableQuota')}
+            </p>
+          </div>
+        </div>
+        {meta.windows.map((window) => (
+          <KimiSubscriptionProgress
+            key={window.name}
+            label={t('kimiSubscriptionDetails.windowRemaining', {
+              window: kimiSubscriptionWindowLabel(window.name, t),
+            })}
+            window={window}
+          />
+        ))}
+        {availableAccounts.length > 0 && (
+          <div className='border-border/70 space-y-1 border-t pt-2'>
+            <p className='text-foreground/70 text-[11px]'>
+              {t('kimiSubscriptionDetails.availableAccounts')}
+            </p>
+            {availableAccounts.map((account) => (
+              <KimiSubscriptionAccountRow key={account.id} account={account} />
+            ))}
+          </div>
+        )}
+      </div>
+      {unavailableAccounts.length > 0 && (
+        <div className='bg-background border-border space-y-2 rounded-md border p-2 shadow-sm'>
+          <div className='flex items-center justify-between gap-2'>
+            <p className='text-xs font-semibold'>
+              {t('kimiSubscriptionDetails.unavailableAccounts', {
+                count: unavailableAccounts.length,
+              })}
+            </p>
+            <p className='text-foreground/70 text-[11px]'>
+              {t('kimiSubscriptionDetails.unavailableDescription')}
+            </p>
+          </div>
+          <div className='space-y-1'>
+            {unavailableAccounts.map((account) => (
+              <KimiSubscriptionAccountRow key={account.id} account={account} />
+            ))}
+          </div>
+        </div>
+      )}
+      <div className='text-foreground/70 flex justify-between gap-2 text-[11px]'>
+        <span>{t('Next reset')}</span>
+        <span className='tabular-nums'>
+          {nextResetAt != null ? formatCompactTimestamp(nextResetAt) : '-'}
+        </span>
+      </div>
+      {meta.updatedAt && (
+        <div className='text-foreground/70 flex justify-between gap-2 text-[11px]'>
+          <span>{t('kimiSubscriptionDetails.updatedAt')}</span>
+          <span className='tabular-nums'>
+            {formatCompactTimestamp(meta.updatedAt)}
+          </span>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function getCliproxyCPAResetAt(
@@ -1962,11 +2251,16 @@ function BalanceCell({ channel }: { channel: Channel }) {
     cliproxyCPAQuota != null && isCliproxyCPAModelQuota(cliproxyCPAQuota)
   const cliproxyCPALunaReserve =
     cliproxyCPAQuota != null && isCliproxyCPALunaReserve(cliproxyCPAQuota)
-  const remainingDisplay = isKimiCPA
-    ? formatPercent(kimiSubscriptionPrimaryPercent(kimiSubscription))
-    : cliproxyCPAModelQuota
-      ? formatPercent(getCliproxyCPAModelQuotaPercent(cliproxyCPAQuota))
-      : storedRemainingDisplay
+  const kimiSubscriptionPercent =
+    kimiSubscriptionPrimaryPercent(kimiSubscription)
+  let remainingDisplay = storedRemainingDisplay
+  if (isKimiCPA) {
+    remainingDisplay = formatPercent(kimiSubscriptionPercent)
+  } else if (cliproxyCPAModelQuota) {
+    remainingDisplay = formatPercent(
+      getCliproxyCPAModelQuotaPercent(cliproxyCPAQuota)
+    )
+  }
 
   // Tag row: only show cumulative used quota
   if (isTagRow) {
@@ -1981,7 +2275,10 @@ function BalanceCell({ channel }: { channel: Channel }) {
   }
 
   // Regular channel row: show used and remaining with click to update
-  const variant = getBalanceVariant(balance)
+  const variant =
+    isKimiCPA && kimiSubscriptionPercent != null
+      ? getBalanceVariant(kimiSubscriptionPercent)
+      : getBalanceVariant(balance)
 
   const handleClickUpdate = async () => {
     if (isUpdating) return
@@ -2067,43 +2364,30 @@ function BalanceCell({ channel }: { channel: Channel }) {
                 : SENSITIVE_MASK}
             </TooltipTrigger>
             <TooltipContent
-              className={
+              className={cn(
                 cliproxyCPAQuota || kimiSubscription
                   ? CPA_TOOLTIP_CONTENT_CLASS
-                  : undefined
-              }
+                  : undefined,
+                kimiSubscription && 'flex-col items-stretch'
+              )}
             >
               <p>
                 {sensitiveVisible
                   ? channel.type === 57
                     ? t('Click to view Codex usage')
                     : isKimiCPA
-                      ? `${t('Kimi subscription remaining')}: ${remainingDisplay}`
-                    : cliproxyCPAQuota
-                      ? cliproxyCPAModelQuota
-                        ? `${getCliproxyCPAModelQuotaLabel(cliproxyCPAQuota)}: ${remainingDisplay}`
-                        : cliproxyCPALunaReserve
-                          ? `Luna 专属可用额度: ${remainingDisplay}`
-                          : `CPA 可用额度: ${remainingDisplay}`
-                      : `${t('Remaining:')} ${remainingDisplay}`
+                      ? `${t('kimiSubscriptionDetails.remaining')}: ${remainingDisplay}`
+                      : cliproxyCPAQuota
+                        ? cliproxyCPAModelQuota
+                          ? `${getCliproxyCPAModelQuotaLabel(cliproxyCPAQuota)}: ${remainingDisplay}`
+                          : cliproxyCPALunaReserve
+                            ? `Luna 专属可用额度: ${remainingDisplay}`
+                            : `CPA 可用额度: ${remainingDisplay}`
+                        : `${t('Remaining:')} ${remainingDisplay}`
                   : maskedRemainingLabel}
               </p>
               {kimiSubscription && (
-                <div className='space-y-0.5'>
-                  {kimiSubscription.windows.map((window) => (
-                    <p key={window.name}>
-                      {kimiSubscriptionWindowLabel(window.name)}{' '}
-                      {t('remaining')}{' '}
-                      {formatPercent(window.remainingPercent)}
-                      {window.resetAt
-                        ? ` · ${formatCompactTimestamp(window.resetAt)}`
-                        : ''}
-                    </p>
-                  ))}
-                  {kimiSubscription.partial && (
-                    <p>{t('Latest subscription data may be incomplete')}</p>
-                  )}
-                </div>
+                <KimiSubscriptionDetails meta={kimiSubscription} />
               )}
               {cliproxyCPAQuota && (
                 <CliproxyCPAQuotaDetails
@@ -2146,25 +2430,14 @@ function BalanceCell({ channel }: { channel: Channel }) {
                 }
               >
                 {kimiSubscription
-                  ? formatKimiSubscriptionSummary(kimiSubscription)
+                  ? formatKimiSubscriptionSummary(kimiSubscription, t)
                   : cliproxyCPAQuota
                     ? formatCliproxyCPASummary(cliproxyCPAQuota)
                     : null}
               </TooltipTrigger>
               <TooltipContent className={CPA_TOOLTIP_CONTENT_CLASS}>
                 {kimiSubscription ? (
-                  <div className='space-y-0.5'>
-                    {kimiSubscription.windows.map((window) => (
-                      <p key={window.name}>
-                        {kimiSubscriptionWindowLabel(window.name)}{' '}
-                        {t('remaining')}{' '}
-                        {formatPercent(window.remainingPercent)}
-                        {window.resetAt
-                          ? ` · ${formatCompactTimestamp(window.resetAt)}`
-                          : ''}
-                      </p>
-                    ))}
-                  </div>
+                  <KimiSubscriptionDetails meta={kimiSubscription} />
                 ) : cliproxyCPAQuota ? (
                   <CliproxyCPAQuotaDetails
                     meta={cliproxyCPAQuota}
