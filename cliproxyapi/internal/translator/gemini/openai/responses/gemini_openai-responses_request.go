@@ -518,6 +518,7 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 
 	result := out
 	result = common.AttachDefaultSafetySettings(result, "safetySettings")
+	result = common.EnsureAntigravityBudget(result, "contents", modelName)
 	return result
 }
 

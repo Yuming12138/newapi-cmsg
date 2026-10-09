@@ -106,6 +106,7 @@ func ConvertGeminiRequestToAntigravity(modelName string, inputRawJSON []byte, _ 
 		rawJSON = signature.SanitizeGeminiRequestThoughtSignatures(rawJSON, "request.contents")
 	}
 
+	rawJSON = common.EnsureAntigravityBudget(rawJSON, "request.contents", modelName)
 	return common.AttachDefaultSafetySettings(rawJSON, "request.safetySettings")
 }
 
