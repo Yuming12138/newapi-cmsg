@@ -2,9 +2,11 @@ package responses
 
 import (
 	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/translator/gemini/common"
 	"github.com/tidwall/gjson"
 )
 
@@ -622,3 +624,56 @@ func TestConvertOpenAIResponsesRequestToGemini_MultiTurnCustomToolCallHistory(t 
 		t.Fatalf("functionResponse want id call_123, got %s", fr.Get("id").String())
 	}
 }
+
+func TestConvertOpenAIResponsesRequestToGemini_CompactsOversizedHistory(t *testing.T) {
+	// Generate an oversized payload (> 850k tokens, ~3MB) with large tool output
+	largeOutput := strings.Repeat("Build log output line: test passing and compiling artifact\n", 50000)
+
+	inputJSON := fmt.Sprintf(`{
+		"model": "gpt-5.6-sol",
+		"input": [
+			{
+				"type": "message",
+				"role": "user",
+				"content": [{"type": "input_text", "text": "Please run build and tests"}]
+			},
+			{
+				"type": "custom_tool_call",
+				"call_id": "call_1",
+				"name": "exec",
+				"input": "{\"cmd\": \"make build\"}"
+			},
+			{
+				"type": "custom_tool_call_output",
+				"call_id": "call_1",
+				"output": "%s"
+			},
+			{
+				"type": "message",
+				"role": "user",
+				"content": [{"type": "input_text", "text": "Now run next step"}]
+			}
+		]
+	}`, largeOutput)
+
+	output := ConvertOpenAIResponsesRequestToGemini("gpt-5.6-sol", []byte(inputJSON), false)
+	result := gjson.ParseBytes(output)
+
+	// Result must be safely under AntigravityDefaultMaxTokens
+	tokens := common.EstimateGeminiPayloadTokens(output, "contents")
+	if tokens > common.AntigravityDefaultMaxTokens {
+		t.Fatalf("expected tokens <= %d, got %d", common.AntigravityDefaultMaxTokens, tokens)
+	}
+
+	// Tool output in turn 2 must have been compacted with notice
+	contents := result.Get("contents").Array()
+	if len(contents) < 3 {
+		t.Fatalf("expected at least 3 content items, got %d", len(contents))
+	}
+
+	frResult := contents[2].Get("parts.0.functionResponse.response.result").String()
+	if !strings.Contains(frResult, common.TruncatedToolOutputNotice) {
+		t.Fatalf("expected truncated tool output notice, got: %s", frResult[:200])
+	}
+}
+

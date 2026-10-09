@@ -31,6 +31,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	antigravityclaude "github.com/router-for-me/CLIProxyAPI/v7/internal/translator/antigravity/claude"
+	geminicommon "github.com/router-for-me/CLIProxyAPI/v7/internal/translator/gemini/common"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -2812,6 +2813,7 @@ func geminiToAntigravity(modelName string, payload []byte, projectID string) []b
 		template, _ = sjson.SetRawBytes(template, "request.toolConfig", []byte(toolConfig.Raw))
 		template, _ = sjson.DeleteBytes(template, "toolConfig")
 	}
+	template = geminicommon.EnsureAntigravityBudget(template, "request.contents", modelName)
 	return template
 }
 
