@@ -1,5 +1,27 @@
 {
   "translation": {
+    "kimiSubscriptionDetails": {
+      "availableQuota": "可用额度",
+      "availableTotalAccounts": "可用/总账号",
+      "availableAccounts": "可用账号",
+      "accountSummary": "账号 {{value}}",
+      "account": "Kimi 账号 {{id}}",
+      "subscription": "Kimi 订阅",
+      "remaining": "Kimi 订阅剩余",
+      "credentials": "凭据 {{count}}",
+      "windowQuota": "订阅窗口剩余额度",
+      "windowRemaining": "{{window}} 剩余",
+      "monthlyTotal": "月度总额",
+      "monthlyCode": "月度代码",
+      "resetAt": "重置 {{time}}",
+      "updatedAt": "数据更新时间",
+      "quotaUnavailable": "订阅额度暂不可用",
+      "quotaExhausted": "订阅额度已用尽",
+      "unavailableAccounts": "不可用账号 · {{count}}",
+      "unavailableDescription": "订阅额度耗尽或无法读取",
+      "syncFailed": "当前额度探测未成功，以下为最近一次成功的 Kimi 订阅快照。",
+      "partial": "部分账号探测未成功，以下数据可能不完整。"
+    },
     "360": "360",
     "1000": "1000",
     "10000": "10000",
