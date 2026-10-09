@@ -131,6 +131,12 @@ func runKimiBalanceSyncOnce() {
 		return
 	}
 	for _, channel := range channels {
+		if IsGeminiCPAChannel(channel) {
+			if _, err := UpdateGeminiCPAQuotaBalance(ctx, channel); err != nil {
+				logger.LogWarn(ctx, fmt.Sprintf("Gemini CPA quota sync: channel_id=%d failed: %v", channel.Id, err))
+			}
+			continue
+		}
 		if IsKimiCPAChannel(channel) {
 			if _, err := UpdateKimiCPASubscriptionBalance(ctx, channel); err != nil {
 				logger.LogWarn(ctx, fmt.Sprintf("Kimi subscription sync: channel_id=%d failed: %v", channel.Id, err))

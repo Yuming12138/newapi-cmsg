@@ -511,6 +511,9 @@ func updateChannelMoonshotBalance(channel *model.Channel) (float64, error) {
 }
 
 func updateChannelBalance(channel *model.Channel) (float64, error) {
+	if service.IsGeminiCPAChannel(channel) {
+		return service.UpdateGeminiCPAQuotaBalance(context.Background(), channel)
+	}
 	if service.IsKimiCPAChannel(channel) {
 		return service.UpdateKimiCPASubscriptionBalance(context.Background(), channel)
 	}
@@ -626,7 +629,7 @@ func UpdateChannelBalance(c *gin.Context) {
 	}
 	providerBalance := balance
 	providerCurrency := "USD"
-	if service.IsKimiCPAChannel(channel) {
+	if service.IsKimiCPAChannel(channel) || service.IsGeminiCPAChannel(channel) {
 		providerCurrency = "percent"
 	} else if isMoonshotBalanceBaseURL(channel.GetBaseURL()) ||
 		(channel.Type == constant.ChannelTypeDeepSeek && isDeepSeekBalanceBaseURL(channel.GetBaseURL())) {
@@ -662,8 +665,10 @@ func updateAllChannelsBalance() error {
 		if err != nil {
 			continue
 		} else {
-			// err is nil & balance <= 0 means quota is used up
-			if balance <= 0 {
+			// Gemini subscription percentages are not a dollar balance and
+			// Claude/GPT-OSS may still have separate quota. Keep this display
+			// feature from changing channel scheduling/automatic bans.
+			if balance <= 0 && !service.IsGeminiCPAChannel(channel) {
 				service.DisableChannel(*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, "", channel.GetAutoBan()), "余额不足")
 			}
 		}

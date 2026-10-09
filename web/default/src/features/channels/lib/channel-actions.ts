@@ -381,7 +381,6 @@ export async function handleUpdateChannelBalance(
           balance: formattedBalance,
         })
       )
-      queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
       onSuccess?.(balance)
     } else {
       toast.error(response.message || i18next.t('Failed to update balance'))
@@ -392,6 +391,9 @@ export async function handleUpdateChannelBalance(
         ? _error.message
         : i18next.t('Failed to update balance')
     )
+  } finally {
+    // A failed quota probe can still persist diagnostic state.
+    queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
   }
 }
 

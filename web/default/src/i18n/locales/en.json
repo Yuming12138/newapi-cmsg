@@ -1,5 +1,24 @@
 {
   "translation": {
+    "geminiQuotaDetails": {
+      "title": "Gemini CPA quota",
+      "geminiAverage": "Average Gemini remaining",
+      "accounts": "Accounts {{available}}/{{total}}",
+      "credentials": "Credentials {{count}}",
+      "account": "Account {{id}}",
+      "percentNote": "Subscription percentages, not USD balances. Gemini and Claude/GPT-OSS use separate pools. The headline averages observed Gemini quotas; each account keeps its own reset times.",
+      "notProvided": "Not provided",
+      "notCollected": "Quota not collected yet. Click the remaining quota to refresh.",
+      "resetsAt": "Resets {{time}}",
+      "updatedAt": "Last check {{time}}",
+      "quotaAvailable": "Quota available",
+      "exhausted": "Quota exhausted",
+      "runtimeUnavailable": "Temporarily unavailable",
+      "syncFailed": "Probe failed",
+      "partial": "Some active accounts could not be checked. Only successfully observed quotas are shown.",
+      "partialLabel": "Incomplete",
+      "updating": "Updating..."
+    },
     "kimiSubscriptionDetails": {
       "availableQuota": "Available quota",
       "availableTotalAccounts": "Available / total accounts",
