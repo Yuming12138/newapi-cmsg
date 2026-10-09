@@ -84,6 +84,7 @@ import {
   createChannelFieldUpdateScheduler,
   type TagRow,
 } from '../lib'
+import { isGeminiCPAChannel } from '../lib/gemini-cpa-quota'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type { Channel } from '../types'
 import { useChannels } from './channels-provider'
@@ -93,6 +94,7 @@ import {
   CodexUsageDialog,
   type CodexUsageDialogData,
 } from './dialogs/codex-usage-dialog'
+import { GeminiCPABalanceCell } from './gemini-cpa-quota-details'
 import { NumericSpinnerInput } from './numeric-spinner-input'
 
 function parseIonetMeta(otherInfo: string | null | undefined): null | {
@@ -2214,6 +2216,13 @@ function TagWeightCell({ channel }: { channel: TagRow }) {
  * Balance cell component with click to update
  */
 function BalanceCell({ channel }: { channel: Channel }) {
+  if (!isTagAggregateRow(channel) && isGeminiCPAChannel(channel)) {
+    return <GeminiCPABalanceCell channel={channel} />
+  }
+  return <StandardBalanceCell channel={channel} />
+}
+
+function StandardBalanceCell({ channel }: { channel: Channel }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const { sensitiveVisible } = useChannels()

@@ -428,6 +428,10 @@ func UpdateCliproxyCPAQuotaGuardBalance(channel *model.Channel) (float64, bool, 
 	if channel == nil {
 		return 0, false, fmt.Errorf("channel is nil")
 	}
+	if IsGeminiCPAChannel(channel) {
+		balance, err := UpdateGeminiCPAQuotaBalance(context.Background(), channel)
+		return balance, true, err
+	}
 	if IsKimiCPAChannel(channel) {
 		balance, err := UpdateKimiCPASubscriptionBalance(context.Background(), channel)
 		return balance, true, err

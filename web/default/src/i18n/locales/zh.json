@@ -1,5 +1,24 @@
 {
   "translation": {
+    "geminiQuotaDetails": {
+      "title": "Gemini CPA 额度",
+      "geminiAverage": "Gemini 平均剩余",
+      "accounts": "账号 {{available}}/{{total}}",
+      "credentials": "凭据 {{count}}",
+      "account": "账号 {{id}}",
+      "percentNote": "这里是订阅额度比例，不是美元余额。Gemini 与 Claude/GPT-OSS 使用独立额度池；主数值为已探测账号的 Gemini 平均剩余，各账号重置时间单独显示。",
+      "notProvided": "上游未提供",
+      "notCollected": "尚未采集额度，点击剩余额度可立即刷新。",
+      "resetsAt": "重置 {{time}}",
+      "updatedAt": "最近探测 {{time}}",
+      "quotaAvailable": "有可用额度",
+      "exhausted": "额度已用尽",
+      "runtimeUnavailable": "暂不可调度",
+      "syncFailed": "探测失败",
+      "partial": "部分活动账号探测失败，仅展示本次成功读取的额度。",
+      "partialLabel": "数据不完整",
+      "updating": "正在更新..."
+    },
     "kimiSubscriptionDetails": {
       "availableQuota": "可用额度",
       "availableTotalAccounts": "可用/总账号",
