@@ -53,6 +53,15 @@ management/quota requests are sent; no model generation request is made.
   as probe failures, with unknown current quota. A partial snapshot clearly
   labels percentages as observed values, not an authoritative full-pool total.
 - Account-specific reset times must not be merged into one pooled reset time.
+- The frontend uses the compact Kimi-style subscription layout, but collapses
+  repeated model entries into Gemini, Claude, and GPT-OSS quota-pool rows. It
+  does not list individual model names. Each account contributes the lowest
+  known quota per family, and the pool headline averages those per-account
+  values rather than double-counting model aliases. Different reset times are
+  labeled as per-account resets instead of inventing a common reset timestamp.
+- `fetchAvailableModels` does not supply named 5h/monthly windows or monthly
+  quota. The UI must not infer period length from a next-reset timestamp or
+  relabel Claude/GPT-OSS quota as monthly Gemini quota.
 - Failure snapshots expose only controlled error categories/status codes.
   Tokens, emails, projects, upstream bodies, and response headers are not stored.
 

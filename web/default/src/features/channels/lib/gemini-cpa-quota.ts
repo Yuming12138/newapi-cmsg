@@ -27,6 +27,110 @@ export type GeminiCPAQuotaMeta = {
   error: string | null
 }
 
+export type GeminiCPAQuotaPoolName = 'gemini' | 'claude' | 'gpt-oss'
+
+export type GeminiCPAQuotaPool = {
+  name: GeminiCPAQuotaPoolName
+  remainingPercent: number | null
+  resetAt: number | null
+  resetVaries: boolean
+}
+
+const QUOTA_POOL_NAMES: GeminiCPAQuotaPoolName[] = [
+  'gemini',
+  'claude',
+  'gpt-oss',
+]
+
+function quotaPoolName(model: string): GeminiCPAQuotaPoolName | null {
+  for (const name of QUOTA_POOL_NAMES) {
+    if (model.startsWith(`${name}-`)) return name
+  }
+  return null
+}
+
+// The upstream supplies model quotas, not named 5h/monthly windows. Keep
+// independent families separate and collapse repeated aliases conservatively:
+// one account contributes its lowest known quota, never a sum of model quotas.
+export function getGeminiCPAAccountQuotaPools(
+  models: readonly GeminiCPAModelQuota[]
+): GeminiCPAQuotaPool[] {
+  const pools = new Map<GeminiCPAQuotaPoolName, GeminiCPAModelQuota[]>()
+  for (const model of models) {
+    const name = quotaPoolName(model.model)
+    if (!name) continue
+    const entries = pools.get(name) ?? []
+    entries.push(model)
+    pools.set(name, entries)
+  }
+  return QUOTA_POOL_NAMES.flatMap((name) => {
+    const entries = pools.get(name)
+    if (!entries) return []
+    let remainingPercent: number | null = null
+    const resets = new Set<number>()
+    let resetUnknown = false
+    for (const entry of entries) {
+      if (entry.remainingPercent == null) continue
+      remainingPercent = Math.min(
+        remainingPercent ?? entry.remainingPercent,
+        entry.remainingPercent
+      )
+      if (entry.resetAt == null) resetUnknown = true
+      else resets.add(entry.resetAt)
+    }
+    const resetAt = !resetUnknown && resets.size === 1 ? [...resets][0] : null
+    return [
+      {
+        name,
+        remainingPercent,
+        resetAt,
+        resetVaries: resets.size > 1,
+      },
+    ]
+  })
+}
+
+export function getGeminiCPAQuotaPoolSummary(
+  meta: GeminiCPAQuotaMeta
+): GeminiCPAQuotaPool[] {
+  if (meta.accounts.length === 0) {
+    return meta.error ? [] : getGeminiCPAAccountQuotaPools(meta.models)
+  }
+  const accounts = meta.accounts.map((account) =>
+    getGeminiCPAAccountQuotaPools(account.models).map((pool) => ({
+      ...pool,
+      remainingPercent: account.error ? null : pool.remainingPercent,
+    }))
+  )
+  return QUOTA_POOL_NAMES.flatMap((name) => {
+    const pools = accounts.flatMap((account) =>
+      account.filter((pool) => pool.name === name)
+    )
+    if (pools.length === 0) return []
+    let total = 0
+    let count = 0
+    let resetUnknown = false
+    let resetVaries = false
+    const resets = new Set<number>()
+    for (const pool of pools) {
+      if (pool.remainingPercent == null) continue
+      total += pool.remainingPercent
+      count++
+      if (pool.resetAt == null) resetUnknown = true
+      else resets.add(pool.resetAt)
+      resetVaries ||= pool.resetVaries
+    }
+    return [
+      {
+        name,
+        remainingPercent: count > 0 ? total / count : null,
+        resetAt: !resetUnknown && resets.size === 1 ? [...resets][0] : null,
+        resetVaries: resetVaries || resets.size > 1,
+      },
+    ]
+  })
+}
+
 function asObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   return value as Record<string, unknown>

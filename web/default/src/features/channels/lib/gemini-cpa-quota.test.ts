@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import type { Channel } from '../types'
-import { isGeminiCPAChannel, parseGeminiCPAQuotaMeta } from './gemini-cpa-quota'
+import {
+  getGeminiCPAAccountQuotaPools,
+  getGeminiCPAQuotaPoolSummary,
+  isGeminiCPAChannel,
+  parseGeminiCPAQuotaMeta,
+  type GeminiCPAQuotaMeta,
+} from './gemini-cpa-quota'
 
 describe('Gemini CPA quota', () => {
   const channel = {
@@ -98,5 +104,159 @@ describe('Gemini CPA quota', () => {
     assert.equal(meta?.remainingPercent, null)
     assert.equal(meta?.partial, true)
     assert.equal(meta?.error, 'HTTP 429')
+  })
+
+  test('collapses duplicate aliases and keeps exhausted independent pools', () => {
+    const pools = getGeminiCPAAccountQuotaPools([
+      { model: 'gemini-pro', remainingPercent: 90, resetAt: 200 },
+      { model: 'gemini-pro-agent', remainingPercent: 90, resetAt: 200 },
+      { model: 'gemini-flash', remainingPercent: 70, resetAt: 200 },
+      { model: 'gemini-not-returned', remainingPercent: null, resetAt: null },
+      { model: 'claude-sonnet', remainingPercent: 0, resetAt: 500 },
+      { model: 'gpt-oss-120b', remainingPercent: 0, resetAt: 500 },
+      { model: 'unrelated-model', remainingPercent: 99, resetAt: 100 },
+    ])
+    assert.deepEqual(pools, [
+      {
+        name: 'gemini',
+        remainingPercent: 70,
+        resetAt: 200,
+        resetVaries: false,
+      },
+      { name: 'claude', remainingPercent: 0, resetAt: 500, resetVaries: false },
+      {
+        name: 'gpt-oss',
+        remainingPercent: 0,
+        resetAt: 500,
+        resetVaries: false,
+      },
+    ])
+    assert.equal(
+      pools.some((pool) => 'model' in pool),
+      false
+    )
+    assert.equal(
+      pools.some((pool) => /5h|month/.test(pool.name)),
+      false
+    )
+  })
+
+  test('keeps wholly unknown quotas unknown instead of showing zero', () => {
+    assert.deepEqual(
+      getGeminiCPAAccountQuotaPools([
+        { model: 'gemini-not-returned', remainingPercent: null, resetAt: null },
+      ]),
+      [
+        {
+          name: 'gemini',
+          remainingPercent: null,
+          resetAt: null,
+          resetVaries: false,
+        },
+      ]
+    )
+  })
+
+  test('does not invent a reset for mixed or incomplete model reset times', () => {
+    const mixed = getGeminiCPAAccountQuotaPools([
+      { model: 'gemini-pro', remainingPercent: 80, resetAt: 200 },
+      { model: 'gemini-flash', remainingPercent: 40, resetAt: 300 },
+    ])[0]
+    assert.equal(mixed.remainingPercent, 40)
+    assert.equal(mixed.resetAt, null)
+    assert.equal(mixed.resetVaries, true)
+
+    const incomplete = getGeminiCPAAccountQuotaPools([
+      { model: 'gemini-pro', remainingPercent: 80, resetAt: 200 },
+      { model: 'gemini-flash', remainingPercent: 40, resetAt: null },
+    ])[0]
+    assert.equal(incomplete.resetAt, null)
+  })
+
+  function quotaMeta(accounts: unknown[]): GeminiCPAQuotaMeta {
+    const meta = parseGeminiCPAQuotaMeta(
+      JSON.stringify({ gemini_cpa_quota: { accounts } })
+    )
+    assert.ok(meta)
+    return meta
+  }
+
+  test('averages accounts equally regardless of the number of model aliases', () => {
+    const meta = quotaMeta([
+      {
+        id: 'one',
+        models: [
+          { model: 'gemini-pro', remaining_percent: 50, reset_at: 200 },
+          { model: 'gemini-pro-agent', remaining_percent: 50, reset_at: 200 },
+          { model: 'gemini-flash', remaining_percent: 50, reset_at: 200 },
+        ],
+      },
+      {
+        id: 'two',
+        models: [
+          { model: 'gemini-pro', remaining_percent: 100, reset_at: 300 },
+        ],
+      },
+    ])
+    assert.deepEqual(getGeminiCPAQuotaPoolSummary(meta), [
+      {
+        name: 'gemini',
+        remainingPercent: 75,
+        resetAt: null,
+        resetVaries: true,
+      },
+    ])
+  })
+
+  test('ignores failed account values while retaining independent pool rows', () => {
+    const meta = quotaMeta([
+      {
+        id: 'success',
+        models: [
+          { model: 'gemini-pro', remaining_percent: 50, reset_at: 200 },
+          { model: 'claude-sonnet', remaining_percent: 0, reset_at: 500 },
+        ],
+      },
+      {
+        id: 'failed',
+        error: 'HTTP 429',
+        models: [
+          { model: 'gemini-pro', remaining_percent: 100, reset_at: 300 },
+        ],
+      },
+    ])
+    assert.deepEqual(getGeminiCPAQuotaPoolSummary(meta), [
+      {
+        name: 'gemini',
+        remainingPercent: 50,
+        resetAt: 200,
+        resetVaries: false,
+      },
+      { name: 'claude', remainingPercent: 0, resetAt: 500, resetVaries: false },
+    ])
+  })
+
+  test('keeps per-account reset times and only shares a confirmed common reset', () => {
+    const meta = quotaMeta([
+      {
+        id: 'one',
+        models: [{ model: 'gemini-pro', remaining_percent: 40, reset_at: 200 }],
+      },
+      {
+        id: 'two',
+        models: [{ model: 'gemini-pro', remaining_percent: 60, reset_at: 200 }],
+      },
+    ])
+    assert.deepEqual(getGeminiCPAQuotaPoolSummary(meta), [
+      {
+        name: 'gemini',
+        remainingPercent: 50,
+        resetAt: 200,
+        resetVaries: false,
+      },
+    ])
+    assert.equal(meta.accounts[0].models[0].resetAt, 200)
+    meta.accounts[1].models[0].resetAt = null
+    assert.equal(getGeminiCPAQuotaPoolSummary(meta)[0].resetAt, null)
   })
 })

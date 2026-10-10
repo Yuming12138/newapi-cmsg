@@ -1,12 +1,16 @@
 {
   "translation": {
     "geminiQuotaDetails": {
-      "title": "Gemini CPA 额度",
+      "title": "Gemini 订阅",
       "geminiAverage": "Gemini 平均剩余",
       "accounts": "账号 {{available}}/{{total}}",
       "credentials": "凭据 {{count}}",
       "account": "账号 {{id}}",
       "percentNote": "这里是订阅额度比例，不是美元余额。Gemini 与 Claude/GPT-OSS 使用独立额度池；主数值为已探测账号的 Gemini 平均剩余，各账号重置时间单独显示。",
+      "poolRemaining": "{{pool}} 剩余",
+      "perAccountReset": "分账号重置",
+      "multipleResets": "重置时间不同",
+      "windowNote": "上游未提供 5h/月度分项，按独立额度池汇总；重置时间分账号展示。",
       "notProvided": "上游未提供",
       "notCollected": "尚未采集额度，点击剩余额度可立即刷新。",
       "resetsAt": "重置 {{time}}",

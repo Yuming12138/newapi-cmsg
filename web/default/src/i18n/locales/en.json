@@ -1,12 +1,16 @@
 {
   "translation": {
     "geminiQuotaDetails": {
-      "title": "Gemini CPA quota",
+      "title": "Gemini subscription",
       "geminiAverage": "Average Gemini remaining",
       "accounts": "Accounts {{available}}/{{total}}",
       "credentials": "Credentials {{count}}",
       "account": "Account {{id}}",
       "percentNote": "Subscription percentages, not USD balances. Gemini and Claude/GPT-OSS use separate pools. The headline averages observed Gemini quotas; each account keeps its own reset times.",
+      "poolRemaining": "{{pool}} remaining",
+      "perAccountReset": "Per-account resets",
+      "multipleResets": "Different reset times",
+      "windowNote": "5h/monthly breakdown is not provided. Independent quota pools are summarized; reset times are shown per account.",
       "notProvided": "Not provided",
       "notCollected": "Quota not collected yet. Click the remaining quota to refresh.",
       "resetsAt": "Resets {{time}}",

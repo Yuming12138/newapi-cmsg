@@ -15,10 +15,13 @@ import { dotColorMap, textColorMap } from '@/components/status-badge'
 import { handleUpdateChannelBalance } from '../lib/channel-actions'
 import { getBalanceVariant } from '../lib/channel-utils'
 import {
+  getGeminiCPAAccountQuotaPools,
+  getGeminiCPAQuotaPoolSummary,
   parseGeminiCPAQuotaMeta,
   type GeminiCPAAccount,
-  type GeminiCPAModelQuota,
   type GeminiCPAQuotaMeta,
+  type GeminiCPAQuotaPool,
+  type GeminiCPAQuotaPoolName,
 } from '../lib/gemini-cpa-quota'
 import type { Channel } from '../types'
 import { useChannels } from './channels-provider'
@@ -27,13 +30,29 @@ const DETAILS_CLASS =
   'bg-background text-foreground border-border max-w-none flex-col items-stretch border shadow-lg [&>svg]:bg-background [&>svg]:fill-background'
 
 function formatPercent(value: number | null): string {
-  return value == null ? '-' : `${value.toFixed(2)}%`
+  return value == null ? '-' : `${value.toFixed(1)}%`
 }
 
-function GeminiQuotaRow(props: { quota: GeminiCPAModelQuota }) {
+function poolLabel(name: GeminiCPAQuotaPoolName): string {
+  if (name === 'gemini') return 'Gemini'
+  if (name === 'claude') return 'Claude'
+  return 'GPT-OSS'
+}
+
+function formatCompactTimestamp(timestamp: number): string {
+  return formatTimestampToDate(timestamp).slice(5, 16)
+}
+
+function GeminiQuotaPoolProgress(props: { pool: GeminiCPAQuotaPool }) {
   const { t } = useTranslation()
-  const quota = props.quota
-  const value = quota.remainingPercent
+  const pool = props.pool
+  const value = pool.remainingPercent
+  const label = t('geminiQuotaDetails.poolRemaining', {
+    pool: poolLabel(pool.name),
+  })
+  let reset = '-'
+  if (pool.resetAt != null) reset = formatCompactTimestamp(pool.resetAt)
+  else if (pool.resetVaries) reset = t('geminiQuotaDetails.perAccountReset')
   let progressColor = '[&_[data-slot=progress-indicator]]:bg-emerald-500'
   if (value != null && value <= 5)
     progressColor = '[&_[data-slot=progress-indicator]]:bg-red-500'
@@ -41,28 +60,34 @@ function GeminiQuotaRow(props: { quota: GeminiCPAModelQuota }) {
     progressColor = '[&_[data-slot=progress-indicator]]:bg-amber-500'
 
   return (
-    <div className='space-y-1.5'>
-      <div className='flex items-start justify-between gap-3 text-xs'>
-        <span className='min-w-0 break-all'>{quota.model}</span>
-        <span className='shrink-0 font-semibold tabular-nums'>
-          {value == null
-            ? t('geminiQuotaDetails.notProvided')
-            : formatPercent(value)}
+    <div className='space-y-1'>
+      <div className='flex items-center justify-between gap-2 text-xs'>
+        <span className='text-foreground/75 font-medium'>{label}</span>
+        <span className='flex shrink-0 items-center gap-2 tabular-nums'>
+          <span className='font-semibold'>
+            {value == null
+              ? t('geminiQuotaDetails.notProvided')
+              : formatPercent(value)}
+          </span>
+          <span className='text-foreground/70' title={t('Next reset')}>
+            {reset}
+          </span>
         </span>
       </div>
-      {value != null && (
+      {value != null ? (
         <Progress
           value={value}
-          aria-label={quota.model}
-          className={cn('[&_[data-slot=progress-track]]:h-1.5', progressColor)}
+          aria-label={label}
+          className={cn(
+            '[&_[data-slot=progress-track]]:bg-foreground/20 motion-reduce:[&_[data-slot=progress-indicator]]:transition-none [&_[data-slot=progress-track]]:h-1.5',
+            progressColor
+          )}
         />
-      )}
-      {quota.resetAt != null && (
-        <p className='text-muted-foreground text-xs tabular-nums'>
-          {t('geminiQuotaDetails.resetsAt', {
-            time: formatTimestampToDate(quota.resetAt),
-          })}
-        </p>
+      ) : (
+        <div
+          className='bg-foreground/20 h-1.5 rounded-full'
+          aria-hidden='true'
+        />
       )}
     </div>
   )
@@ -71,25 +96,24 @@ function GeminiQuotaRow(props: { quota: GeminiCPAModelQuota }) {
 function GeminiAccountDetails(props: { account: GeminiCPAAccount }) {
   const { t } = useTranslation()
   const account = props.account
+  const pools = getGeminiCPAAccountQuotaPools(account.models)
   let status = t('geminiQuotaDetails.quotaAvailable')
   if (account.error) status = t('geminiQuotaDetails.syncFailed')
   else if (account.runtimeUnavailable)
     status = t('geminiQuotaDetails.runtimeUnavailable')
-  else if (
-    !account.models.some(
-      (quota) => quota.remainingPercent != null && quota.remainingPercent > 0
-    )
-  )
+  else if (account.remainingPercent == null)
+    status = t('geminiQuotaDetails.notProvided')
+  else if (account.remainingPercent === 0)
     status = t('geminiQuotaDetails.exhausted')
 
   return (
-    <section className='border-border space-y-3 border-t pt-3'>
-      <div className='flex items-start justify-between gap-3'>
+    <section className='bg-muted/30 border-border/80 space-y-1.5 rounded border p-2'>
+      <div className='flex items-start justify-between gap-2'>
         <div>
           <p className='text-xs font-semibold'>
             {t('geminiQuotaDetails.account', { id: account.id.slice(-6) })}
           </p>
-          <p className='text-muted-foreground mt-1 text-xs'>
+          <p className='text-muted-foreground text-xs'>
             {account.tier || '-'} · {status}
           </p>
         </div>
@@ -100,9 +124,24 @@ function GeminiAccountDetails(props: { account: GeminiCPAAccount }) {
       {account.error && (
         <p className='text-destructive text-xs break-words'>{account.error}</p>
       )}
-      {account.models.map((quota) => (
-        <GeminiQuotaRow key={quota.model} quota={quota} />
-      ))}
+      {!account.error && (
+        <div className='text-foreground/70 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums'>
+          {pools.map((pool) => (
+            <span key={pool.name}>
+              {poolLabel(pool.name)} {formatPercent(pool.remainingPercent)}
+              {pool.resetAt != null && (
+                <span title={t('Next reset')}>
+                  {' · '}
+                  {formatCompactTimestamp(pool.resetAt)}
+                </span>
+              )}
+              {pool.resetVaries && (
+                <span> · {t('geminiQuotaDetails.multipleResets')}</span>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
     </section>
   )
 }
@@ -112,26 +151,25 @@ function GeminiCPAQuotaDetails(props: { meta: GeminiCPAQuotaMeta | null }) {
   const meta = props.meta
   if (!meta)
     return <p className='text-xs'>{t('geminiQuotaDetails.notCollected')}</p>
+  const pools = getGeminiCPAQuotaPoolSummary(meta)
   return (
     <div
       tabIndex={0}
       role='region'
       aria-label={t('geminiQuotaDetails.title')}
-      className='max-h-[calc(100dvh-6rem)] w-[400px] max-w-[calc(100vw-3rem)] space-y-3 overflow-y-auto p-1 text-left focus-visible:ring-2 focus-visible:outline-none'
+      className='max-h-[calc(100dvh-6rem)] w-[360px] max-w-[calc(100vw-3rem)] space-y-2 overflow-y-auto p-1 text-left focus-visible:ring-2 focus-visible:outline-none'
     >
       <div className='flex items-start justify-between gap-4'>
         <div>
-          <p className='text-sm font-semibold'>
+          <p className='text-sm font-semibold tabular-nums'>
             {t('geminiQuotaDetails.title')}
+            {meta.credentialCount != null &&
+              ` · ${t('geminiQuotaDetails.credentials', { count: meta.credentialCount })}`}
           </p>
           <p className='text-muted-foreground mt-1 text-xs'>
             {t('geminiQuotaDetails.accounts', {
               available: meta.availableAccountCount ?? '-',
               total: meta.accountCount ?? '-',
-            })}
-            {' · '}
-            {t('geminiQuotaDetails.credentials', {
-              count: meta.credentialCount ?? '-',
             })}
           </p>
         </div>
@@ -144,9 +182,6 @@ function GeminiCPAQuotaDetails(props: { meta: GeminiCPAQuotaMeta | null }) {
           </p>
         </div>
       </div>
-      <p className='text-muted-foreground text-xs leading-relaxed'>
-        {t('geminiQuotaDetails.percentNote')}
-      </p>
       {(meta.partial || meta.error) && (
         <div className='flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-300'>
           <AlertTriangle className='size-4 shrink-0' aria-hidden='true' />
@@ -155,9 +190,21 @@ function GeminiCPAQuotaDetails(props: { meta: GeminiCPAQuotaMeta | null }) {
           </span>
         </div>
       )}
-      {meta.accounts.map((account) => (
-        <GeminiAccountDetails key={account.id} account={account} />
-      ))}
+      <div className='space-y-3 py-1'>
+        {pools.map((pool) => (
+          <GeminiQuotaPoolProgress key={pool.name} pool={pool} />
+        ))}
+      </div>
+      <p className='text-muted-foreground text-xs leading-relaxed'>
+        {t('geminiQuotaDetails.windowNote')}
+      </p>
+      {meta.accounts.length > 0 && (
+        <div className='border-border space-y-1.5 border-t pt-2'>
+          {meta.accounts.map((account) => (
+            <GeminiAccountDetails key={account.id} account={account} />
+          ))}
+        </div>
+      )}
       {meta.updatedAt != null && meta.updatedAt > 0 && (
         <p className='text-muted-foreground border-border border-t pt-2 text-xs tabular-nums'>
           {t('geminiQuotaDetails.updatedAt', {
