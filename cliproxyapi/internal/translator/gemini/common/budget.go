@@ -18,8 +18,8 @@ const (
 	// 850,000 tokens leaves ~200,000 tokens (~800KB) of safety margin for tokenizer differences.
 	AntigravityDefaultMaxTokens = 850000
 
-	// AntigravityFastPathByteThreshold: requests smaller than 1,000,000 bytes (1MB) cannot exceed 850,000 tokens.
-	AntigravityFastPathByteThreshold = 1000000
+	// AntigravityFastPathByteThreshold: requests smaller than 1,800,000 bytes (~1.8MB) cannot exceed 850,000 tokens.
+	AntigravityFastPathByteThreshold = 1800000
 
 	// MaxHistoricalToolOutputLen is the maximum character length for historical tool responses before truncation.
 	MaxHistoricalToolOutputLen  = 2000
@@ -34,19 +34,33 @@ const (
 // For ASCII characters: roughly 3.0 characters per token.
 // For non-ASCII (e.g. CJK): roughly 1.5 tokens per rune.
 func EstimateTextTokens(text string) int {
-	if len(text) == 0 {
+	n := len(text)
+	if n == 0 {
 		return 0
 	}
 	var asciiCount int
-	var nonAsciiCount int
-	for _, r := range text {
-		if r < 128 {
+	var nonAsciiBytes int
+	for i := 0; i < n; i++ {
+		if text[i] < 128 {
 			asciiCount++
 		} else {
-			nonAsciiCount++
+			nonAsciiBytes++
 		}
 	}
-	tokens := (asciiCount+2)/3 + int(float64(nonAsciiCount)*1.5)
+	if nonAsciiBytes == 0 {
+		tokens := (asciiCount + 2) / 3
+		if tokens < 1 {
+			tokens = 1
+		}
+		return tokens
+	}
+	var nonAsciiRunes int
+	for _, r := range text {
+		if r >= 128 {
+			nonAsciiRunes++
+		}
+	}
+	tokens := (asciiCount+2)/3 + int(float64(nonAsciiRunes)*1.5)
 	if tokens < 1 {
 		tokens = 1
 	}

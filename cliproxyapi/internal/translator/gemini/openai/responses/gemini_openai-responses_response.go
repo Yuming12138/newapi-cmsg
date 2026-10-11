@@ -420,12 +420,14 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 					out = append(out, emitEvent("response.reasoning_summary_part.added", partAdded))
 				}
 				if t := part.Get("text"); t.Exists() && t.String() != "" {
-					st.ReasoningBuf.WriteString(t.String())
-					msg := []byte(`{"type":"response.reasoning_summary_text.delta","sequence_number":0,"item_id":"","output_index":0,"summary_index":0,"delta":""}`)
-					msg, _ = sjson.SetBytes(msg, "sequence_number", nextSeq())
-					msg, _ = sjson.SetBytes(msg, "item_id", st.ReasoningItemID)
-					msg, _ = sjson.SetBytes(msg, "output_index", st.ReasoningIndex)
-					msg, _ = sjson.SetBytes(msg, "delta", t.String())
+					textStr := t.String()
+					st.ReasoningBuf.WriteString(textStr)
+					msg := []byte(fmt.Sprintf(`{"type":"response.reasoning_summary_text.delta","sequence_number":%d,"item_id":%s,"output_index":%d,"summary_index":0,"delta":%s}`,
+						nextSeq(),
+						jsonQuoteNoHTMLEscape(st.ReasoningItemID),
+						st.ReasoningIndex,
+						jsonQuoteNoHTMLEscape(textStr),
+					))
 					out = append(out, emitEvent("response.reasoning_summary_text.delta", msg))
 				}
 				return true
@@ -452,13 +454,15 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 					out = append(out, emitEvent("response.content_part.added", partAdded))
 					st.ItemTextBuf.Reset()
 				}
-				st.TextBuf.WriteString(t.String())
-				st.ItemTextBuf.WriteString(t.String())
-				msg := []byte(`{"type":"response.output_text.delta","sequence_number":0,"item_id":"","output_index":0,"content_index":0,"delta":"","logprobs":[]}`)
-				msg, _ = sjson.SetBytes(msg, "sequence_number", nextSeq())
-				msg, _ = sjson.SetBytes(msg, "item_id", st.CurrentMsgID)
-				msg, _ = sjson.SetBytes(msg, "output_index", st.MsgIndex)
-				msg, _ = sjson.SetBytes(msg, "delta", t.String())
+				textStr := t.String()
+				st.TextBuf.WriteString(textStr)
+				st.ItemTextBuf.WriteString(textStr)
+				msg := []byte(fmt.Sprintf(`{"type":"response.output_text.delta","sequence_number":%d,"item_id":%s,"output_index":%d,"content_index":0,"delta":%s,"logprobs":[]}`,
+					nextSeq(),
+					jsonQuoteNoHTMLEscape(st.CurrentMsgID),
+					st.MsgIndex,
+					jsonQuoteNoHTMLEscape(textStr),
+				))
 				out = append(out, emitEvent("response.output_text.delta", msg))
 				return true
 			}
@@ -523,11 +527,12 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 					out = append(out, emitEvent("response.output_item.added", item))
 
 					if formattedInput != "" {
-						cd := []byte(`{"type":"response.custom_tool_call_input.delta","sequence_number":0,"item_id":"","output_index":0,"delta":""}`)
-						cd, _ = sjson.SetBytes(cd, "sequence_number", nextSeq())
-						cd, _ = sjson.SetBytes(cd, "item_id", itemID)
-						cd, _ = sjson.SetBytes(cd, "output_index", idx)
-						cd, _ = sjson.SetBytes(cd, "delta", formattedInput)
+						cd := []byte(fmt.Sprintf(`{"type":"response.custom_tool_call_input.delta","sequence_number":%d,"item_id":%s,"output_index":%d,"delta":%s}`,
+							nextSeq(),
+							jsonQuoteNoHTMLEscape(itemID),
+							idx,
+							jsonQuoteNoHTMLEscape(formattedInput),
+						))
 						out = append(out, emitEvent("response.custom_tool_call_input.delta", cd))
 					}
 
@@ -567,11 +572,12 @@ func ConvertGeminiResponseToOpenAIResponses(_ context.Context, modelName string,
 					out = append(out, emitEvent("response.output_item.added", item))
 
 					if argsJSON != "" {
-						ad := []byte(`{"type":"response.function_call_arguments.delta","sequence_number":0,"item_id":"","output_index":0,"delta":""}`)
-						ad, _ = sjson.SetBytes(ad, "sequence_number", nextSeq())
-						ad, _ = sjson.SetBytes(ad, "item_id", itemID)
-						ad, _ = sjson.SetBytes(ad, "output_index", idx)
-						ad, _ = sjson.SetBytes(ad, "delta", argsJSON)
+						ad := []byte(fmt.Sprintf(`{"type":"response.function_call_arguments.delta","sequence_number":%d,"item_id":%s,"output_index":%d,"delta":%s}`,
+							nextSeq(),
+							jsonQuoteNoHTMLEscape(itemID),
+							idx,
+							jsonQuoteNoHTMLEscape(argsJSON),
+						))
 						out = append(out, emitEvent("response.function_call_arguments.delta", ad))
 					}
 
