@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -15,17 +16,32 @@ var gjsonPathKeyReplacer = strings.NewReplacer(".", "\\.", "*", "\\*", "?", "\\?
 
 const placeholderReasonDescription = "Brief explanation of why you are calling this tool"
 
+var (
+	cleanJSONSchemaGeminiCache      sync.Map
+	cleanJSONSchemaAntigravityCache sync.Map
+)
+
 // CleanJSONSchemaForAntigravity transforms a JSON schema to be compatible with Antigravity API.
 // It handles unsupported keywords, type flattening, and schema simplification while preserving
 // semantic information as description hints.
 func CleanJSONSchemaForAntigravity(jsonStr string) string {
-	return cleanJSONSchema(jsonStr, true)
+	if cached, ok := cleanJSONSchemaAntigravityCache.Load(jsonStr); ok {
+		return cached.(string)
+	}
+	res := cleanJSONSchema(jsonStr, true)
+	cleanJSONSchemaAntigravityCache.Store(jsonStr, res)
+	return res
 }
 
 // CleanJSONSchemaForGemini transforms a JSON schema to be compatible with Gemini tool calling.
 // It removes unsupported keywords and simplifies schemas, without adding empty-schema placeholders.
 func CleanJSONSchemaForGemini(jsonStr string) string {
-	return cleanJSONSchema(jsonStr, false)
+	if cached, ok := cleanJSONSchemaGeminiCache.Load(jsonStr); ok {
+		return cached.(string)
+	}
+	res := cleanJSONSchema(jsonStr, false)
+	cleanJSONSchemaGeminiCache.Store(jsonStr, res)
+	return res
 }
 
 // cleanJSONSchema performs the core cleaning operations on the JSON schema.

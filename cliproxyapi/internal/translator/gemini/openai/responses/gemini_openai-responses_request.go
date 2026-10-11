@@ -1,6 +1,7 @@
 package responses
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -33,9 +34,12 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 		out, _ = sjson.SetRawBytes(out, "systemInstruction", systemInstr)
 	}
 
+	var contentsList [][]byte
+
 	// Convert input messages to Gemini contents format
 	if input := root.Get("input"); input.Exists() && input.IsArray() {
 		items := input.Array()
+		contentsList = make([][]byte, 0, len(items))
 
 		// Normalize consecutive function calls and outputs so each call is immediately followed by its response
 		normalized := make([]gjson.Result, 0, len(items))
@@ -172,7 +176,7 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 						for _, part := range currentParts {
 							one, _ = sjson.SetRawBytes(one, "parts.-1", part)
 						}
-						out, _ = sjson.SetRawBytes(out, "contents.-1", one)
+						contentsList = append(contentsList, one)
 						currentParts = currentParts[:0]
 					}
 
@@ -295,7 +299,7 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 					one := []byte(`{"role":"","parts":[{"text":""}]}`)
 					one, _ = sjson.SetBytes(one, "role", effRole)
 					one, _ = sjson.SetBytes(one, "parts.0.text", contentArray.String())
-					out, _ = sjson.SetRawBytes(out, "contents.-1", one)
+					contentsList = append(contentsList, one)
 				}
 
 			case "function_call", "custom_tool_call":
@@ -331,7 +335,7 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 				}
 
 				modelContent, _ = sjson.SetRawBytes(modelContent, "parts.-1", functionCall)
-				out, _ = sjson.SetRawBytes(out, "contents.-1", modelContent)
+				contentsList = append(contentsList, modelContent)
 
 			case "function_call_output", "custom_tool_call_output":
 				// Handle function / custom call outputs - convert to function message with functionResponse
@@ -368,7 +372,7 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 					}
 				}
 				functionContent, _ = sjson.SetRawBytes(functionContent, "parts.-1", functionResponse)
-				out, _ = sjson.SetRawBytes(out, "contents.-1", functionContent)
+				contentsList = append(contentsList, functionContent)
 
 			case "reasoning":
 				thoughtText := item.Get("summary.0.text").String()
@@ -384,25 +388,36 @@ func ConvertOpenAIResponsesRequestToGemini(modelName string, inputRawJSON []byte
 				}
 
 				modelContent := buildOpenAIResponsesReasoningModelContent(thoughtText, visibleText, signature, useGeminiNativeReasoningLayout)
-				out, _ = sjson.SetRawBytes(out, "contents.-1", modelContent)
+				contentsList = append(contentsList, modelContent)
 			}
 		}
 	} else if input.Exists() && input.Type == gjson.String {
 		// Simple string input conversion to user message
 		userContent := []byte(`{"role":"user","parts":[{"text":""}]}`)
 		userContent, _ = sjson.SetBytes(userContent, "parts.0.text", input.String())
-		out, _ = sjson.SetRawBytes(out, "contents.-1", userContent)
+		contentsList = append(contentsList, userContent)
 	}
 
 	// Gemini/Vertex accepts assistant/model turns in history, but some model
 	// surfaces reject requests whose final turn is model-authored prefill.
 	// Preserve reasoning history (thought parts); only strip trailing plain model text.
-	contents := gjson.GetBytes(out, "contents")
-	if contents.Exists() && contents.IsArray() {
-		arr := contents.Array()
-		if len(arr) > 0 && shouldStripTrailingOpenAIResponsesModelPrefill(arr[len(arr)-1]) {
-			out, _ = sjson.DeleteBytes(out, fmt.Sprintf("contents.%d", len(arr)-1))
+	if len(contentsList) > 0 {
+		last := gjson.ParseBytes(contentsList[len(contentsList)-1])
+		if shouldStripTrailingOpenAIResponsesModelPrefill(last) {
+			contentsList = contentsList[:len(contentsList)-1]
 		}
+	}
+	if len(contentsList) > 0 {
+		var contentsBuf bytes.Buffer
+		contentsBuf.WriteByte('[')
+		for idx, c := range contentsList {
+			if idx > 0 {
+				contentsBuf.WriteByte(',')
+			}
+			contentsBuf.Write(c)
+		}
+		contentsBuf.WriteByte(']')
+		out, _ = sjson.SetRawBytes(out, "contents", contentsBuf.Bytes())
 	}
 
 	// Convert tools to Gemini functionDeclarations format (from tools and input.additional_tools)
