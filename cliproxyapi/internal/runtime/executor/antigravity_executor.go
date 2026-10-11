@@ -674,6 +674,7 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 	httpClient := newAntigravityHTTPClient(ctx, e.cfg, auth, 0)
 	httpClient = reporter.TrackHTTPClient(httpClient)
 	attempts := antigravityRetryAttempts(auth, e.cfg)
+	tokenLimitRetried := false
 
 attemptLoop:
 	for attempt := 0; attempt < attempts; attempt++ {
@@ -768,6 +769,14 @@ attemptLoop:
 
 			if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
 				log.Debugf("antigravity executor: upstream error status: %d, body: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), bodyBytes))
+				if !tokenLimitRetried && attempt+1 < attempts {
+					if smaller, ok := helps.CompactAntigravityTokenLimitRetry(httpResp.StatusCode, bodyBytes, httpReq, baseModel); ok {
+						translated = smaller
+						tokenLimitRetried = true
+						log.WithField("model", baseModel).Warn("antigravity budget: upstream token limit rejected estimate, retrying once with smaller context")
+						continue attemptLoop
+					}
+				}
 				lastStatus = httpResp.StatusCode
 				lastBody = append([]byte(nil), bodyBytes...)
 				lastErr = nil
@@ -898,6 +907,7 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 	httpClient = reporter.TrackHTTPClient(httpClient)
 
 	attempts := antigravityRetryAttempts(auth, e.cfg)
+	tokenLimitRetried := false
 
 attemptLoop:
 	for attempt := 0; attempt < attempts; attempt++ {
@@ -962,6 +972,14 @@ attemptLoop:
 					return resp, err
 				}
 				helps.AppendAPIResponseChunk(ctx, e.cfg, bodyBytes)
+				if !tokenLimitRetried && attempt+1 < attempts {
+					if smaller, ok := helps.CompactAntigravityTokenLimitRetry(httpResp.StatusCode, bodyBytes, httpReq, baseModel); ok {
+						translated = smaller
+						tokenLimitRetried = true
+						log.WithField("model", baseModel).Warn("antigravity budget: upstream token limit rejected estimate, retrying once with smaller context")
+						continue attemptLoop
+					}
+				}
 				if httpResp.StatusCode == http.StatusTooManyRequests {
 					decision := decideAntigravity429(bodyBytes)
 
@@ -1368,6 +1386,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 	httpClient = reporter.TrackHTTPClient(httpClient)
 
 	attempts := antigravityRetryAttempts(auth, e.cfg)
+	tokenLimitRetried := false
 
 attemptLoop:
 	for attempt := 0; attempt < attempts; attempt++ {
@@ -1442,6 +1461,14 @@ attemptLoop:
 					return nil, err
 				}
 				helps.AppendAPIResponseChunk(ctx, e.cfg, bodyBytes)
+				if !tokenLimitRetried && attempt+1 < attempts {
+					if smaller, ok := helps.CompactAntigravityTokenLimitRetry(httpResp.StatusCode, bodyBytes, httpReq, baseModel); ok {
+						translated = smaller
+						tokenLimitRetried = true
+						log.WithField("model", baseModel).Warn("antigravity budget: upstream token limit rejected estimate, retrying once with smaller context")
+						continue attemptLoop
+					}
+				}
 				if httpResp.StatusCode == http.StatusTooManyRequests {
 					decision := decideAntigravity429(bodyBytes)
 
@@ -2266,10 +2293,7 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 	}
 
 	useAntigravitySchema := strings.Contains(modelName, "claude") || strings.Contains(modelName, "gemini-3-pro") || strings.Contains(modelName, "gemini-3.1-pro")
-	var (
-		bodyReader io.Reader
-		payloadLog []byte
-	)
+	var payloadLog []byte
 	if antigravityRequestNeedsSchemaSanitization(payload) {
 		payloadStr := string(payload)
 		paths := make([]string, 0)
@@ -2291,11 +2315,7 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 			payloadStr, _ = sjson.Delete(payloadStr, "request.generationConfig.maxOutputTokens")
 		}
 
-		payloadStrBytes := applyAntigravityNativeSignatureReplayIfNeeded(modelName, []byte(payloadStr))
-		bodyReader = bytes.NewReader(payloadStrBytes)
-		if e.cfg != nil && e.cfg.RequestLog {
-			payloadLog = append([]byte(nil), payloadStrBytes...)
-		}
+		payload = applyAntigravityNativeSignatureReplayIfNeeded(modelName, []byte(payloadStr))
 	} else {
 		if strings.Contains(modelName, "claude") {
 			payload, _ = sjson.SetBytes(payload, "request.toolConfig.functionCallingConfig.mode", "VALIDATED")
@@ -2304,10 +2324,20 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 		}
 
 		payload = applyAntigravityNativeSignatureReplayIfNeeded(modelName, payload)
-		bodyReader = bytes.NewReader(payload)
-		if e.cfg != nil && e.cfg.RequestLog {
-			payloadLog = append([]byte(nil), payload...)
+	}
+
+	// Payload config, schema sanitization and reasoning replay may add context
+	// after translation. Check the exact final body, not only the translator's
+	// earlier estimate. Never forward a request that compaction could not shrink.
+	payload = geminicommon.EnsureAntigravityBudget(payload, "request.contents", upstreamModel)
+	if len(payload) >= geminicommon.AntigravityFastPathByteThreshold {
+		estimate := geminicommon.EstimateGeminiPayloadTokens(payload, "request.contents")
+		if estimate > geminicommon.AntigravityDefaultMaxTokens {
+			return nil, statusErr{code: http.StatusBadRequest, msg: fmt.Sprintf(`{"error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"Context remains above the server safety budget after compaction (estimated %d tokens, budget %d). Fixed instructions, schemas, signed reasoning or tool arguments cannot be safely truncated."}}`, estimate, geminicommon.AntigravityDefaultMaxTokens)}
 		}
+	}
+	if e.cfg != nil && e.cfg.RequestLog {
+		payloadLog = append([]byte(nil), payload...)
 	}
 
 	// if useAntigravitySchema {
@@ -2323,7 +2353,7 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 	// 	}
 	// }
 
-	httpReq, errReq := http.NewRequestWithContext(ctx, http.MethodPost, requestURL.String(), bodyReader)
+	httpReq, errReq := http.NewRequestWithContext(ctx, http.MethodPost, requestURL.String(), bytes.NewReader(payload))
 	if errReq != nil {
 		return nil, errReq
 	}
