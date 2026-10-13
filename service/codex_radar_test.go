@@ -3,393 +3,349 @@ package service
 import (
 	"compress/gzip"
 	"context"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/QuantumNous/new-api/common"
 )
 
-const codexRadarTestPayload = `{
-  "schema": 2,
-  "source_updated_at": "2026-07-28T01:49:07+08:00",
-  "points": [
-    {
-      "model": "gpt-5.6-sol",
-      "effort": "max",
-      "iq": 103.125,
-      "passed": 77.0,
-      "valid_tasks": 112.0,
-      "average_price_usd": 8.911578,
-      "average_minutes": 31.8137
-    },
-    {
-      "model": "gpt-5.6-terra",
-      "effort": "high",
-      "iq": 69.6429,
-      "passed": 52,
-      "valid_tasks": 112,
-      "average_price_usd": 1.254286,
-      "average_minutes": 11.5278
-    },
-    {
-      "model": "gpt-5.5",
-      "effort": "high",
-      "iq": 80.3571,
-      "passed": 60,
-      "valid_tasks": 112,
-      "average_price_usd": 3.683317,
-      "average_minutes": 16.4511
-    },
-    {
-      "model": "deepseek-v4-flash",
-      "effort": "max",
-      "iq": 86.61,
-      "passed": 194.0,
-      "valid_tasks": 336.0,
-      "average_price_usd": 0.099226,
-      "average_minutes": 31.89
-    },
-    {
-      "model": "deepseek-v4-pro",
-      "effort": "high",
-      "iq": 87.5,
-      "passed": 14.0,
-      "valid_tasks": 24.0,
-      "average_price_usd": 0.174324,
-      "average_minutes": 22.69
-    },
-    {
-      "model": "gpt-5.6-luna",
-      "effort": "low",
-      "iq": 0
-    },
-    {
-      "model": "gpt-5.4",
-      "effort": "high",
-      "iq": 88.0
-    },
-    {
-      "model": "deepseek-v4-unknown",
-      "effort": "high",
-      "iq": 99.0
-    }
-  ]
-}`
-
-func TestCodexRadarProviderFiltersAndCachesMetrics(t *testing.T) {
-	var requestCount atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requestCount.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("ETag", `"test-v1"`)
-		_, _ = w.Write([]byte(codexRadarTestPayload))
-	}))
-	t.Cleanup(server.Close)
-
-	now := time.Date(2026, 7, 28, 1, 0, 0, 0, time.UTC)
-	provider := newCodexRadarProvider(server.URL, server.Client())
-	provider.now = func() time.Time { return now }
-
-	overview, err := provider.Get(context.Background())
-	if err != nil {
-		t.Fatalf("Get() error = %v", err)
+func codexRadarTestPoint(model, effort string) codexRadarSourcePoint {
+	score, usd, elapsed := 112.61757399688433, 2.3726981694915255, 617070.3898305085
+	point := codexRadarSourcePoint{
+		Schema:    "radar-bench-public-summary-v5-150-daily-graded-count",
+		Benchmark: "radar-bench-final64-20261004", ScoreVersion: codexRadarScoreVersion,
+		TaskSetSHA256: "test-task-set", Model: model, Effort: effort,
+		Score: &score, ScoreMax: 150, Coverage: 59, RequiredTasks: 64,
+		ScoreStatus: "provisional", GradedRunsCount: 71,
 	}
-	if len(overview.Metrics) != 5 {
-		t.Fatalf("metrics count = %d, want 5", len(overview.Metrics))
-	}
-	if overview.Metrics[0].Key != "gpt_56_sol_max" {
-		t.Fatalf("first metric = %q, want gpt_56_sol_max", overview.Metrics[0].Key)
-	}
-	if overview.Metrics[1].Key != "gpt_56_terra_high" {
-		t.Fatalf("second metric = %q, want gpt_56_terra_high", overview.Metrics[1].Key)
-	}
-	if overview.Metrics[2].Key != "gpt_55_high" || overview.Metrics[2].Family != "gpt-5.5" {
-		t.Fatalf("third metric = %#v, want GPT-5.5 high", overview.Metrics[2])
-	}
-	if overview.Metrics[3].Key != "deepseek_v4_pro_high" || overview.Metrics[3].Family != "deepseek-v4-pro" {
-		t.Fatalf("fourth metric = %#v, want DeepSeek V4 Pro high", overview.Metrics[3])
-	}
-	if overview.Metrics[4].Key != "deepseek_v4_flash_max" || overview.Metrics[4].Family != "deepseek-v4-flash" {
-		t.Fatalf("fifth metric = %#v, want DeepSeek V4 Flash max", overview.Metrics[4])
-	}
-	if overview.Metrics[0].Passed != 77 || overview.Metrics[0].Tasks != 112 {
-		t.Fatalf("decimal counts were not preserved as integers: %#v", overview.Metrics[0])
-	}
-	if math.Abs(overview.Metrics[0].AverageCostUSD-8.911578) > 1e-9 ||
-		math.Abs(overview.Metrics[0].AverageTaskSeconds-31.8137*60) > 1e-9 {
-		t.Fatalf("first metric averages = %#v", overview.Metrics[0])
-	}
-	if overview.Attribution != "数据来自 Codex 雷达 codexradar.com" {
-		t.Fatalf("attribution = %q", overview.Attribution)
-	}
-	if overview.Stale {
-		t.Fatal("fresh response marked stale")
-	}
-
-	if _, err := provider.Get(context.Background()); err != nil {
-		t.Fatalf("cached Get() error = %v", err)
-	}
-	if got := requestCount.Load(); got != 1 {
-		t.Fatalf("upstream requests = %d, want 1", got)
-	}
+	point.Statistics.Metrics.APIEquivalentUSD = codexRadarStatistic{Mean: &usd, KnownSamples: 59}
+	point.Statistics.Metrics.ElapsedMS = codexRadarStatistic{Mean: &elapsed, KnownSamples: 59}
+	point.History.UpdatedBucket = "2026-10-13T00:00:00.000Z"
+	return point
 }
 
-func TestCodexRadarProviderAcceptsExpandedPayload(t *testing.T) {
-	payload := strings.Replace(
-		codexRadarTestPayload,
-		"{",
-		`{"padding":"`+strings.Repeat("x", (4<<20)+1)+`",`,
-		1,
-	)
-	if len(payload) <= 4<<20 || len(payload) > codexRadarMaxBodyBytes {
-		t.Fatalf("expanded payload size = %d, want above previous limit and within current limit", len(payload))
+func codexRadarTestPoints() []codexRadarSourcePoint {
+	points := make([]codexRadarSourcePoint, 0, 24)
+	for _, model := range codexRadarModels {
+		for _, effort := range codexRadarEfforts {
+			points = append(points, codexRadarTestPoint(model.Model, effort))
+		}
 	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(payload))
-	}))
-	t.Cleanup(server.Close)
-
-	provider := newCodexRadarProvider(server.URL, server.Client())
-	overview, err := provider.Get(context.Background())
-	if err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
-	if len(overview.Metrics) != 5 {
-		t.Fatalf("metrics count = %d, want 5", len(overview.Metrics))
-	}
+	return points
 }
 
-// The published dataset grew past 9 MiB, which used to trip the body size
-// guard and made /api/codex-radar/overview return 502. This test pins the two
-// properties that keep it working: a body well beyond the old 8 MiB limit is
-// accepted, and gzip is used on the wire while the decoded body still parses.
-func TestCodexRadarProviderAcceptsCurrentPublishedDatasetSize(t *testing.T) {
-	const publishedSize = 10<<20 + (1 << 20) // ~11 MiB, above the observed 9.25 MiB
-	payload := strings.Replace(
-		codexRadarTestPayload,
-		"{",
-		`{"padding":"`+strings.Repeat("x", publishedSize)+`",`,
-		1,
-	)
-	if len(payload) <= 8<<20 {
-		t.Fatalf("payload size = %d, want above the old 8 MiB limit", len(payload))
+func writeCodexRadarTestPoint(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+	if got := r.Header.Get("User-Agent"); got != "new-api-cmsg codex-radar overview" {
+		t.Errorf("User-Agent = %q", got)
 	}
+	if got := r.Header.Get("X-Radar-Bench-Selection"); got != "user-selected-v1" {
+		t.Errorf("selection header = %q", got)
+	}
+	if got := r.URL.Query().Get("view"); got != "summary" {
+		t.Errorf("view = %q", got)
+	}
+	point := codexRadarTestPoint(r.URL.Query().Get("model"), r.URL.Query().Get("effort"))
+	body, err := common.Marshal(point)
+	if err != nil {
+		t.Errorf("marshal fixture: %v", err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(body)
+}
 
-	var gotEncoding atomic.Value
+func TestCodexRadarProviderFetchesCompleteCatalogAndCaches(t *testing.T) {
+	var requests atomic.Int32
+	var slots sync.Map
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotEncoding.Store(r.Header.Get("Accept-Encoding"))
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(payload))
+		requests.Add(1)
+		slot := r.URL.Query().Get("model") + ":" + r.URL.Query().Get("effort")
+		if _, exists := slots.LoadOrStore(slot, true); exists {
+			t.Errorf("duplicate slot %s", slot)
+		}
+		writeCodexRadarTestPoint(t, w, r)
 	}))
 	t.Cleanup(server.Close)
-
 	provider := newCodexRadarProvider(server.URL, server.Client())
+	now := time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)
+	provider.now = func() time.Time { return now }
 	overview, err := provider.Get(context.Background())
 	if err != nil {
-		t.Fatalf("Get() error = %v", err)
-	}
-	if len(overview.Metrics) != 5 {
-		t.Fatalf("metrics count = %d, want 5", len(overview.Metrics))
-	}
-	// The transport must add the gzip header itself and transparently inflate
-	// the response: the handler sees "gzip" precisely because Go negotiated it
-	// (setting the header by hand would suppress that and leave the body
-	// compressed), and decoding below succeeds only if it inflated again.
-	if enc, _ := gotEncoding.Load().(string); !strings.Contains(enc, "gzip") {
-		t.Fatalf("Accept-Encoding = %q, want the transport to negotiate gzip", enc)
-	}
-}
-
-// A proxy or CDN can hand back a gzip body regardless of what the transport
-// negotiated. The provider must still inflate it instead of failing to parse
-// raw gzip bytes as JSON.
-func TestCodexRadarProviderDecodesGzipEncodedResponse(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Encoding", "gzip")
-		zw := gzip.NewWriter(w)
-		defer zw.Close()
-		_, _ = zw.Write([]byte(codexRadarTestPayload))
-	}))
-	t.Cleanup(server.Close)
-
-	provider := newCodexRadarProvider(server.URL, &http.Client{
-		// Disable transparent decompression so the handler's gzip body reaches
-		// the provider untouched, mimicking the real failure.
-		Transport: &http.Transport{DisableCompression: true},
-	})
-	overview, err := provider.Get(context.Background())
-	if err != nil {
-		t.Fatalf("Get() error = %v, want the gzip body to be inflated", err)
-	}
-	if len(overview.Metrics) != 5 {
-		t.Fatalf("metrics count = %d, want 5", len(overview.Metrics))
-	}
-}
-
-func TestCodexRadarProviderRejectsOversizedBody(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		// Stream past the guard without ever declaring a Content-Length so the
-		// LimitReader check is what has to catch it.
-		chunk := strings.Repeat("y", 1<<20)
-		_, _ = w.Write([]byte(`{"padding":"`))
-		for written := 0; written <= codexRadarMaxBodyBytes; written += len(chunk) {
-			if _, err := w.Write([]byte(chunk)); err != nil {
-				return
-			}
-		}
-		_, _ = w.Write([]byte(`","points":[]}`))
-	}))
-	t.Cleanup(server.Close)
-
-	provider := newCodexRadarProvider(server.URL, server.Client())
-	if _, err := provider.Get(context.Background()); err == nil {
-		t.Fatal("Get() error = nil, want a size limit rejection")
-	}
-}
-
-func TestBuildCodexRadarOverviewIncludesCompletePublishedCatalog(t *testing.T) {
-	source := codexRadarSource{
-		Schema:          2,
-		SourceUpdatedAt: "2026-07-28T01:49:07+08:00",
-	}
-	catalog := []struct {
-		model   string
-		efforts []string
-	}{
-		{model: "gpt-5.6-sol", efforts: []string{"low", "medium", "high", "xhigh", "max", "ultra"}},
-		{model: "gpt-5.6-terra", efforts: []string{"low", "medium", "high", "xhigh", "max", "ultra"}},
-		{model: "gpt-5.6-luna", efforts: []string{"low", "medium", "high", "xhigh", "max"}},
-		{model: "gpt-5.5", efforts: []string{"high", "xhigh"}},
-		{model: "deepseek-v4-pro", efforts: []string{"low", "high", "max"}},
-		{model: "deepseek-v4-flash", efforts: []string{"high", "max"}},
-	}
-	for _, family := range catalog {
-		for _, effort := range family.efforts {
-			source.Points = append(source.Points, codexRadarSourcePoint{
-				Model:           family.model,
-				Effort:          effort,
-				IQ:              80,
-				AveragePriceUSD: 1,
-				AverageMinutes:  10,
-			})
-		}
-	}
-
-	overview, err := buildCodexRadarOverview(source)
-	if err != nil {
-		t.Fatalf("buildCodexRadarOverview() error = %v", err)
+		t.Fatal(err)
 	}
 	if len(overview.Metrics) != 24 {
-		t.Fatalf("metrics count = %d, want 24", len(overview.Metrics))
+		t.Fatalf("metrics = %d, want 24", len(overview.Metrics))
 	}
-	wantKeys := []string{
-		"gpt_56_sol_ultra", "gpt_56_sol_max", "gpt_56_sol_xhigh", "gpt_56_sol_high", "gpt_56_sol_medium", "gpt_56_sol_low",
-		"gpt_56_terra_ultra", "gpt_56_terra_max", "gpt_56_terra_xhigh", "gpt_56_terra_high", "gpt_56_terra_medium", "gpt_56_terra_low",
-		"gpt_56_luna_max", "gpt_56_luna_xhigh", "gpt_56_luna_high", "gpt_56_luna_medium", "gpt_56_luna_low",
-		"gpt_55_xhigh", "gpt_55_high",
-		"deepseek_v4_pro_max", "deepseek_v4_pro_high", "deepseek_v4_pro_low",
-		"deepseek_v4_flash_max", "deepseek_v4_flash_high",
+	if overview.SchemaVersion != codexRadarScoreVersion || overview.Stale {
+		t.Fatalf("overview = %#v", overview)
 	}
-	for index, want := range wantKeys {
-		if got := overview.Metrics[index].Key; got != want {
-			t.Fatalf("metric %d key = %q, want %q", index, got, want)
+	if overview.UpdatedAt != "2026-10-13T00:00:00Z" || overview.FetchedAt != now.Format(time.RFC3339) {
+		t.Fatalf("dates = %s / %s", overview.UpdatedAt, overview.FetchedAt)
+	}
+	for index, metric := range overview.Metrics {
+		want := codexRadarTestPoints()[index]
+		if metric.Model != want.Model || metric.Family != want.Model || metric.ReasoningEffort != want.Effort {
+			t.Errorf("wrong order: %#v", metric)
 		}
+		if metric.ScoreMax != 150 || metric.Coverage != 59 || metric.Tasks != 64 || metric.GradedRunsCount != 71 || metric.InsufficientData {
+			t.Errorf("counts = %#v", metric)
+		}
+		if metric.Score == nil || math.Abs(*metric.Score-*want.Score) > 1e-9 || metric.AverageCostUSD == nil || math.Abs(*metric.AverageCostUSD-2.3726981694915255) > 1e-9 || metric.AverageTaskSeconds == nil || math.Abs(*metric.AverageTaskSeconds-617.0703898305085) > 1e-9 {
+			t.Errorf("statistics = %#v", metric)
+		}
+		if strings.Contains(metric.Model, "luna") || strings.Contains(metric.Model, "terra") {
+			t.Errorf("unwanted model %s", metric.Model)
+		}
+	}
+	if _, err := provider.Get(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 24 {
+		t.Fatalf("requests = %d, want 24", requests.Load())
+	}
+}
+
+func TestCodexRadarProviderDeduplicatesAndBoundsConcurrency(t *testing.T) {
+	var requests, active, peak atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		current := active.Add(1)
+		defer active.Add(-1)
+		for {
+			old := peak.Load()
+			if current <= old || peak.CompareAndSwap(old, current) {
+				break
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+		writeCodexRadarTestPoint(t, w, r)
+	}))
+	t.Cleanup(server.Close)
+	provider := newCodexRadarProvider(server.URL, server.Client())
+	var callers sync.WaitGroup
+	for range 12 {
+		callers.Add(1)
+		go func() {
+			defer callers.Done()
+			if _, err := provider.Get(context.Background()); err != nil {
+				t.Errorf("Get: %v", err)
+			}
+		}()
+	}
+	callers.Wait()
+	if requests.Load() != 24 || peak.Load() > codexRadarConcurrency || peak.Load() < 2 {
+		t.Fatalf("requests=%d peak=%d", requests.Load(), peak.Load())
+	}
+}
+
+func TestCodexRadarProviderStaleFallbackRetryDelayAndExpiry(t *testing.T) {
+	var requests atomic.Int32
+	var broken atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if broken.Load() && r.URL.Query().Get("effort") == "low" {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		writeCodexRadarTestPoint(t, w, r)
+	}))
+	t.Cleanup(server.Close)
+	provider := newCodexRadarProvider(server.URL, server.Client())
+	now := time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)
+	provider.now = func() time.Time { return now }
+	first, err := provider.Get(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken.Store(true)
+	now = now.Add(11 * time.Minute)
+	stale, err := provider.Get(context.Background())
+	if err != nil || !stale.Stale || len(stale.Metrics) != 24 || stale.FetchedAt != first.FetchedAt {
+		t.Fatalf("stale=%#v err=%v", stale, err)
+	}
+	if _, err := provider.Get(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() != 48 {
+		t.Fatalf("retry storm: requests=%d", requests.Load())
+	}
+	now = now.Add(25 * time.Hour)
+	if _, err := provider.Get(context.Background()); err == nil {
+		t.Fatal("expired data accepted")
+	}
+	if requests.Load() != 72 {
+		t.Fatalf("requests=%d", requests.Load())
+	}
+}
+
+func TestCodexRadarProviderDoesNotCachePartialColdResponse(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.URL.Query().Get("model") == "gpt-6-sol" && r.URL.Query().Get("effort") == "high" {
+			http.Error(w, "bad gateway", 502)
+			return
+		}
+		writeCodexRadarTestPoint(t, w, r)
+	}))
+	t.Cleanup(server.Close)
+	provider := newCodexRadarProvider(server.URL, server.Client())
+	for range 2 {
+		if _, err := provider.Get(context.Background()); err == nil || !strings.Contains(err.Error(), "gpt-6-sol/high") {
+			t.Fatalf("err=%v", err)
+		}
+	}
+	if provider.cache != nil || requests.Load() != 24 {
+		t.Fatalf("partial response cached or refresh repeated: %d", requests.Load())
+	}
+}
+
+func TestCodexRadarProviderCancellationDoesNotPoisonSharedRefresh(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		once.Do(func() { close(started) })
+		<-release
+		writeCodexRadarTestPoint(t, w, r)
+	}))
+	t.Cleanup(server.Close)
+	provider := newCodexRadarProvider(server.URL, server.Client())
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { _, err := provider.Get(ctx); result <- err }()
+	<-started
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled caller did not return")
+	}
+	close(release)
+	overview, err := provider.Get(context.Background())
+	if err != nil || len(overview.Metrics) != 24 || requests.Load() != 24 {
+		t.Fatalf("metrics=%d requests=%d err=%v", len(overview.Metrics), requests.Load(), err)
+	}
+}
+
+func TestCodexRadarProviderGzipAndBodyLimits(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		size    int
+		gzip    bool
+		wantErr bool
+	}{
+		{"gzip", 0, true, false},
+		{"oversized", codexRadarMaxBodyBytes + 1, false, true},
+		{"gzip expansion", codexRadarMaxBodyBytes + 1, true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body []byte
+				if test.size > 0 {
+					body = []byte(strings.Repeat("x", test.size))
+				} else {
+					var err error
+					body, err = common.Marshal(codexRadarTestPoint(r.URL.Query().Get("model"), r.URL.Query().Get("effort")))
+					if err != nil {
+						t.Error(err)
+						return
+					}
+				}
+				if test.gzip {
+					w.Header().Set("Content-Encoding", "gzip")
+					writer := gzip.NewWriter(w)
+					_, _ = writer.Write(body)
+					_ = writer.Close()
+				} else {
+					_, _ = w.Write(body)
+				}
+			}))
+			t.Cleanup(server.Close)
+			transport := &http.Transport{DisableCompression: true}
+			defer transport.CloseIdleConnections()
+			provider := newCodexRadarProvider(server.URL, &http.Client{Transport: transport})
+			_, err := provider.fetchPoint(context.Background(), "gpt-6-astra", "high")
+			if (err != nil) != test.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestCodexRadarOverviewHandlesMissingEvidenceAndZeroScores(t *testing.T) {
+	points := codexRadarTestPoints()
+	points[0].Statistics.Metrics.APIEquivalentUSD.Mean = nil // Official null with known samples > 0.
+	points[0].Coverage = 39
+	points[1].Statistics.Metrics.ElapsedMS.KnownSamples = 0
+	points[1].Coverage = 40
+	zero := 0.0
+	points[2].Score = &zero
+	points[3].Coverage = 0
+	points[4].Score = nil
+	overview, err := buildCodexRadarOverview(points)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Metrics[0].AverageCostUSD != nil || !overview.Metrics[0].InsufficientData {
+		t.Fatal("missing evidence treated as free or low coverage ignored")
+	}
+	if overview.Metrics[1].AverageTaskSeconds != nil || overview.Metrics[1].InsufficientData {
+		t.Fatal("missing time or coverage threshold mishandled")
+	}
+	if overview.Metrics[2].Score == nil || *overview.Metrics[2].Score != 0 {
+		t.Fatal("legitimate zero score dropped")
+	}
+	for _, index := range []int{3, 4} {
+		if overview.Metrics[index].Score != nil || overview.Metrics[index].Status != "no_data" {
+			t.Fatal("missing score not represented")
+		}
+	}
+}
+
+func TestCodexRadarOverviewRejectsWrongContracts(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		modify func([]codexRadarSourcePoint) []codexRadarSourcePoint
+	}{
+		{"partial", func(p []codexRadarSourcePoint) []codexRadarSourcePoint { return p[:23] }},
+		{"legacy scale", func(p []codexRadarSourcePoint) []codexRadarSourcePoint { p[0].ScoreMax = 100; return p }},
+		{"legacy version", func(p []codexRadarSourcePoint) []codexRadarSourcePoint { p[0].ScoreVersion = "v1"; return p }},
+		{"wrong model", func(p []codexRadarSourcePoint) []codexRadarSourcePoint { p[0].Model = "gpt-6-luna"; return p }},
+		{"mixed benchmark", func(p []codexRadarSourcePoint) []codexRadarSourcePoint { p[1].Benchmark = "old"; return p }},
+		{"mixed task set", func(p []codexRadarSourcePoint) []codexRadarSourcePoint { p[1].TaskSetSHA256 = "old"; return p }},
+		{"coverage overflow", func(p []codexRadarSourcePoint) []codexRadarSourcePoint { p[0].Coverage = 65; return p }},
+		{"score overflow", func(p []codexRadarSourcePoint) []codexRadarSourcePoint { value := 151.0; p[0].Score = &value; return p }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := buildCodexRadarOverview(test.modify(codexRadarTestPoints())); err == nil {
+				t.Fatal("invalid contract accepted")
+			}
+		})
 	}
 }
 
 func TestCodexRadarCountRejectsFractionalValues(t *testing.T) {
 	var count codexRadarCount
-	if err := count.UnmarshalJSON([]byte("209.0")); err != nil {
-		t.Fatalf("integer-valued decimal rejected: %v", err)
+	if err := count.UnmarshalJSON([]byte("209.0")); err != nil || count != 209 {
+		t.Fatalf("count=%d err=%v", count, err)
 	}
-	if count != 209 {
-		t.Fatalf("count = %d, want 209", count)
-	}
-	if err := count.UnmarshalJSON([]byte("209.5")); err == nil {
-		t.Fatal("fractional count was silently accepted")
-	}
-}
-
-func TestCodexRadarProviderFallsBackToStaleCache(t *testing.T) {
-	var requestCount atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if requestCount.Add(1) > 1 {
-			http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
-			return
+	for _, raw := range []string{"209.5", "-1", "null", "NaN", "1e99"} {
+		if err := count.UnmarshalJSON([]byte(raw)); err == nil {
+			t.Fatalf("accepted %s", raw)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(codexRadarTestPayload))
-	}))
-	t.Cleanup(server.Close)
-
-	now := time.Date(2026, 7, 28, 1, 0, 0, 0, time.UTC)
-	provider := newCodexRadarProvider(server.URL, server.Client())
-	provider.cacheTTL = time.Minute
-	provider.staleTTL = time.Hour
-	provider.now = func() time.Time { return now }
-
-	if _, err := provider.Get(context.Background()); err != nil {
-		t.Fatalf("initial Get() error = %v", err)
-	}
-	now = now.Add(2 * time.Minute)
-
-	overview, err := provider.Get(context.Background())
-	if err != nil {
-		t.Fatalf("stale Get() error = %v", err)
-	}
-	if !overview.Stale {
-		t.Fatal("fallback response was not marked stale")
-	}
-	if got := requestCount.Load(); got != 2 {
-		t.Fatalf("upstream requests = %d, want 2", got)
-	}
-}
-
-func TestCodexRadarProviderRevalidatesWithETag(t *testing.T) {
-	var requestCount atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if requestCount.Add(1) > 1 {
-			if got := r.Header.Get("If-None-Match"); got != `"test-v1"` {
-				t.Errorf("If-None-Match = %q, want test-v1 ETag", got)
-			}
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("ETag", `"test-v1"`)
-		_, _ = w.Write([]byte(codexRadarTestPayload))
-	}))
-	t.Cleanup(server.Close)
-
-	now := time.Date(2026, 7, 28, 1, 0, 0, 0, time.UTC)
-	provider := newCodexRadarProvider(server.URL, server.Client())
-	provider.cacheTTL = time.Minute
-	provider.now = func() time.Time { return now }
-
-	first, err := provider.Get(context.Background())
-	if err != nil {
-		t.Fatalf("initial Get() error = %v", err)
-	}
-	now = now.Add(2 * time.Minute)
-
-	second, err := provider.Get(context.Background())
-	if err != nil {
-		t.Fatalf("revalidated Get() error = %v", err)
-	}
-	if second.Stale {
-		t.Fatal("304 revalidation marked response stale")
-	}
-	if second.FetchedAt == first.FetchedAt {
-		t.Fatalf("FetchedAt was not refreshed: %q", second.FetchedAt)
-	}
-	if got := requestCount.Load(); got != 2 {
-		t.Fatalf("upstream requests = %d, want 2", got)
 	}
 }

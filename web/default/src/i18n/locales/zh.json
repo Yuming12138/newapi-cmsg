@@ -4849,17 +4849,23 @@
     "dashboard": {
       "overview": {
         "codexRadar": {
-          "title": "智力效率",
-          "description": "完整公开聚合数据；平均价格不代表本站扣费",
+          "title": "Codex 智力雷达",
+          "description": "RadarBench v2 公开评分；覆盖不足 40 题标注数据不足，平均价格不代表本站扣费",
           "unavailable": "Codex 雷达数据暂时不可用",
           "model": "模型",
-          "iq": "智力",
+          "iq": "雷达评分",
           "cost": "平均价格",
           "duration": "平均耗时",
           "pending": "暂无公开数据",
           "minutes": "{{count}} 分钟",
           "updatedAt": "{{time}} 更新",
           "cached": "· 缓存数据",
+          "syncedAt": "{{time}} 同步",
+          "coverage": "覆盖 {{count}}/{{total}} 题",
+          "gradedRuns": "{{count}} 题次",
+          "insufficientData": "数据不足",
+          "insufficientDataDetail": "有效覆盖不足 40 题，请谨慎比较分数",
+          "retry": "重新获取",
           "attribution": "数据来自 Codex 雷达 codexradar.com"
         }
       }

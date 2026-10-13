@@ -4848,17 +4848,23 @@
     "dashboard": {
       "overview": {
         "codexRadar": {
-          "title": "Intelligence Efficiency",
-          "description": "Complete public aggregate data; average price is not CMSG billing",
+          "title": "Codex intelligence radar",
+          "description": "Public RadarBench v2 scores; coverage below 40 tasks is flagged. Average price is not CMSG billing",
           "unavailable": "Codex Radar data is temporarily unavailable",
           "model": "Model",
-          "iq": "IQ",
+          "iq": "Radar score",
           "cost": "Avg. price",
           "duration": "Avg. time",
           "pending": "No public data",
           "minutes": "{{count}} min",
           "updatedAt": "Updated {{time}}",
           "cached": "· cached data",
+          "syncedAt": "Synced {{time}}",
+          "coverage": "{{count}}/{{total}} tasks covered",
+          "gradedRuns": "{{count}} graded",
+          "insufficientData": "Limited data",
+          "insufficientDataDetail": "Fewer than 40 tasks covered; compare scores with caution",
+          "retry": "Try again",
           "attribution": "Data from Codex Radar codexradar.com"
         }
       }

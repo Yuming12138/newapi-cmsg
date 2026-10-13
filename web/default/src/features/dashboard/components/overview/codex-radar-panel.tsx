@@ -21,194 +21,117 @@ import { useQuery } from '@tanstack/react-query'
 import { BrainCircuit, ExternalLink } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { getCodexRadarOverview } from '../../api'
 import type { CodexRadarMetric } from '../../types'
 
 const REFRESH_INTERVAL_MS = 10 * 60 * 1000
-
-interface MetricGroup {
-  family: string
-  label: string
-  efforts: string[]
-  firstCardClassName?: string
-}
-
-const METRIC_GROUPS: MetricGroup[] = [
-  {
-    family: 'sol',
-    label: 'Sol',
-    efforts: ['ultra', 'max', 'xhigh', 'high', 'medium', 'low'],
-  },
-  {
-    family: 'terra',
-    label: 'Terra',
-    efforts: ['ultra', 'max', 'xhigh', 'high', 'medium', 'low'],
-  },
-  {
-    family: 'luna',
-    label: 'Luna',
-    efforts: ['max', 'xhigh', 'high', 'medium', 'low'],
-    firstCardClassName: 'xl:col-start-2',
-  },
-  {
-    family: 'gpt-5.5',
-    label: 'GPT-5.5',
-    efforts: ['xhigh', 'high'],
-    firstCardClassName: 'xl:col-start-3',
-  },
-  {
-    family: 'deepseek-v4-pro',
-    label: 'DeepSeek V4 Pro',
-    efforts: ['max', 'high', 'low'],
-    firstCardClassName: 'xl:col-start-2',
-  },
-  {
-    family: 'deepseek-v4-flash',
-    label: 'DeepSeek V4 Flash',
-    efforts: ['max', 'high'],
-    firstCardClassName: 'xl:col-start-3',
-  },
+const EFFORTS = ['ultra', 'max', 'xhigh', 'high', 'medium', 'low']
+const METRIC_GROUPS = [
+  { family: 'gpt-6-astra', label: 'GPT-6 Astra' },
+  { family: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
+  { family: 'gpt-6-sol', label: 'GPT-6 Sol' },
+  { family: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
 ]
-
-const FAMILY_STYLES: Record<
-  string,
-  { accent: string; border: string; surface: string; value: string }
-> = {
-  sol: {
-    accent: 'bg-warning',
-    border: 'border-warning/40',
-    surface: 'bg-warning/5',
-    value: 'text-warning',
-  },
-  terra: {
-    accent: 'bg-blue-500',
-    border: 'border-blue-500/40',
-    surface: 'bg-blue-500/5',
-    value: 'text-blue-600 dark:text-blue-400',
-  },
-  luna: {
-    accent: 'bg-zinc-400',
-    border: 'border-zinc-400/40',
-    surface: 'bg-muted/20',
-    value: 'text-foreground',
-  },
-  'gpt-5.5': {
-    accent: 'bg-cyan-500',
-    border: 'border-cyan-500/40',
-    surface: 'bg-cyan-500/5',
-    value: 'text-cyan-600 dark:text-cyan-400',
-  },
-  'deepseek-v4-flash': {
-    accent: 'bg-violet-500',
-    border: 'border-violet-500/40',
-    surface: 'bg-violet-500/5',
-    value: 'text-violet-600 dark:text-violet-400',
-  },
-  'deepseek-v4-pro': {
-    accent: 'bg-fuchsia-500',
-    border: 'border-fuchsia-500/40',
-    surface: 'bg-fuchsia-500/5',
-    value: 'text-fuchsia-600 dark:text-fuchsia-400',
-  },
-}
 
 function metricSlot(family: string, effort: string): string {
   return `${family}:${effort}`
 }
 
-function MetricCard(props: {
-  family: string
+export function CodexRadarMetricCard(props: {
   familyLabel: string
   effort: string
   metric?: CodexRadarMetric
-  className?: string
 }) {
   const { t } = useTranslation()
-  const styles = FAMILY_STYLES[props.family] ?? FAMILY_STYLES.luna
-  const displayName = `${props.familyLabel} ${props.effort}`
-  const minutes = props.metric
-    ? Math.max(1, Math.round(props.metric.average_task_seconds / 60))
-    : null
+  const metric = props.metric
+  const scoreText =
+    metric?.score == null
+      ? t('dashboard.overview.codexRadar.pending')
+      : metric.score.toFixed(1)
+  const costText =
+    metric?.average_cost_usd == null
+      ? '—'
+      : `$${metric.average_cost_usd.toFixed(2)}`
   const durationText =
-    minutes == null
-      ? null
-      : t('dashboard.overview.codexRadar.minutes', { count: minutes })
-  const ariaLabel = props.metric
-    ? `${displayName}, ${t('dashboard.overview.codexRadar.iq')} ${props.metric.score.toFixed(1)}, ${t('dashboard.overview.codexRadar.cost')} $${props.metric.average_cost_usd.toFixed(1)}, ${t('dashboard.overview.codexRadar.duration')} ${durationText}`
-    : `${displayName}, ${t('dashboard.overview.codexRadar.pending')}`
+    metric?.average_task_seconds == null
+      ? '—'
+      : t('dashboard.overview.codexRadar.minutes', {
+          count: Math.round(metric.average_task_seconds / 6) / 10,
+        })
+  const coverageText = metric
+    ? t('dashboard.overview.codexRadar.coverage', {
+        count: metric.coverage,
+        total: metric.tasks,
+      })
+    : t('dashboard.overview.codexRadar.pending')
+  const displayName = `${props.familyLabel} ${props.effort}`
 
   return (
-    <div
-      className={cn(
-        'bg-card relative grid min-h-28 min-w-0 grid-cols-[minmax(0,1fr)_4.25rem] overflow-hidden rounded-md border shadow-xs',
-        styles.border,
-        styles.surface,
-        props.className
-      )}
-      aria-label={ariaLabel}
+    <article
+      className='bg-card min-w-0 rounded-md border px-3 py-3 shadow-xs'
+      aria-label={displayName}
     >
-      <span
-        className={cn('absolute inset-x-0 top-0 h-1', styles.accent)}
-        aria-hidden='true'
-      />
-      <div className='flex min-w-0 flex-col justify-between px-3 py-3'>
-        <span
-          className='truncate text-xs font-semibold sm:text-sm'
-          title={displayName}
-        >
-          {displayName}
-        </span>
-        {props.metric ? (
-          <span
-            className={cn(
-              'mt-3 text-3xl leading-none font-semibold tabular-nums',
-              styles.value
-            )}
-            title={t('dashboard.overview.codexRadar.iq')}
-          >
-            {props.metric.score.toFixed(1)}
-          </span>
-        ) : (
-          <span className='text-muted-foreground mt-3 text-[11px] leading-4'>
-            {t('dashboard.overview.codexRadar.pending')}
+      <div className='flex flex-wrap items-center justify-between gap-x-2 gap-y-1'>
+        <span className='text-sm font-semibold'>{props.effort}</span>
+        {metric && (
+          <span className='text-muted-foreground text-xs tabular-nums'>
+            {t('dashboard.overview.codexRadar.gradedRuns', {
+              count: metric.graded_runs_count,
+            })}
           </span>
         )}
       </div>
-
-      <div className='border-border/70 grid grid-rows-2 border-l'>
-        <span
-          className={cn(
-            'flex items-center justify-center border-b text-sm font-semibold tabular-nums',
-            props.metric ? styles.value : 'text-muted-foreground'
-          )}
-          title={t('dashboard.overview.codexRadar.cost')}
-        >
-          {props.metric ? `$${props.metric.average_cost_usd.toFixed(1)}` : '—'}
-        </span>
-        <span
-          className={cn(
-            'flex items-center justify-center text-sm font-semibold tabular-nums',
-            props.metric ? styles.value : 'text-muted-foreground'
-          )}
-          title={t('dashboard.overview.codexRadar.duration')}
-        >
-          {durationText ?? '—'}
-        </span>
+      <div
+        className={cn(
+          'mt-3 tabular-nums',
+          metric?.score == null
+            ? 'text-muted-foreground text-xs'
+            : 'text-3xl leading-none font-semibold'
+        )}
+        title={t('dashboard.overview.codexRadar.iq')}
+      >
+        {scoreText}
       </div>
-    </div>
+      <p className='text-muted-foreground mt-2 text-xs tabular-nums'>
+        {coverageText}
+      </p>
+      {metric?.insufficient_data && (
+        <p
+          className='mt-1 text-xs'
+          title={t('dashboard.overview.codexRadar.insufficientDataDetail')}
+        >
+          {t('dashboard.overview.codexRadar.insufficientData')}
+        </p>
+      )}
+      <dl className='mt-3 grid grid-cols-2 gap-2 border-t pt-2 text-xs'>
+        <div className='min-w-0'>
+          <dt className='text-muted-foreground'>
+            {t('dashboard.overview.codexRadar.cost')}
+          </dt>
+          <dd className='mt-1 font-medium tabular-nums'>{costText}</dd>
+        </div>
+        <div className='min-w-0 text-right'>
+          <dt className='text-muted-foreground'>
+            {t('dashboard.overview.codexRadar.duration')}
+          </dt>
+          <dd className='mt-1 font-medium tabular-nums'>{durationText}</dd>
+        </div>
+      </dl>
+    </article>
   )
 }
 
 export function CodexRadarPanel() {
   const { t } = useTranslation()
   const query = useQuery({
-    queryKey: ['dashboard', 'codex-radar', 'overview'],
+    queryKey: ['dashboard', 'codex-radar', 'overview', 'radar-bench-v2'],
     queryFn: getCodexRadarOverview,
     staleTime: REFRESH_INTERVAL_MS,
     refetchInterval: REFRESH_INTERVAL_MS,
-    // The backend already keeps a 24-hour stale cache. Retrying a failed
-    // dashboard fetch only duplicates the global error toast.
+    // Backend deduplication, stale fallback and failure backoff already protect
+    // the upstream. Avoid duplicating the global error toast on auto-retries.
     retry: false,
   })
   const metrics = query.data?.metrics ?? []
@@ -218,9 +141,61 @@ export function CodexRadarPanel() {
       metric,
     ])
   )
-  const updatedAt = query.data?.updated_at
-    ? dayjs(query.data.updated_at).format('M/D HH:mm')
+  const fetchedAt = query.data?.fetched_at
+    ? dayjs(query.data.fetched_at).format('M/D HH:mm')
     : ''
+
+  let content
+  if (query.isLoading) {
+    content = (
+      <div className='space-y-3' aria-busy='true'>
+        {METRIC_GROUPS.map((group) => (
+          <div key={group.family}>
+            <Skeleton className='mb-2 h-5 w-28 rounded-sm' />
+            <div className='grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6'>
+              {EFFORTS.map((effort) => (
+                <Skeleton key={effort} className='h-44 rounded-md' />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    )
+  } else if (metrics.length === 0) {
+    content = (
+      <div className='text-muted-foreground flex min-h-28 flex-col items-center justify-center gap-3 rounded-md border text-sm'>
+        <span>{t('dashboard.overview.codexRadar.unavailable')}</span>
+        <Button
+          variant='outline'
+          size='sm'
+          onClick={() => void query.refetch()}
+          disabled={query.isFetching}
+        >
+          {t('dashboard.overview.codexRadar.retry')}
+        </Button>
+      </div>
+    )
+  } else {
+    content = (
+      <div className='space-y-3'>
+        {METRIC_GROUPS.map((group) => (
+          <section key={group.family} aria-label={group.label}>
+            <h4 className='mb-2 text-sm font-semibold'>{group.label}</h4>
+            <div className='grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6'>
+              {EFFORTS.map((effort) => (
+                <CodexRadarMetricCard
+                  key={effort}
+                  familyLabel={group.label}
+                  effort={effort}
+                  metric={metricsBySlot.get(metricSlot(group.family, effort))}
+                />
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    )
+  }
 
   return (
     <section className='min-w-0' aria-labelledby='codex-radar-heading'>
@@ -237,13 +212,13 @@ export function CodexRadarPanel() {
               />
               {t('dashboard.overview.codexRadar.title')}
             </h3>
-            {updatedAt && (
+            {fetchedAt && (
               <span className='text-muted-foreground text-xs tabular-nums'>
-                {t('dashboard.overview.codexRadar.updatedAt', {
-                  time: updatedAt,
+                {t('dashboard.overview.codexRadar.syncedAt', {
+                  time: fetchedAt,
                 })}
                 {query.data?.stale && (
-                  <span className='text-warning ml-1'>
+                  <span className='ml-1'>
                     {t('dashboard.overview.codexRadar.cached')}
                   </span>
                 )}
@@ -254,51 +229,18 @@ export function CodexRadarPanel() {
             {t('dashboard.overview.codexRadar.description')}
           </p>
         </div>
-
         <a
           href={query.data?.source_url ?? 'https://codexradar.com/'}
           target='_blank'
           rel='noreferrer'
           className='text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex shrink-0 items-center gap-1 rounded-sm text-xs outline-none focus-visible:ring-2'
         >
-          {query.data?.attribution ??
-            t('dashboard.overview.codexRadar.attribution')}
+          {t('dashboard.overview.codexRadar.attribution')}
           <ExternalLink className='size-3' aria-hidden='true' />
         </a>
       </div>
 
-      {query.isLoading ? (
-        <div className='grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6'>
-          {Array.from({ length: 12 }, (_, index) => (
-            <Skeleton key={index} className='h-28 rounded-md' />
-          ))}
-        </div>
-      ) : query.isError || metrics.length === 0 ? (
-        <div className='text-muted-foreground flex min-h-28 items-center justify-center rounded-md border text-sm'>
-          {t('dashboard.overview.codexRadar.unavailable')}
-        </div>
-      ) : (
-        <div className='space-y-2.5'>
-          {METRIC_GROUPS.map((group) => (
-            <div
-              key={group.family}
-              className='grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6'
-              aria-label={group.label}
-            >
-              {group.efforts.map((effort, index) => (
-                <MetricCard
-                  key={effort}
-                  family={group.family}
-                  familyLabel={group.label}
-                  effort={effort}
-                  metric={metricsBySlot.get(metricSlot(group.family, effort))}
-                  className={index === 0 ? group.firstCardClassName : undefined}
-                />
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
+      {content}
     </section>
   )
 }
