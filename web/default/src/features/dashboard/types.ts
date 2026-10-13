@@ -120,17 +120,20 @@ export interface CodexRadarMetric {
   model: string
   family: string
   reasoning_effort: string
-  score: number
+  score: number | null
+  score_max: number
   status: string
-  passed: number
+  coverage: number
   tasks: number
-  average_cost_usd: number
-  average_task_seconds: number
-  average_task_time_human: string
+  graded_runs_count: number
+  insufficient_data: boolean
+  average_cost_usd: number | null
+  average_task_seconds: number | null
 }
 
 export interface CodexRadarOverview {
   schema_version: string
+  benchmark: string
   updated_at: string
   fetched_at: string
   source_url: string
