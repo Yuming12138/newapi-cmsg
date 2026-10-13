@@ -1,0 +1,142 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+@layer components {
+  /* Family identity stays independent of the site's selectable theme preset. */
+  .codex-radar-family {
+    --radar-accent: var(--muted-foreground);
+    --radar-marker: var(--muted-foreground);
+  }
+
+  .codex-radar-family[data-family='gpt-6-astra'] {
+    --radar-accent: var(--color-violet-700);
+    --radar-marker: var(--color-violet-500);
+  }
+
+  .codex-radar-family[data-family='gpt-6.1-sol'] {
+    --radar-accent: var(--color-amber-700);
+    --radar-marker: var(--color-amber-500);
+  }
+
+  .codex-radar-family[data-family='gpt-6-sol'] {
+    --radar-accent: var(--color-sky-700);
+    --radar-marker: var(--color-sky-500);
+  }
+
+  .codex-radar-family[data-family='gpt-5.6-sol'] {
+    --radar-accent: var(--color-emerald-700);
+    --radar-marker: var(--color-emerald-500);
+  }
+
+  .dark .codex-radar-family[data-family='gpt-6-astra'] {
+    --radar-accent: var(--color-violet-300);
+    --radar-marker: var(--color-violet-400);
+  }
+
+  .dark .codex-radar-family[data-family='gpt-6.1-sol'] {
+    --radar-accent: var(--color-amber-300);
+    --radar-marker: var(--color-amber-400);
+  }
+
+  .dark .codex-radar-family[data-family='gpt-6-sol'] {
+    --radar-accent: var(--color-sky-300);
+    --radar-marker: var(--color-sky-400);
+  }
+
+  .dark .codex-radar-family[data-family='gpt-5.6-sol'] {
+    --radar-accent: var(--color-emerald-300);
+    --radar-marker: var(--color-emerald-400);
+  }
+
+  .codex-radar-card {
+    position: relative;
+    overflow: hidden;
+    border-color: color-mix(in oklch, var(--radar-marker) 30%, var(--border));
+    background-color: color-mix(in oklch, var(--radar-marker) 5%, var(--card));
+    box-shadow:
+      0 1px 2px rgb(0 0 0 / 3%),
+      0 3px 10px rgb(0 0 0 / 2%);
+  }
+
+  /* A thin family-colored rule echoes the original CMSG radar cards. */
+  .codex-radar-card::before {
+    position: absolute;
+    inset: 0 0 auto;
+    height: 2px;
+    background-color: var(--radar-marker);
+    content: '';
+  }
+
+  .codex-radar-accent {
+    color: var(--radar-accent);
+  }
+
+  .codex-radar-score {
+    /* Keep five-character scores clear of the stats column in narrow cards. */
+    font-size: clamp(1.5rem, 13cqi, 2.25rem);
+  }
+
+  .codex-radar-marker {
+    background-color: var(--radar-marker);
+  }
+
+  .codex-radar-effort {
+    color: var(--radar-accent);
+    background-color: color-mix(in oklch, var(--radar-marker) 10%, transparent);
+  }
+
+  .codex-radar-divider {
+    background-color: color-mix(
+      in oklch,
+      var(--radar-marker) 20%,
+      var(--border)
+    );
+  }
+
+  .codex-radar-stat-divider {
+    border-color: color-mix(in oklch, var(--radar-marker) 15%, var(--border));
+  }
+
+  .codex-radar-score-track {
+    background-color: color-mix(
+      in oklch,
+      var(--radar-marker) 12%,
+      var(--muted)
+    );
+  }
+
+  .codex-radar-warning {
+    color: var(--color-amber-800);
+  }
+
+  .dark .codex-radar-warning {
+    color: var(--color-amber-300);
+  }
+}
+
+@media (hover: hover) {
+  .codex-radar-card:hover {
+    border-color: color-mix(in oklch, var(--radar-marker) 55%, var(--border));
+  }
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .codex-radar-card {
+    transition: border-color 150ms ease-out;
+  }
+}

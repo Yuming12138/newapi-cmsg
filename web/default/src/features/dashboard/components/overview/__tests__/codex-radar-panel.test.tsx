@@ -45,8 +45,8 @@ for (const [name, value] of Object.entries({
   })
 }
 const { cleanup, render, within } = await import('@testing-library/react')
-const { CodexRadarPanel, CodexRadarMetricCard } =
-  await import('../codex-radar-panel')
+const { CodexRadarPanel } = await import('../codex-radar-panel')
+const { CodexRadarMetricCard } = await import('../codex-radar-metric-card')
 const i18n = createInstance()
 await i18n.init({ lng: 'en', fallbackLng: 'en', resources: { en, zh } })
 afterEach(cleanup)
@@ -74,6 +74,7 @@ function renderCard(overrides: Partial<CodexRadarMetric> = {}) {
   return render(
     <I18nextProvider i18n={i18n}>
       <CodexRadarMetricCard
+        family='gpt-6-astra'
         familyLabel='GPT-6 Astra'
         effort='ultra'
         metric={metric(overrides)}
@@ -100,6 +101,28 @@ describe('Codex Radar v2 presentation', () => {
     assert.equal(view.getAllByText('—').length, 2)
     assert.ok(!view.container.textContent?.includes('$0.00'))
     assert.ok(!view.container.textContent?.includes('0 min'))
+  })
+  test('uses the benchmark scale only for an unlabelled, bounded score bar', () => {
+    let view = renderCard()
+    const bar = view.container.querySelector<HTMLElement>(
+      '[data-radar-score-bar]'
+    )
+    assert.ok(bar)
+    assert.equal(parseFloat(bar.style.width), (112.6 / 150) * 100)
+    assert.equal(bar.parentElement?.getAttribute('aria-hidden'), 'true')
+    cleanup()
+    view = renderCard({ score: 160 })
+    assert.equal(
+      view.container.querySelector<HTMLElement>('[data-radar-score-bar]')?.style
+        .width,
+      '100%'
+    )
+    cleanup()
+    view = renderCard({ score: null })
+    assert.equal(view.container.querySelector('[data-radar-score-bar]'), null)
+    cleanup()
+    view = renderCard({ score_max: 0 })
+    assert.equal(view.container.querySelector('[data-radar-score-bar]'), null)
   })
   test('shows zero scores, missing scores and low coverage honestly', () => {
     let view = renderCard({ score: 0 })
@@ -158,6 +181,13 @@ describe('Codex Radar v2 presentation', () => {
         ).length,
         6
       )
+    }
+    for (const [family, label] of families) {
+      const region = view.getByRole('region', { name: label })
+      assert.equal(region.getAttribute('data-family'), family)
+      for (const card of within(region).getAllByRole('article')) {
+        assert.equal(card.getAttribute('data-family'), family)
+      }
     }
     assert.ok(
       !/luna|terra|DeepSeek|GPT-5\.5|\/150/i.test(
