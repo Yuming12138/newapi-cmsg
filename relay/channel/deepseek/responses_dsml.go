@@ -245,6 +245,14 @@ func handleNativeResponsesStream(c *gin.Context, resp *http.Response, info *rela
 		if event.OutputIndex != nil && *event.OutputIndex >= state.nextOutput {
 			state.nextOutput = *event.OutputIndex + 1
 		}
+		if restoreNativeResponsesToolName(event.Item, state.toolMap) {
+			dataBytes, err := common.Marshal(event)
+			if err != nil {
+				sr.Stop(err)
+				return
+			}
+			data = string(dataBytes)
+		}
 		// Persist completed items before forwarding them. Clients can disconnect
 		// after receiving a tool call, before response.completed ever arrives.
 		if event.Type == dto.ResponsesOutputTypeItemDone && event.Item != nil {
@@ -498,6 +506,9 @@ func convertNativeResponsesOutput(outputs []dto.ResponsesOutput, toolMap map[str
 	converted := make([]dto.ResponsesOutput, 0, len(outputs))
 	changed := false
 	for _, output := range outputs {
+		if restoreNativeResponsesToolName(&output, toolMap) {
+			changed = true
+		}
 		if output.Type != "message" {
 			converted = append(converted, output)
 			continue
