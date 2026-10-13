@@ -153,7 +153,7 @@ func TestInsertKeepsBlankPasswordForPasswordlessUser(t *testing.T) {
 	assert.Empty(t, stored.Password)
 }
 
-func TestInsertDefaultsNewUsersToDefaultGroup(t *testing.T) {
+func TestInsertDefaultsNewUsersToCMSGGroup(t *testing.T) {
 	setupUserUpdateTestState(t)
 
 	oldQuotaForNewUser := common.QuotaForNewUser
@@ -174,7 +174,7 @@ func TestInsertDefaultsNewUsersToDefaultGroup(t *testing.T) {
 
 	var stored User
 	require.NoError(t, DB.Where("username = ?", user.Username).First(&stored).Error)
-	assert.Equal(t, DefaultUserGroup, stored.Group)
+	assert.Equal(t, "cmsg", stored.Group)
 	assert.Zero(t, stored.Quota)
 }
 
@@ -219,7 +219,7 @@ func TestEditCanonicalizesLegacyASXSUserGroup(t *testing.T) {
 	assert.Equal(t, "cmsg", stored.Group)
 }
 
-func TestInsertWithTxDefaultsOAuthUserToDefaultGroup(t *testing.T) {
+func TestInsertWithTxDefaultsOAuthUserToCMSGGroup(t *testing.T) {
 	setupUserUpdateTestState(t)
 
 	user := &User{
@@ -234,8 +234,53 @@ func TestInsertWithTxDefaultsOAuthUserToDefaultGroup(t *testing.T) {
 
 	var stored User
 	require.NoError(t, DB.Where("username = ?", user.Username).First(&stored).Error)
-	assert.Equal(t, DefaultUserGroup, stored.Group)
+	assert.Equal(t, "cmsg", stored.Group)
 	assert.Zero(t, stored.Quota)
+}
+
+func TestUserCreationPreservesExplicitGroupsAndExistingUsers(t *testing.T) {
+	for _, useTransaction := range []bool{false, true} {
+		for _, tt := range []struct {
+			name  string
+			group string
+			want  string
+		}{
+			{"blank", "", "cmsg"},
+			{"whitespace", " \t\n", "cmsg"},
+			{"explicit-default", " default ", "default"},
+			{"explicit-cmsg", " cmsg ", "cmsg"},
+			{"legacy-asxs", " asxs ", "cmsg"},
+			{"custom", " vip ", "vip"},
+		} {
+			name := "insert/" + tt.name
+			if useTransaction {
+				name = "insert-with-tx/" + tt.name
+			}
+			t.Run(name, func(t *testing.T) {
+				setupUserUpdateTestState(t)
+				existing := User{
+					Username: "existing-default", Password: "password123",
+					Group: "default", AffCode: "existing",
+				}
+				require.NoError(t, DB.Create(&existing).Error)
+				user := User{Username: "new-user", Group: tt.group, Role: common.RoleCommonUser}
+				if useTransaction {
+					require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+						return user.InsertWithTx(tx, 0)
+					}))
+				} else {
+					require.NoError(t, user.Insert(0))
+				}
+
+				var stored User
+				require.NoError(t, DB.First(&stored, user.Id).Error)
+				require.Equal(t, tt.want, stored.Group)
+				unchanged, err := GetUserById(existing.Id, false)
+				require.NoError(t, err)
+				require.Equal(t, "default", unchanged.Group)
+			})
+		}
+	}
 }
 
 func TestValidateAndFillRejectsPasswordlessUser(t *testing.T) {

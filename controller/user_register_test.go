@@ -9,6 +9,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/oauth"
+	"github.com/gin-contrib/sessions"
+	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
@@ -93,7 +96,7 @@ func TestRegisterAllowsMissingRegistrationCodeWhenGateDisabled(t *testing.T) {
 
 	var user model.User
 	require.NoError(t, model.DB.Where("username = ?", "reg-open").First(&user).Error)
-	require.Equal(t, model.DefaultUserGroup, user.Group)
+	require.Equal(t, "cmsg", user.Group)
 	require.Zero(t, user.Quota)
 }
 
@@ -150,4 +153,111 @@ func TestRegisterAcceptsValidRegistrationCode(t *testing.T) {
 	var count int64
 	require.NoError(t, model.DB.Model(&model.User{}).Where("username = ?", "reg-valid").Count(&count).Error)
 	require.EqualValues(t, 1, count)
+	var user model.User
+	require.NoError(t, model.DB.Where("username = ?", "reg-valid").First(&user).Error)
+	require.Equal(t, "cmsg", user.Group)
+}
+
+func TestRegisterCannotOverrideDefaultCMSGGroup(t *testing.T) {
+	for _, requestedGroup := range []string{"", "default", "vip", "asxs", "cmsg"} {
+		t.Run(requestedGroup, func(t *testing.T) {
+			setupUserRegisterControllerTest(t)
+			body, err := common.Marshal(map[string]any{
+				"username": "reg-group", "password": "password123", "group": requestedGroup,
+			})
+			require.NoError(t, err)
+			ctx, recorder := newUserRegisterContext(string(body))
+			Register(ctx)
+			resp := decodeUserRegisterAPIResponse(t, recorder)
+			require.True(t, resp.Success, resp.Message)
+			var user model.User
+			require.NoError(t, model.DB.Where("username = ?", "reg-group").First(&user).Error)
+			require.Equal(t, "cmsg", user.Group)
+			require.Equal(t, common.RoleCommonUser, user.Role)
+		})
+	}
+}
+
+func TestAdminCreateUserDefaultsToCMSGAndPreservesExplicitGroup(t *testing.T) {
+	for _, tt := range []struct {
+		group string
+		want  string
+	}{
+		{"", "cmsg"},
+		{" \t ", "cmsg"},
+		{"default", "default"},
+		{"cmsg", "cmsg"},
+	} {
+		t.Run(tt.group, func(t *testing.T) {
+			setupUserRegisterControllerTest(t)
+			body, err := common.Marshal(map[string]any{
+				"username": "admin-created", "password": "password123",
+				"role": common.RoleCommonUser, "group": tt.group,
+			})
+			require.NoError(t, err)
+			ctx, recorder := newUserRegisterContext(string(body))
+			ctx.Set("role", common.RoleRootUser)
+			CreateUser(ctx)
+			resp := decodeUserRegisterAPIResponse(t, recorder)
+			require.True(t, resp.Success, resp.Message)
+			var user model.User
+			require.NoError(t, model.DB.Where("username = ?", "admin-created").First(&user).Error)
+			require.Equal(t, tt.want, user.Group)
+		})
+	}
+}
+
+func TestOAuthRegistrationDefaultsToCMSGAndPreservesExistingGroup(t *testing.T) {
+	providers := []struct {
+		name     string
+		provider oauth.Provider
+	}{
+		{"github", &oauth.GitHubProvider{}},
+		{"discord", &oauth.DiscordProvider{}},
+		{"oidc", &oauth.OIDCProvider{}},
+		{"linuxdo", &oauth.LinuxDOProvider{}},
+		{"custom", oauth.NewGenericOAuthProvider(&model.CustomOAuthProvider{
+			Id: 1, Name: "Test OAuth", Slug: "custom", Enabled: true,
+		})},
+	}
+	for _, tt := range providers {
+		for _, username := range []string{"oauth-new-user", ""} {
+			t.Run(tt.name+"/"+username, func(t *testing.T) {
+				setupUserRegisterControllerTest(t)
+				oauthUser := &oauth.OAuthUser{
+					ProviderUserID: "provider-user-1",
+					Username:       username,
+				}
+				var user *model.User
+				router := gin.New()
+				router.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-session-secret"))))
+				router.GET("/", func(c *gin.Context) {
+					var err error
+					user, err = findOrCreateOAuthUser(c, tt.provider, oauthUser, sessions.Default(c))
+					require.NoError(t, err)
+				})
+				request := func() {
+					router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+				}
+
+				request()
+				require.NotNil(t, user)
+				var stored model.User
+				require.NoError(t, model.DB.First(&stored, user.Id).Error)
+				require.Equal(t, "cmsg", stored.Group)
+				require.Equal(t, common.RoleCommonUser, stored.Role)
+				require.Empty(t, stored.Password)
+
+				// Logging in again must not reassign an existing user's group.
+				require.NoError(t, model.DB.Model(&stored).Update("group", "default").Error)
+				common.RegisterEnabled = false
+				request()
+				require.Equal(t, stored.Id, user.Id)
+				require.Equal(t, "default", user.Group)
+				var count int64
+				require.NoError(t, model.DB.Model(&model.User{}).Count(&count).Error)
+				require.EqualValues(t, 1, count)
+			})
+		}
+	}
 }

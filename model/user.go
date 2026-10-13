@@ -18,7 +18,8 @@ import (
 
 const (
 	UserNameMaxLength = 20
-	DefaultUserGroup  = setting.DefaultUserIdentityGroup
+	// DefaultUserGroup applies to new accounts only, not existing user groups.
+	DefaultUserGroup = setting.CMSGUserIdentityGroup
 )
 
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
@@ -532,6 +533,10 @@ func (user *User) prepareForInsert(tx *gorm.DB) error {
 }
 
 func (user *User) prepareNewUserFields() {
+	// Default only at creation; normalization of existing users must stay unchanged.
+	if strings.TrimSpace(user.Group) == "" {
+		user.Group = DefaultUserGroup
+	}
 	user.Group = setting.NormalizeUserIdentityGroup(user.Group)
 	user.Quota = common.QuotaForNewUser
 	user.AffCode = common.GetRandomString(4)
