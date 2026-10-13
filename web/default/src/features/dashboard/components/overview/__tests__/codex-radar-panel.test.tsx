@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { AxiosError } from 'axios'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import en from '@/i18n/locales/en.json'
 import zh from '@/i18n/locales/zh.json'
@@ -24,6 +25,7 @@ import { createInstance } from 'i18next'
 import assert from 'node:assert/strict'
 import { afterEach, describe, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
+import { api } from '@/lib/api'
 import type { CodexRadarMetric, CodexRadarOverview } from '../../../types'
 
 const dom = new Window({ url: 'http://localhost' })
@@ -44,7 +46,8 @@ for (const [name, value] of Object.entries({
     value,
   })
 }
-const { cleanup, render, within } = await import('@testing-library/react')
+const { cleanup, render, within, waitFor } =
+  await import('@testing-library/react')
 const { CodexRadarPanel } = await import('../codex-radar-panel')
 const { CodexRadarMetricCard } = await import('../codex-radar-metric-card')
 const i18n = createInstance()
@@ -206,5 +209,85 @@ describe('Codex Radar v2 presentation', () => {
     assert.ok(!view.container.textContent?.includes('/150'))
     cleanup()
     await i18n.changeLanguage('en')
+  })
+  test('shows automatic recovery inline without repeated global error toasts', async () => {
+    const oldAdapter = api.defaults.adapter
+    const client = new QueryClient()
+    let requests = 0
+    api.defaults.adapter = async (config) => {
+      requests++
+      assert.equal(
+        (config as unknown as Record<string, unknown>).skipErrorHandler,
+        true
+      )
+      throw new AxiosError('Radar timeout', 'ERR_BAD_RESPONSE', config, null, {
+        status: 502,
+        statusText: 'Bad Gateway',
+        config,
+        headers: { 'retry-after': '60' },
+        data: { success: false },
+      })
+    }
+    try {
+      const view = render(
+        <I18nextProvider i18n={i18n}>
+          <QueryClientProvider client={client}>
+            <CodexRadarPanel />
+          </QueryClientProvider>
+        </I18nextProvider>
+      )
+      await waitFor(() =>
+        assert.ok(
+          view.getByText('Retrying automatically. No need to refresh the page')
+        )
+      )
+      assert.ok(view.getByText('Codex Radar data is temporarily unavailable'))
+      assert.equal(
+        view
+          .getByRole('button', { name: 'Try again' })
+          .hasAttribute('disabled'),
+        true
+      )
+      assert.equal(requests, 1)
+    } finally {
+      cleanup()
+      client.clear()
+      api.defaults.adapter = oldAdapter
+    }
+  })
+  test('shows the original sync time and cached warning with usable cards', () => {
+    const client = new QueryClient()
+    const data: CodexRadarOverview = {
+      schema_version: 'radar-bench-v2-150',
+      benchmark: 'test',
+      fetched_at: '2026-10-14T00:00:00Z',
+      updated_at: '2026-10-13T00:00:00Z',
+      source_url: 'https://codexradar.com/',
+      attribution: '',
+      stale: true,
+      metrics: [metric()],
+    }
+    client.setQueryData(
+      ['dashboard', 'codex-radar', 'overview', 'radar-bench-v2'],
+      data
+    )
+    const view = render(
+      <I18nextProvider i18n={i18n}>
+        <QueryClientProvider client={client}>
+          <CodexRadarPanel />
+        </QueryClientProvider>
+      </I18nextProvider>
+    )
+    assert.ok(view.getByText('112.6'))
+    assert.ok(view.getByText('· cached data'))
+    assert.ok(
+      view.getByText(
+        'Live sync is temporarily unavailable. Showing the last complete snapshot and retrying automatically'
+      )
+    )
+    assert.ok(view.getByText(/Synced 10(?:\/|&#x2F;)14/))
+    assert.equal(view.getAllByRole('article').length, 24)
+    cleanup()
+    client.clear()
   })
 })

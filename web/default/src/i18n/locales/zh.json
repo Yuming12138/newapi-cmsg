@@ -4864,6 +4864,8 @@
           "minutes": "{{count}} 分钟",
           "updatedAt": "{{time}} 更新",
           "cached": "· 缓存数据",
+          "cachedDetail": "实时同步暂时失败，正在展示上次完整数据并自动重试",
+          "recovering": "正在自动重试，无需反复刷新页面",
           "syncedAt": "{{time}} 同步",
           "coverage": "覆盖 {{count}}/{{total}} 题",
           "gradedRuns": "{{count}} 题次",

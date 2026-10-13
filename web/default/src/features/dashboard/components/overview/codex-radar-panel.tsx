@@ -22,10 +22,9 @@ import { BrainCircuit, ExternalLink } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { getCodexRadarOverview } from '../../api'
+import { codexRadarQueryOptions } from '../../lib/codex-radar-query'
 import { CodexRadarMetricCard } from './codex-radar-metric-card'
 
-const REFRESH_INTERVAL_MS = 10 * 60 * 1000
 const METRIC_GRID_CLASS =
   'grid grid-cols-1 gap-2 @sm/radar:grid-cols-2 @3xl/radar:grid-cols-3 @6xl/radar:grid-cols-6'
 const EFFORTS = ['ultra', 'max', 'xhigh', 'high', 'medium', 'low']
@@ -42,16 +41,10 @@ function metricSlot(family: string, effort: string): string {
 
 export function CodexRadarPanel() {
   const { t } = useTranslation()
-  const query = useQuery({
-    queryKey: ['dashboard', 'codex-radar', 'overview', 'radar-bench-v2'],
-    queryFn: getCodexRadarOverview,
-    staleTime: REFRESH_INTERVAL_MS,
-    refetchInterval: REFRESH_INTERVAL_MS,
-    // Backend deduplication, stale fallback and failure backoff already protect
-    // the upstream. Avoid duplicating the global error toast on auto-retries.
-    retry: false,
-  })
+  const query = useQuery(codexRadarQueryOptions)
   const metrics = query.data?.metrics ?? []
+  const showingCachedData =
+    query.data?.stale || query.isError || query.failureCount > 0
   const metricsBySlot = new Map(
     metrics.map((metric) => [
       metricSlot(metric.family, metric.reasoning_effort),
@@ -63,7 +56,7 @@ export function CodexRadarPanel() {
     : ''
 
   let content
-  if (query.isLoading) {
+  if (query.isLoading && query.failureCount === 0) {
     content = (
       <div className='space-y-4' aria-busy='true'>
         {METRIC_GROUPS.map((group) => (
@@ -80,8 +73,18 @@ export function CodexRadarPanel() {
     )
   } else if (metrics.length === 0) {
     content = (
-      <div className='text-muted-foreground flex min-h-28 flex-col items-center justify-center gap-3 rounded-md border text-sm'>
-        <span>{t('dashboard.overview.codexRadar.unavailable')}</span>
+      <div
+        className='text-muted-foreground flex min-h-28 flex-col items-center justify-center gap-3 rounded-md border p-4 text-center text-sm'
+        aria-busy={query.isFetching}
+      >
+        <div role='status' className='space-y-1'>
+          <p>{t('dashboard.overview.codexRadar.unavailable')}</p>
+          {query.isFetching && (
+            <p className='text-xs'>
+              {t('dashboard.overview.codexRadar.recovering')}
+            </p>
+          )}
+        </div>
         <Button
           variant='outline'
           size='sm'
@@ -155,7 +158,7 @@ export function CodexRadarPanel() {
                 {t('dashboard.overview.codexRadar.syncedAt', {
                   time: fetchedAt,
                 })}
-                {query.data?.stale && (
+                {showingCachedData && (
                   <span className='ml-1'>
                     {t('dashboard.overview.codexRadar.cached')}
                   </span>
@@ -166,6 +169,11 @@ export function CodexRadarPanel() {
           <p className='text-muted-foreground mt-1 text-xs'>
             {t('dashboard.overview.codexRadar.description')}
           </p>
+          {metrics.length > 0 && showingCachedData && (
+            <p role='status' className='text-muted-foreground mt-1 text-xs'>
+              {t('dashboard.overview.codexRadar.cachedDetail')}
+            </p>
+          )}
         </div>
         <a
           href={query.data?.source_url ?? 'https://codexradar.com/'}

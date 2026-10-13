@@ -76,7 +76,7 @@ const queryClient = new QueryClient({
     },
   },
   queryCache: new QueryCache({
-    onError: (error) => {
+    onError: (error, query) => {
       if (error instanceof AxiosError) {
         if (error.response?.status === 401) {
           toast.error(i18next.t('Session expired!'))
@@ -84,7 +84,10 @@ const queryClient = new QueryClient({
           const redirect = `${router.history.location.href}`
           router.navigate({ to: '/sign-in', search: { redirect } })
         }
-        if (error.response?.status === 500) {
+        if (
+          error.response?.status === 500 &&
+          !query.meta?.errorHandledLocally
+        ) {
           toast.error(i18next.t('Internal Server Error!'))
           router.navigate({ to: '/500' })
         }

@@ -91,8 +91,17 @@ export async function getUptimeStatus() {
 export async function getCodexRadarOverview() {
   const res = await api.get<{
     success: boolean
+    message?: string
     data: CodexRadarOverview
-  }>('/api/codex-radar/overview')
+  }>('/api/codex-radar/overview', {
+    // The panel owns recoverable failures. Do not show a toast on every
+    // automatic retry; global QueryCache still handles expired sessions.
+    skipErrorHandler: true,
+    skipBusinessError: true,
+  } as Record<string, unknown>)
+  if (!res.data.success || !res.data.data?.metrics?.length) {
+    throw new Error(res.data.message || 'Unable to load Codex Radar data')
+  }
   return res.data.data
 }
 

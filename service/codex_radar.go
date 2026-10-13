@@ -4,30 +4,39 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/go-redis/redis/v8"
 	"golang.org/x/sync/singleflight"
 )
 
 const (
-	codexRadarPublicEndpoint = "https://codexradar.com/api/radar-bench-score"
-	codexRadarSourceURL      = "https://codexradar.com/"
-	codexRadarScoreVersion   = "radar-bench-v2-150"
-	codexRadarCacheTTL       = 10 * time.Minute
-	codexRadarStaleTTL       = 24 * time.Hour
-	codexRadarRetryDelay     = time.Minute
-	codexRadarHTTPTimeout    = 15 * time.Second
-	codexRadarRefreshTimeout = 60 * time.Second
-	codexRadarConcurrency    = 4
+	codexRadarPublicEndpoint   = "https://codexradar.com/api/radar-bench-score"
+	codexRadarSourceURL        = "https://codexradar.com/"
+	codexRadarScoreVersion     = "radar-bench-v2-150"
+	codexRadarCacheTTL         = 10 * time.Minute
+	codexRadarStaleTTL         = 24 * time.Hour
+	codexRadarRetryDelay       = time.Minute
+	codexRadarHTTPTimeout      = 15 * time.Second
+	codexRadarRefreshTimeout   = 60 * time.Second
+	codexRadarConcurrency      = 4
+	codexRadarPointAttempts    = 2
+	codexRadarPointRetryWait   = 500 * time.Millisecond
+	codexRadarStoreTimeout     = 2 * time.Second
+	codexRadarSnapshotKey      = "cmsg:codex-radar:radar-bench-v2-150:four-models:v1"
+	codexRadarMaxSnapshotBytes = 128 << 10
 	// Summaries replace the old multi-megabyte dataset. Limit both the wire
 	// and decoded body to protect this low-resource gateway.
 	codexRadarMaxBodyBytes = 1 << 20
@@ -114,6 +123,36 @@ type codexRadarCacheEntry struct {
 	Overview CodexRadarOverview
 	Fetched  time.Time
 }
+
+// Persist the validated source points, not presentation fields. On restore we
+// rebuild the overview and check the same complete-catalog/benchmark contract.
+type codexRadarSnapshot struct {
+	Fetched time.Time               `json:"fetched_at"`
+	Points  []codexRadarSourcePoint `json:"points"`
+}
+type codexRadarSnapshotStore interface {
+	Load(context.Context) ([]byte, error)
+	Save(context.Context, []byte, time.Duration) error
+}
+type codexRadarRedisStore struct{}
+
+func (codexRadarRedisStore) Load(ctx context.Context) ([]byte, error) {
+	if !common.RedisEnabled || common.RDB == nil {
+		return nil, nil
+	}
+	data, err := common.RDB.Get(ctx, codexRadarSnapshotKey).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return nil, nil
+	}
+	return data, err
+}
+func (codexRadarRedisStore) Save(ctx context.Context, data []byte, ttl time.Duration) error {
+	if !common.RedisEnabled || common.RDB == nil {
+		return nil
+	}
+	return common.RDB.Set(ctx, codexRadarSnapshotKey, data, ttl).Err()
+}
+
 type codexRadarProvider struct {
 	endpoint           string
 	client             *http.Client
@@ -124,13 +163,20 @@ type codexRadarProvider struct {
 	retryAfter         time.Time
 	lastError          error
 	group              singleflight.Group
+	store              codexRadarSnapshotStore
+	storeLoaded        bool // Accessed only by the serialized singleflight refresh.
+	pointRetryWait     time.Duration
 }
 
 func newCodexRadarProvider(endpoint string, client *http.Client) *codexRadarProvider {
-	return &codexRadarProvider{endpoint: endpoint, client: client, cacheTTL: codexRadarCacheTTL, staleTTL: codexRadarStaleTTL, now: time.Now}
+	return &codexRadarProvider{endpoint: endpoint, client: client, cacheTTL: codexRadarCacheTTL, staleTTL: codexRadarStaleTTL, now: time.Now, pointRetryWait: codexRadarPointRetryWait}
 }
 
-var defaultCodexRadarProvider = newCodexRadarProvider(codexRadarPublicEndpoint, &http.Client{Timeout: codexRadarHTTPTimeout})
+var defaultCodexRadarProvider = func() *codexRadarProvider {
+	provider := newCodexRadarProvider(codexRadarPublicEndpoint, &http.Client{Timeout: codexRadarHTTPTimeout})
+	provider.store = codexRadarRedisStore{}
+	return provider
+}()
 
 func GetCodexRadarOverview(ctx context.Context) (CodexRadarOverview, error) {
 	return defaultCodexRadarProvider.Get(ctx)
@@ -145,6 +191,10 @@ func (provider *codexRadarProvider) Get(ctx context.Context) (CodexRadarOverview
 	}
 	result := provider.group.DoChan("overview", func() (interface{}, error) {
 		now := provider.now()
+		if !provider.storeLoaded {
+			provider.storeLoaded = true
+			provider.restoreSnapshot(context.WithoutCancel(ctx), now)
+		}
 		if overview, ok := provider.cachedOverview(now, false); ok {
 			return overview, nil
 		}
@@ -161,11 +211,11 @@ func (provider *codexRadarProvider) Get(ctx context.Context) (CodexRadarOverview
 		// Callers can leave immediately; the refresh has its own timeout.
 		refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), codexRadarRefreshTimeout)
 		defer cancel()
-		overview, err := provider.fetch(refreshCtx)
+		overview, points, err := provider.fetch(refreshCtx)
 		now = provider.now()
 		if err != nil {
 			provider.mu.Lock()
-			provider.retryAfter, provider.lastError = now.Add(codexRadarRetryDelay), err
+			provider.retryAfter, provider.lastError = now.Add(CodexRadarRetryDelay(err)), err
 			provider.mu.Unlock()
 			if stale, ok := provider.cachedOverview(now, true); ok {
 				return stale, nil
@@ -177,6 +227,7 @@ func (provider *codexRadarProvider) Get(ctx context.Context) (CodexRadarOverview
 		provider.cache = &codexRadarCacheEntry{Overview: overview, Fetched: now}
 		provider.retryAfter, provider.lastError = time.Time{}, nil
 		provider.mu.Unlock()
+		provider.saveSnapshot(context.WithoutCancel(ctx), codexRadarSnapshot{Fetched: now, Points: points})
 		return overview, nil
 	})
 	select {
@@ -191,6 +242,52 @@ func (provider *codexRadarProvider) Get(ctx context.Context) (CodexRadarOverview
 			return CodexRadarOverview{}, fmt.Errorf("unexpected codex radar cache result")
 		}
 		return overview, nil
+	}
+}
+
+func (provider *codexRadarProvider) restoreSnapshot(ctx context.Context, now time.Time) {
+	if provider.store == nil {
+		return
+	}
+	storeCtx, cancel := context.WithTimeout(ctx, codexRadarStoreTimeout)
+	defer cancel()
+	data, err := provider.store.Load(storeCtx)
+	if err != nil {
+		common.SysLog("Codex Radar snapshot restore failed; continuing with live collection")
+		return
+	}
+	if len(data) == 0 {
+		return
+	}
+	var snapshot codexRadarSnapshot
+	if len(data) > codexRadarMaxSnapshotBytes || common.Unmarshal(data, &snapshot) != nil || snapshot.Fetched.IsZero() || snapshot.Fetched.After(now) || now.Sub(snapshot.Fetched) > provider.staleTTL {
+		common.SysLog("Codex Radar ignored an invalid or expired snapshot")
+		return
+	}
+	overview, err := buildCodexRadarOverview(snapshot.Points)
+	if err != nil {
+		common.SysLog("Codex Radar ignored a snapshot with an incompatible catalog")
+		return
+	}
+	overview.FetchedAt = snapshot.Fetched.UTC().Format(time.RFC3339)
+	provider.mu.Lock()
+	provider.cache = &codexRadarCacheEntry{Overview: overview, Fetched: snapshot.Fetched}
+	provider.mu.Unlock()
+}
+
+func (provider *codexRadarProvider) saveSnapshot(ctx context.Context, snapshot codexRadarSnapshot) {
+	if provider.store == nil {
+		return
+	}
+	data, err := common.Marshal(snapshot)
+	if err != nil || len(data) > codexRadarMaxSnapshotBytes {
+		common.SysLog("Codex Radar snapshot encoding failed; keeping the in-memory result")
+		return
+	}
+	storeCtx, cancel := context.WithTimeout(ctx, codexRadarStoreTimeout)
+	defer cancel()
+	if err := provider.store.Save(storeCtx, data, provider.staleTTL); err != nil {
+		common.SysLog("Codex Radar snapshot persistence failed; keeping the in-memory result")
 	}
 }
 func (provider *codexRadarProvider) cachedOverview(now time.Time, allowStale bool) (CodexRadarOverview, bool) {
@@ -208,7 +305,7 @@ func (provider *codexRadarProvider) cachedOverview(now time.Time, allowStale boo
 	return CodexRadarOverview{}, false
 }
 
-func (provider *codexRadarProvider) fetch(ctx context.Context) (CodexRadarOverview, error) {
+func (provider *codexRadarProvider) fetch(ctx context.Context) (CodexRadarOverview, []codexRadarSourcePoint, error) {
 	total := len(codexRadarModels) * len(codexRadarEfforts)
 	points := make([]codexRadarSourcePoint, total)
 	errors := make([]error, total)
@@ -223,6 +320,10 @@ func (provider *codexRadarProvider) fetch(ctx context.Context) (CodexRadarOvervi
 		go func() {
 			defer workers.Done()
 			for index := range jobs {
+				if ctx.Err() != nil {
+					errors[index] = ctx.Err()
+					continue
+				}
 				model := codexRadarModels[index/len(codexRadarEfforts)].Model
 				effort := codexRadarEfforts[index%len(codexRadarEfforts)]
 				points[index], errors[index] = provider.fetchPoint(ctx, model, effort)
@@ -231,15 +332,97 @@ func (provider *codexRadarProvider) fetch(ctx context.Context) (CodexRadarOvervi
 	}
 	workers.Wait()
 	// Never replace a complete cached snapshot with a silently partial one.
+	var failure error
 	for index, err := range errors {
 		if err != nil {
-			return CodexRadarOverview{}, fmt.Errorf("codex radar %s/%s: %w", codexRadarModels[index/len(codexRadarEfforts)].Model, codexRadarEfforts[index%len(codexRadarEfforts)], err)
+			// Preserve the longest upstream cooldown when more than one point
+			// fails, even if an earlier point failed with a generic timeout.
+			if failure == nil || CodexRadarRetryDelay(err) > CodexRadarRetryDelay(failure) {
+				failure = fmt.Errorf("codex radar %s/%s: %w", codexRadarModels[index/len(codexRadarEfforts)].Model, codexRadarEfforts[index%len(codexRadarEfforts)], err)
+			}
 		}
 	}
-	return buildCodexRadarOverview(points)
+	if failure != nil {
+		return CodexRadarOverview{}, nil, failure
+	}
+	overview, err := buildCodexRadarOverview(points)
+	return overview, points, err
 }
 
 func (provider *codexRadarProvider) fetchPoint(ctx context.Context, model, effort string) (codexRadarSourcePoint, error) {
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return codexRadarSourcePoint{}, err
+		}
+		point, err := provider.fetchPointOnce(ctx, model, effort)
+		if ctx.Err() != nil {
+			return codexRadarSourcePoint{}, ctx.Err()
+		}
+		if err == nil || attempt+1 >= codexRadarPointAttempts || !retryableCodexRadarError(err) {
+			return point, err
+		}
+		wait := provider.pointRetryWait
+		var statusErr *codexRadarStatusError
+		if errors.As(err, &statusErr) && statusErr.retryAfter > wait {
+			// Do not violate a long upstream Retry-After or occupy workers for an
+			// unbounded delay; the whole-round backoff will handle this instead.
+			if statusErr.retryAfter > 5*time.Second {
+				return point, err
+			}
+			wait = statusErr.retryAfter
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return codexRadarSourcePoint{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+type codexRadarStatusError struct {
+	status     int
+	retryAfter time.Duration
+}
+
+// CodexRadarRetryDelay also respects a longer upstream cooldown on a failed
+// round. Wrapping the point error must not turn a 120s Retry-After into 60s.
+func CodexRadarRetryDelay(err error) time.Duration {
+	var statusErr *codexRadarStatusError
+	if errors.As(err, &statusErr) && statusErr.retryAfter > codexRadarRetryDelay {
+		return statusErr.retryAfter
+	}
+	return codexRadarRetryDelay
+}
+
+func (err *codexRadarStatusError) Error() string {
+	return fmt.Sprintf("upstream returned status %d", err.status)
+}
+
+func retryableCodexRadarError(err error) bool {
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	var statusErr *codexRadarStatusError
+	if errors.As(err, &statusErr) {
+		return statusErr.status == http.StatusRequestTimeout || statusErr.status == http.StatusTooManyRequests || statusErr.status >= 500 && statusErr.status <= 599
+	}
+	var networkErr net.Error
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) || errors.As(err, &networkErr) && (networkErr.Timeout() || networkErr.Temporary())
+}
+
+func codexRadarRetryAfter(header string, now time.Time) time.Duration {
+	if seconds, err := strconv.ParseInt(header, 10, 32); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if deadline, err := http.ParseTime(header); err == nil && deadline.After(now) {
+		return deadline.Sub(now)
+	}
+	return 0
+}
+
+func (provider *codexRadarProvider) fetchPointOnce(ctx context.Context, model, effort string) (codexRadarSourcePoint, error) {
 	endpoint, err := url.Parse(provider.endpoint)
 	if err != nil {
 		return codexRadarSourcePoint{}, err
@@ -263,7 +446,7 @@ func (provider *codexRadarProvider) fetchPoint(ctx context.Context, model, effor
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return codexRadarSourcePoint{}, fmt.Errorf("upstream returned status %d", resp.StatusCode)
+		return codexRadarSourcePoint{}, &codexRadarStatusError{status: resp.StatusCode, retryAfter: codexRadarRetryAfter(resp.Header.Get("Retry-After"), provider.now())}
 	}
 	if resp.ContentLength > codexRadarMaxBodyBytes {
 		return codexRadarSourcePoint{}, fmt.Errorf("codex radar response exceeds size limit")
