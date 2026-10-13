@@ -4863,6 +4863,8 @@
           "minutes": "{{count}} min",
           "updatedAt": "Updated {{time}}",
           "cached": "· cached data",
+          "cachedDetail": "Live sync is temporarily unavailable. Showing the last complete snapshot and retrying automatically",
+          "recovering": "Retrying automatically. No need to refresh the page",
           "syncedAt": "Synced {{time}}",
           "coverage": "{{count}}/{{total}} tasks covered",
           "gradedRuns": "{{count}} graded",
