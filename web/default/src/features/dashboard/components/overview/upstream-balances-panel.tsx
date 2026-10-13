@@ -241,6 +241,10 @@ export function UpstreamBalancesPanel() {
   const kimi = balancesQuery.data?.kimi
   const deepSeek = balancesQuery.data?.deepseek
   const asxs = balancesQuery.data?.asxs
+  const pool = balancesQuery.data?.daily_quota_pool
+  const gemini = pool?.group_breakdown?.find(
+    (group) => group.source === 'gemini_cpa_subscription_estimate'
+  )
   const noChannel = t('No active channel')
   const waiting = t('Waiting for balance sync')
   const unavailable = t('Balance temporarily unavailable')
@@ -254,6 +258,23 @@ export function UpstreamBalancesPanel() {
         </p>
       </div>
       <div className='grid gap-2'>
+        {pool && (
+          <BalanceRow
+            name={t('Total available pool')}
+            caption={
+              pool.estimated
+                ? t('Includes estimated subscription quota')
+                : t('Shared upstream balance')
+            }
+            amount={pool.remaining_usd}
+            currency='USD'
+            updatedAt={pool.updated_at}
+            unavailableText={unavailable}
+            partial={pool.partial}
+            loading={balancesQuery.isPending}
+            tone='text-foreground'
+          />
+        )}
         <BalanceRow
           name='ASXS'
           caption={t('Total daily subscription balance')}
@@ -303,6 +324,19 @@ export function UpstreamBalancesPanel() {
           loading={balancesQuery.isPending}
           tone='text-cyan-700 dark:text-cyan-300'
         />
+        {gemini && (
+          <BalanceRow
+            name='Gemini CPA'
+            caption={t('Estimated subscription quota in USD')}
+            amount={gemini.remaining_usd}
+            currency='USD'
+            updatedAt={gemini.updated_at}
+            unavailableText={waiting}
+            partial={gemini.partial}
+            loading={balancesQuery.isPending}
+            tone='text-blue-700 dark:text-blue-300'
+          />
+        )}
       </div>
     </div>
   )
