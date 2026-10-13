@@ -104,7 +104,7 @@ func nativeResponsesItemKey(item map[string]any) string {
 
 // DeepSeek advertises function tools. Convert Codex custom call history to
 // matching function call pairs before replaying the stateless transcript.
-func normalizeNativeResponsesInputForUpstream(request dto.OpenAIResponsesRequest) (dto.OpenAIResponsesRequest, error) {
+func normalizeNativeResponsesInputForUpstream(request dto.OpenAIResponsesRequest, originalTools ...map[string]nativeResponseTool) (dto.OpenAIResponsesRequest, error) {
 	inputItems, err := normalizeResponsesInput(request.Input)
 	if err != nil {
 		return request, err
@@ -119,9 +119,25 @@ func normalizeNativeResponsesInputForUpstream(request dto.OpenAIResponsesRequest
 		filtered = append(filtered, item)
 	}
 	inputItems = filtered
+	toolMap := buildNativeResponsesToolMap(request.GetToolsMap())
+	appendNativeResponsesInputTools(toolMap, request.Input)
+	if len(originalTools) > 0 && originalTools[0] != nil {
+		toolMap = originalTools[0]
+	}
 	functionCallIDs := make(map[string]struct{})
 	for _, item := range inputItems {
 		itemType := common.Interface2String(item["type"])
+		if isResponsesToolCall(item) {
+			name := nativeResponsesToolNameForUpstream(item, toolMap)
+			if name != common.Interface2String(item["name"]) {
+				item["name"] = name
+				changed = true
+			}
+			if _, exists := item["namespace"]; exists {
+				delete(item, "namespace")
+				changed = true
+			}
+		}
 		if itemType == "function_call" {
 			if callID := toolCallID(item); callID != "" {
 				functionCallIDs[callID] = struct{}{}
@@ -168,8 +184,9 @@ func normalizeNativeResponsesInputForUpstream(request dto.OpenAIResponsesRequest
 }
 
 // DeepSeek's stateless Responses API requires each tool result directly after
-// its call. Codex may place an assistant message between the two when it sends
-// the complete transcript, so pair them without changing their call IDs.
+// its call. Codex may place an assistant preamble between the call and result.
+// Keep that preamble in the generating assistant turn, before the call: placing
+// it after the result creates a new assistant turn without its reasoning_text.
 func pairNativeResponsesToolOutputs(items []map[string]any) ([]map[string]any, bool) {
 	outputsByCall := make(map[string][]int)
 	for index, item := range items {
@@ -180,12 +197,45 @@ func pairNativeResponsesToolOutputs(items []map[string]any) ([]map[string]any, b
 		}
 	}
 
+	commentaryBeforeCall := make(map[int][]int)
+	relocated := make([]bool, len(items))
+	for index, item := range items {
+		if !isResponsesToolCall(item) {
+			continue
+		}
+		for _, outputIndex := range outputsByCall[toolCallID(item)] {
+			if outputIndex <= index {
+				continue
+			}
+			for between := index + 1; between < outputIndex; between++ {
+				candidate := items[between]
+				// Do not move commentary across a user turn, new thinking, or
+				// a result already available when that commentary was generated.
+				if common.Interface2String(candidate["type"]) == "reasoning" ||
+					isResponsesToolOutput(candidate) ||
+					common.Interface2String(candidate["role"]) == "user" {
+					break
+				}
+				if common.Interface2String(candidate["role"]) == "assistant" &&
+					!isResponsesToolCall(candidate) && !relocated[between] {
+					commentaryBeforeCall[index] = append(commentaryBeforeCall[index], between)
+					relocated[between] = true
+				}
+			}
+			break
+		}
+	}
+
 	paired := make([]bool, len(items))
 	ordered := make([]map[string]any, 0, len(items))
 	changed := false
 	for index, item := range items {
-		if paired[index] {
+		if paired[index] || relocated[index] {
 			continue
+		}
+		for _, commentaryIndex := range commentaryBeforeCall[index] {
+			ordered = append(ordered, items[commentaryIndex])
+			changed = true
 		}
 		ordered = append(ordered, item)
 		if !isResponsesToolCall(item) {

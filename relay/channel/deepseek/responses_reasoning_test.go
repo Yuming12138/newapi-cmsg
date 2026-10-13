@@ -304,11 +304,11 @@ func TestNativeReasoningAdaptorStatelessToolContinuation(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, items, 4)
 	require.Equal(t, "must replay this exact original", nativeReasoningTestText(t, items[0]))
-	require.Equal(t, "function_call", items[1]["type"])
-	require.JSONEq(t, `{"input":"text(1)"}`, items[1]["arguments"].(string))
-	require.Equal(t, "function_call_output", items[2]["type"])
-	require.Equal(t, "call_1", items[2]["call_id"])
-	require.Equal(t, "assistant", items[3]["role"])
+	require.Equal(t, "assistant", items[1]["role"])
+	require.Equal(t, "function_call", items[2]["type"])
+	require.JSONEq(t, `{"input":"text(1)"}`, items[2]["arguments"].(string))
+	require.Equal(t, "function_call_output", items[3]["type"])
+	require.Equal(t, "call_1", items[3]["call_id"])
 }
 
 func TestNativeReasoningCacheScopeIsolation(t *testing.T) {

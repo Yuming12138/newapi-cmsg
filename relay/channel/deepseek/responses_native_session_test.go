@@ -124,10 +124,71 @@ func TestNormalizeNativeResponsesInputPairsSeparatedCodexToolOutput(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, items, 4)
 	require.Equal(t, "reasoning", items[0]["type"])
+	require.Equal(t, "message", items[1]["type"])
+	require.Equal(t, "I used the tool.", items[1]["content"])
+	require.Equal(t, "function_call", items[2]["type"])
+	require.Equal(t, "function_call_output", items[3]["type"])
+	require.Equal(t, "call_exec", items[3]["call_id"])
+}
+
+func TestNormalizeNativeResponsesInputKeepsCodexPreambleInToolTurn(t *testing.T) {
+	// The actual desktop transcript has no reasoning item, a DSML-derived
+	// custom call, then its preamble, then the tool result. DeepSeek accepts
+	// message/call/result but rejects call/result/message in thinking mode.
+	request := dto.OpenAIResponsesRequest{Input: json.RawMessage(`[
+		{"type":"custom_tool_call","call_id":"call_exec","name":"exec","input":"text(1)"},
+		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will inspect the page."}]},
+		{"type":"custom_tool_call_output","call_id":"call_exec","output":"1"}
+	]`)}
+	got, err := normalizeNativeResponsesInputForUpstream(request)
+	require.NoError(t, err)
+	items, err := normalizeResponsesInput(got.Input)
+	require.NoError(t, err)
+	require.Len(t, items, 3)
+	require.Equal(t, "message", items[0]["type"])
 	require.Equal(t, "function_call", items[1]["type"])
 	require.Equal(t, "function_call_output", items[2]["type"])
+	require.Equal(t, "call_exec", items[1]["call_id"])
 	require.Equal(t, "call_exec", items[2]["call_id"])
-	require.Equal(t, "message", items[3]["type"])
+	// Replaying an already normalized transcript must be stable.
+	again, err := normalizeNativeResponsesInputForUpstream(got)
+	require.NoError(t, err)
+	require.Equal(t, got.Input, again.Input)
+}
+
+func TestPairNativeResponsesPreambleBeforeParallelTools(t *testing.T) {
+	items := []map[string]any{
+		{"type": "reasoning", "content": []any{map[string]any{"type": "reasoning_text", "text": "original"}}},
+		{"type": "function_call", "call_id": "call_1"},
+		{"type": "function_call", "call_id": "call_2"},
+		{"type": "message", "role": "assistant", "content": "Checking both."},
+		{"type": "function_call_output", "call_id": "call_1"},
+		{"type": "function_call_output", "call_id": "call_2"},
+	}
+	ordered, changed := pairNativeResponsesToolOutputs(items)
+	require.True(t, changed)
+	require.Len(t, ordered, len(items))
+	require.Equal(t, items[0], ordered[0])
+	require.Equal(t, items[3], ordered[1])
+	require.Equal(t, []string{"call_1", "call_1", "call_2", "call_2"}, []string{
+		toolCallID(ordered[2]), toolCallID(ordered[3]), toolCallID(ordered[4]), toolCallID(ordered[5]),
+	})
+}
+
+func TestPairNativeResponsesDoesNotMoveNewAssistantTurn(t *testing.T) {
+	for _, boundary := range []map[string]any{
+		{"type": "reasoning", "content": []any{map[string]any{"type": "reasoning_text", "text": "new thought"}}},
+		{"type": "message", "role": "user", "content": "new input"},
+		{"type": "function_call_output", "call_id": "call_other", "output": "available result"},
+	} {
+		commentary := map[string]any{"type": "message", "role": "assistant", "content": "New update."}
+		items := []map[string]any{{"type": "function_call", "call_id": "call_1"}, boundary, commentary,
+			{"type": "function_call_output", "call_id": "call_1", "output": "1"}}
+		ordered, _ := pairNativeResponsesToolOutputs(items)
+		require.Equal(t, items[0], ordered[0])
+		require.Equal(t, boundary, ordered[2])
+		require.Equal(t, commentary, ordered[3])
+	}
 }
 
 func TestPairNativeResponsesToolOutputsPreservesMultipleCallIDs(t *testing.T) {

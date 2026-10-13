@@ -189,11 +189,13 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	}
 	setNativeResponsesToolMapForRequest(c, request)
 	setNativeResponsesRequest(c, request)
+	originalTools := buildNativeResponsesToolMap(request.GetToolsMap())
+	appendNativeResponsesInputTools(originalTools, request.Input)
 	request, err = normalizeNativeResponsesToolsForUpstream(request)
 	if err != nil {
 		return nil, err
 	}
-	request, err = normalizeNativeResponsesInputForUpstream(request)
+	request, err = normalizeNativeResponsesInputForUpstream(request, originalTools)
 	if err != nil {
 		return nil, err
 	}
