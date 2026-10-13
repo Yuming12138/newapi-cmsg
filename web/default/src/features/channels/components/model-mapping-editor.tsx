@@ -16,8 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Code, Table, Plus, Trash2 } from 'lucide-react'
+import { nanoid } from 'nanoid'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -36,6 +37,26 @@ type MappingRow = {
   to: string
 }
 
+function parseJsonToRows(json: string): MappingRow[] | null {
+  try {
+    if (!json.trim()) {
+      return []
+    }
+    const parsed: unknown = JSON.parse(json)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null
+    }
+    return Object.entries(parsed).map(([from, to]) => ({
+      id: nanoid(),
+      from,
+      to: String(to),
+    }))
+  } catch {
+    // Invalid JSON, keep the last valid rows while the user is editing.
+    return null
+  }
+}
+
 export function ModelMappingEditor({
   value,
   onChange,
@@ -43,35 +64,33 @@ export function ModelMappingEditor({
 }: ModelMappingEditorProps) {
   const { t } = useTranslation()
   const [mode, setMode] = useState<'visual' | 'json'>('visual')
-  const [rows, setRows] = useState<MappingRow[]>([])
+  const [rows, setRows] = useState<MappingRow[]>(
+    () => parseJsonToRows(value) ?? []
+  )
   const [jsonValue, setJsonValue] = useState(value)
+  const syncedValueRef = useRef(value)
 
-  const parseJsonToRows = (json: string) => {
-    try {
-      if (!json.trim()) {
-        setRows([])
-        return
-      }
-      const parsed = JSON.parse(json)
-      const newRows: MappingRow[] = Object.entries(parsed).map(
-        ([from, to], index) => ({
-          id: `${Date.now()}-${index}`,
-          from,
-          to: String(to),
-        })
-      )
-      setRows(newRows)
-    } catch (_error) {
-      // Invalid JSON, keep current rows
-    }
-  }
-
-  // Parse JSON to rows when value changes externally
+  // A controlled form echoes our own changes back through value. Do not parse
+  // that echo: rebuilding rows loses input focus and unfinished/blank drafts.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (value === syncedValueRef.current) {
+      return
+    }
+    syncedValueRef.current = value
     setJsonValue(value)
-    parseJsonToRows(value)
+    const parsedRows = parseJsonToRows(value)
+    if (parsedRows !== null) {
+      // A real external form reset replaces drafts; local echoes return above.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setRows(parsedRows)
+    }
   }, [value])
+
+  const publishJson = (json: string) => {
+    syncedValueRef.current = json
+    setJsonValue(json)
+    onChange(json)
+  }
 
   const convertRowsToJson = (updatedRows: MappingRow[]): string => {
     if (updatedRows.length === 0) {
@@ -88,20 +107,18 @@ export function ModelMappingEditor({
 
   const handleAddRow = () => {
     const newRow: MappingRow = {
-      id: `${Date.now()}`,
+      id: nanoid(),
       from: '',
       to: '',
     }
-    const updatedRows = [...rows, newRow]
-    setRows(updatedRows)
+    setRows((currentRows) => [...currentRows, newRow])
   }
 
   const handleDeleteRow = (id: string) => {
     const updatedRows = rows.filter((row) => row.id !== id)
     setRows(updatedRows)
     const json = convertRowsToJson(updatedRows)
-    setJsonValue(json)
-    onChange(json)
+    publishJson(json)
   }
 
   const handleRowChange = (
@@ -114,14 +131,15 @@ export function ModelMappingEditor({
     )
     setRows(updatedRows)
     const json = convertRowsToJson(updatedRows)
-    setJsonValue(json)
-    onChange(json)
+    publishJson(json)
   }
 
   const handleJsonChange = (newJson: string) => {
-    setJsonValue(newJson)
-    onChange(newJson)
-    parseJsonToRows(newJson)
+    publishJson(newJson)
+    const parsedRows = parseJsonToRows(newJson)
+    if (parsedRows !== null) {
+      setRows(parsedRows)
+    }
   }
 
   const handleFillTemplate = () => {
@@ -130,21 +148,18 @@ export function ModelMappingEditor({
       null,
       2
     )
-    setJsonValue(template)
-    onChange(template)
-    parseJsonToRows(template)
+    publishJson(template)
+    setRows(parseJsonToRows(template) ?? [])
   }
 
   const toggleMode = () => {
     if (mode === 'visual') {
       // Switching to JSON mode: sync rows to JSON
       const json = convertRowsToJson(rows)
-      setJsonValue(json)
-      onChange(json)
+      publishJson(json)
       setMode('json')
     } else {
-      // Switching to visual mode: sync JSON to rows
-      parseJsonToRows(jsonValue)
+      // JSON edits already update rows. Keep drafts if JSON was not edited.
       setMode('visual')
     }
   }
