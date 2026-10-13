@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { TimeGranularity } from '@/lib/time'
+import type { DailyQuotaPoolStatus } from '@/features/auth/types'
 
 // ============================================================================
 // Quota & Usage Data Types
@@ -90,6 +91,7 @@ export interface DashboardProviderBalances {
   }
   kimi: ProviderAccountBalance
   deepseek: ProviderAccountBalance
+  daily_quota_pool?: DailyQuotaPoolStatus
 }
 
 // ============================================================================

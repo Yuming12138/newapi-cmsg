@@ -26,9 +26,10 @@ type ProviderAccountBalance struct {
 }
 
 type DashboardProviderBalances struct {
-	ASXS     ASXSAccountDailyBalance `json:"asxs"`
-	Kimi     ProviderAccountBalance  `json:"kimi"`
-	DeepSeek ProviderAccountBalance  `json:"deepseek"`
+	ASXS           ASXSAccountDailyBalance `json:"asxs"`
+	Kimi           ProviderAccountBalance  `json:"kimi"`
+	DeepSeek       ProviderAccountBalance  `json:"deepseek"`
+	DailyQuotaPool *DailyQuotaPoolSummary  `json:"daily_quota_pool,omitempty"`
 }
 
 func GetDashboardProviderBalances(ctx context.Context) (DashboardProviderBalances, error) {
@@ -45,6 +46,10 @@ func GetDashboardProviderBalances(ctx context.Context) (DashboardProviderBalance
 		balances.ASXS = unavailableASXSAccountDailyBalance()
 	} else {
 		balances.ASXS = asxs
+	}
+	pool, handled, poolErr := GetDailyQuotaPoolSnapshot(ctx)
+	if poolErr == nil && handled {
+		balances.DailyQuotaPool = &pool
 	}
 	return balances, nil
 }

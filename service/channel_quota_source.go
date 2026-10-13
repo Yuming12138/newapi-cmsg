@@ -102,32 +102,35 @@ type DailyQuotaPoolSummary struct {
 }
 
 type DailyQuotaPoolGroup struct {
-	Source                      string  `json:"source"`
-	Group                       string  `json:"group"`
-	ChannelCount                int     `json:"channel_count"`
-	TotalUSD                    float64 `json:"total_usd"`
-	UsedUSD                     float64 `json:"used_usd"`
-	RemainingUSD                float64 `json:"remaining_usd"`
-	RemainingQuota              int64   `json:"remaining_quota"`
-	NormalTotalUSD              float64 `json:"normal_total_usd,omitempty"`
-	NormalUsedUSD               float64 `json:"normal_used_usd,omitempty"`
-	NormalRemainingUSD          float64 `json:"normal_remaining_usd"`
-	NormalRemainingQuota        int64   `json:"normal_remaining_quota"`
-	UpdatedAt                   int64   `json:"updated_at"`
-	Available                   bool    `json:"available"`
-	Estimated                   bool    `json:"estimated"`
-	Partial                     bool    `json:"partial"`
-	ReserveConfigured           bool    `json:"reserve_configured,omitempty"`
-	ReserveActive               bool    `json:"reserve_active,omitempty"`
-	ReserveRemainingUSD         float64 `json:"reserve_remaining_usd,omitempty"`
-	ReservePercent              float64 `json:"reserve_percent,omitempty"`
-	ReserveRemainingPercent     float64 `json:"reserve_remaining_percent,omitempty"`
-	ReserveTotalUSD             float64 `json:"reserve_total_usd,omitempty"`
-	ReserveBucketRemainingUSD   float64 `json:"reserve_bucket_remaining_usd,omitempty"`
-	ReserveTotalQuota           int64   `json:"reserve_total_quota,omitempty"`
-	ReserveBucketRemainingQuota int64   `json:"reserve_bucket_remaining_quota,omitempty"`
-	ForceUnlockActive           bool    `json:"force_unlock_active,omitempty"`
-	ForceUnlockRemainingUSD     float64 `json:"force_unlock_remaining_usd,omitempty"`
+	Source                      string             `json:"source"`
+	Group                       string             `json:"group"`
+	ChannelCount                int                `json:"channel_count"`
+	TotalUSD                    float64            `json:"total_usd"`
+	UsedUSD                     float64            `json:"used_usd"`
+	RemainingUSD                float64            `json:"remaining_usd"`
+	RemainingQuota              int64              `json:"remaining_quota"`
+	NormalTotalUSD              float64            `json:"normal_total_usd,omitempty"`
+	NormalUsedUSD               float64            `json:"normal_used_usd,omitempty"`
+	NormalRemainingUSD          float64            `json:"normal_remaining_usd"`
+	NormalRemainingQuota        int64              `json:"normal_remaining_quota"`
+	UpdatedAt                   int64              `json:"updated_at"`
+	Available                   bool               `json:"available"`
+	Estimated                   bool               `json:"estimated"`
+	AccountCount                int                `json:"account_count,omitempty"`
+	EstimationBasis             string             `json:"estimation_basis,omitempty"`
+	EstimateRates               map[string]float64 `json:"estimate_rates,omitempty"`
+	Partial                     bool               `json:"partial"`
+	ReserveConfigured           bool               `json:"reserve_configured,omitempty"`
+	ReserveActive               bool               `json:"reserve_active,omitempty"`
+	ReserveRemainingUSD         float64            `json:"reserve_remaining_usd,omitempty"`
+	ReservePercent              float64            `json:"reserve_percent,omitempty"`
+	ReserveRemainingPercent     float64            `json:"reserve_remaining_percent,omitempty"`
+	ReserveTotalUSD             float64            `json:"reserve_total_usd,omitempty"`
+	ReserveBucketRemainingUSD   float64            `json:"reserve_bucket_remaining_usd,omitempty"`
+	ReserveTotalQuota           int64              `json:"reserve_total_quota,omitempty"`
+	ReserveBucketRemainingQuota int64              `json:"reserve_bucket_remaining_quota,omitempty"`
+	ForceUnlockActive           bool               `json:"force_unlock_active,omitempty"`
+	ForceUnlockRemainingUSD     float64            `json:"force_unlock_remaining_usd,omitempty"`
 	// cpaIdentityKey is kept internal so the same CPA account exposed through
 	// multiple channel rows is counted only once in the spendable pool.
 	cpaIdentityKey string
@@ -143,7 +146,7 @@ func GetDailyQuotaPoolSnapshot(ctx context.Context) (DailyQuotaPoolSummary, bool
 	}
 	var channels []*model.Channel
 	if err := model.DB.WithContext(ctx).
-		Select("id", "name", "status", "balance", "balance_updated_time", "other_info", "group").
+		Select("id", "name", "status", "balance", "balance_updated_time", "other_info", "group", "key", "type", "base_url", "models", "model_mapping").
 		Order("id asc").
 		Find(&channels).Error; err != nil {
 		return DailyQuotaPoolSummary{}, true, err
@@ -217,6 +220,20 @@ func summarizeDailyQuotaPool(asxs ChannelBudgetPoolSummary, asxsHandled bool, ch
 			summary.FailedChannelCount++
 		}
 	}
+	for _, provider := range []func([]*model.Channel) (DailyQuotaPoolGroup, bool){geminiDailyQuotaPoolGroup, deepSeekDailyQuotaPoolGroup} {
+		group, handled := provider(channels)
+		if !handled {
+			continue
+		}
+		appendDailyQuotaPoolGroup(&summary, &group, quotaPerUSD)
+		groups[group.Group] = struct{}{}
+		if group.Available {
+			summary.AvailableChannelCount += group.ChannelCount
+		}
+		if group.Partial {
+			summary.FailedChannelCount++
+		}
+	}
 	summary.Group = joinQuotaPoolGroups(groups)
 	summary.TotalUSD = roundFloat(summary.TotalUSD, 6)
 	summary.UsedUSD = roundFloat(summary.UsedUSD, 6)
@@ -259,7 +276,7 @@ func appendDailyQuotaPoolGroup(summary *DailyQuotaPoolSummary, group *DailyQuota
 }
 
 func cliproxyCPADailyQuotaPoolGroup(channel *model.Channel) (DailyQuotaPoolGroup, bool) {
-	if channel == nil || cliproxyCPAChannelIsModelQuota(channel) {
+	if channel == nil || IsGeminiCPAChannel(channel) || cliproxyCPAChannelIsModelQuota(channel) {
 		return DailyQuotaPoolGroup{}, false
 	}
 	otherInfo := parseGuardObject(channel.OtherInfo)

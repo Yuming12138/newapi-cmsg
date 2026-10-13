@@ -167,6 +167,9 @@ export interface DailyQuotaPoolGroupStatus {
   updated_at?: number
   available?: boolean
   estimated?: boolean
+  account_count?: number
+  estimation_basis?: string
+  estimate_rates?: Record<string, number>
   partial?: boolean
   reserve_configured?: boolean
   reserve_active?: boolean
