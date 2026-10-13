@@ -999,7 +999,7 @@ func hardDeleteUserAsAdmin(c *gin.Context, id int) error {
 }
 
 func validateAdminCanDeleteUser(c *gin.Context, id int) error {
-	originUser, err := model.GetUserById(id, false)
+	originUser, err := model.GetUserForAdminDeletion(id)
 	if err != nil {
 		return err
 	}
