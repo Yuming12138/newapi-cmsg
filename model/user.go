@@ -431,6 +431,20 @@ func GetUserById(id int, selectAll bool) (*User, error) {
 	return &user, err
 }
 
+// GetUserForAdminDeletion includes soft-deleted users so that an administrator
+// can authorize permanent deletion. Only the fields needed for that permission
+// check are loaded; normal user lookups must continue to exclude deleted users.
+func GetUserForAdminDeletion(id int) (*User, error) {
+	if id <= 0 {
+		return nil, errors.New("id 无效！")
+	}
+	var user User
+	if err := DB.Unscoped().Select("id", "role").First(&user, "id = ?", id).Error; err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 func GetUserIdByAffCode(affCode string) (int, error) {
 	if affCode == "" {
 		return 0, errors.New("affCode 为空！")
