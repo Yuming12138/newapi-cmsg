@@ -170,7 +170,7 @@ func TestPairNativeResponsesPreambleBeforeParallelTools(t *testing.T) {
 	require.Len(t, ordered, len(items))
 	require.Equal(t, items[0], ordered[0])
 	require.Equal(t, items[3], ordered[1])
-	require.Equal(t, []string{"call_1", "call_1", "call_2", "call_2"}, []string{
+	require.Equal(t, []string{"call_1", "call_2", "call_1", "call_2"}, []string{
 		toolCallID(ordered[2]), toolCallID(ordered[3]), toolCallID(ordered[4]), toolCallID(ordered[5]),
 	})
 }
@@ -199,10 +199,70 @@ func TestPairNativeResponsesToolOutputsPreservesMultipleCallIDs(t *testing.T) {
 		{"type": "custom_tool_call_output", "call_id": "call_2"},
 	}
 	ordered, changed := pairNativeResponsesToolOutputs(items)
-	require.True(t, changed)
-	require.Equal(t, []string{"call_1", "call_1", "call_2", "call_2"}, []string{
+	require.False(t, changed)
+	require.Equal(t, []string{"call_1", "call_2", "call_1", "call_2"}, []string{
 		toolCallID(ordered[0]), toolCallID(ordered[1]), toolCallID(ordered[2]), toolCallID(ordered[3]),
 	})
+}
+
+func TestNormalizeNativeResponsesKeepsParallelCallsInOneAssistantTurn(t *testing.T) {
+	// Regression for the desktop request b93ca167: genuine reasoning was
+	// present, but pairing call/result/call/result split its assistant turn.
+	request := dto.OpenAIResponsesRequest{Input: json.RawMessage(`[
+		{"type":"message","role":"user","content":"inspect both"},
+		{"type":"reasoning","id":"rs_parallel","content":[{"type":"reasoning_text","text":"original thinking"}]},
+		{"type":"message","role":"assistant","content":"Checking both."},
+		{"type":"custom_tool_call","call_id":"call_1","name":"exec","input":"text(1)"},
+		{"type":"custom_tool_call","call_id":"call_2","name":"exec","input":"text(2)"},
+		{"type":"custom_tool_call_output","call_id":"call_1","output":"1"},
+		{"type":"custom_tool_call_output","call_id":"call_2","output":"2"}
+	]`)}
+	got, err := normalizeNativeResponsesInputForUpstream(request)
+	require.NoError(t, err)
+	items, err := normalizeResponsesInput(got.Input)
+	require.NoError(t, err)
+	require.Len(t, items, 7)
+	require.Equal(t, "reasoning", items[1]["type"])
+	require.Equal(t, "original thinking", nativeReasoningTestText(t, items[1]))
+	require.Equal(t, "message", items[2]["type"])
+	require.Equal(t, "function_call", items[3]["type"])
+	require.Equal(t, "function_call", items[4]["type"])
+	require.Equal(t, "function_call_output", items[5]["type"])
+	require.Equal(t, "function_call_output", items[6]["type"])
+	require.Equal(t, []string{"call_1", "call_2", "call_1", "call_2"}, []string{
+		toolCallID(items[3]), toolCallID(items[4]), toolCallID(items[5]), toolCallID(items[6]),
+	})
+	again, err := normalizeNativeResponsesInputForUpstream(got)
+	require.NoError(t, err)
+	require.Equal(t, got.Input, again.Input)
+}
+
+func TestPairNativeResponsesParallelResultsPreserveCompletionOrder(t *testing.T) {
+	items := []map[string]any{
+		{"type": "function_call", "call_id": "call_1"},
+		{"type": "function_call", "call_id": "call_2"},
+		{"type": "function_call", "call_id": "call_3"},
+		{"type": "function_call_output", "call_id": "call_3", "output": "3"},
+		{"type": "function_call_output", "call_id": "call_1", "output": "1"},
+		{"type": "function_call_output", "call_id": "call_2", "output": "2"},
+	}
+	ordered, changed := pairNativeResponsesToolOutputs(items)
+	require.False(t, changed)
+	require.Equal(t, items, ordered)
+}
+
+func TestPairNativeResponsesDoesNotMergeSequentialToolTurns(t *testing.T) {
+	items := []map[string]any{
+		{"type": "reasoning", "content": "first thought"},
+		{"type": "function_call", "call_id": "call_1"},
+		{"type": "function_call_output", "call_id": "call_1", "output": "1"},
+		{"type": "reasoning", "content": "second thought"},
+		{"type": "function_call", "call_id": "call_2"},
+		{"type": "function_call_output", "call_id": "call_2", "output": "2"},
+	}
+	ordered, changed := pairNativeResponsesToolOutputs(items)
+	require.False(t, changed)
+	require.Equal(t, items, ordered)
 }
 
 func TestNormalizeNativeResponsesInputLeavesUnchangedRequestShape(t *testing.T) {

@@ -3,6 +3,7 @@ package deepseek
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -183,10 +184,10 @@ func normalizeNativeResponsesInputForUpstream(request dto.OpenAIResponsesRequest
 	return request, nil
 }
 
-// DeepSeek's stateless Responses API requires each tool result directly after
-// its call. Codex may place an assistant preamble between the call and result.
-// Keep that preamble in the generating assistant turn, before the call: placing
-// it after the result creates a new assistant turn without its reasoning_text.
+// DeepSeek's stateless Responses API requires the calls in one assistant turn
+// before that turn's results. Interleaving parallel calls and results creates a
+// new assistant turn without its reasoning_text. Codex may also place a preamble
+// between calls and results; keep it before the generating turn's call batch.
 func pairNativeResponsesToolOutputs(items []map[string]any) ([]map[string]any, bool) {
 	outputsByCall := make(map[string][]int)
 	for index, item := range items {
@@ -227,29 +228,53 @@ func pairNativeResponsesToolOutputs(items []map[string]any) ([]map[string]any, b
 	}
 
 	paired := make([]bool, len(items))
-	ordered := make([]map[string]any, 0, len(items))
-	changed := false
+	order := make([]int, 0, len(items))
 	for index, item := range items {
 		if paired[index] || relocated[index] {
 			continue
 		}
-		for _, commentaryIndex := range commentaryBeforeCall[index] {
-			ordered = append(ordered, items[commentaryIndex])
-			changed = true
-		}
-		ordered = append(ordered, item)
 		if !isResponsesToolCall(item) {
+			order = append(order, index)
 			continue
 		}
-		for _, outputIndex := range outputsByCall[toolCallID(item)] {
-			if outputIndex <= index || paired[outputIndex] {
+		// Consecutive calls (ignoring relocated preambles) belong to the
+		// same assistant output. Keep the entire batch before any result.
+		callIndexes := []int{index}
+		for next := index + 1; next < len(items); next++ {
+			if relocated[next] {
 				continue
 			}
-			ordered = append(ordered, items[outputIndex])
-			paired[outputIndex] = true
-			changed = changed || outputIndex != index+1
-			break
+			if paired[next] || !isResponsesToolCall(items[next]) {
+				break
+			}
+			callIndexes = append(callIndexes, next)
 		}
+		for _, callIndex := range callIndexes {
+			order = append(order, commentaryBeforeCall[callIndex]...)
+		}
+		order = append(order, callIndexes...)
+		outputIndexes := make([]int, 0, len(callIndexes))
+		for _, callIndex := range callIndexes {
+			paired[callIndex] = true
+			for _, outputIndex := range outputsByCall[toolCallID(items[callIndex])] {
+				if outputIndex <= callIndex || paired[outputIndex] {
+					continue
+				}
+				outputIndexes = append(outputIndexes, outputIndex)
+				paired[outputIndex] = true
+				break
+			}
+		}
+		// Concurrent tools can finish in a different order from their calls.
+		// Retain result order and associate each result by its unchanged ID.
+		sort.Ints(outputIndexes)
+		order = append(order, outputIndexes...)
+	}
+	ordered := make([]map[string]any, 0, len(items))
+	changed := false
+	for index, originalIndex := range order {
+		ordered = append(ordered, items[originalIndex])
+		changed = changed || index != originalIndex
 	}
 	return ordered, changed
 }

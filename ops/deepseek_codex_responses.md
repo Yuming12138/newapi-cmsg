@@ -38,6 +38,31 @@ reasoning? → assistant preamble → function_call → function_call_output
 修复把调用与结果之间的调用前说明移到调用之前，并保留调用 ID、说明内容和
 思考原文。不跨用户消息、新思考块或已取得的工具结果搬动说明。
 
+### 同轮并行调用不能拆成多个助手轮次
+
+台式机旧对话 `01a01ffc-a35d-74b0-a2af-f129717c48ed` 于同日再次报错，
+上游请求 ID 为 `b93ca167-a5da-4289-a170-2a842300d841`。生产日志确认
+此次使用用户 2 的 `desktop` 令牌、渠道 11；之前管理员 `admin` 令牌的
+鹈鹕测试成功不代表旧对话中的所有工具组合已被覆盖。
+
+成功响应含完整原始思考、助手说明及两个并行调用，但旧配对逻辑把历史改为：
+
+```text
+reasoning → assistant preamble → call 1 → result 1 → call 2 → result 2
+```
+
+直接重放该响应的原始思考及两个调用，真实上游仍返回相同 400；保持以下
+原生顺序则返回 200：
+
+```text
+reasoning → assistant preamble → call 1 → call 2 → result 1 → result 2
+```
+
+修复保留同轮整个调用批次在结果之前，按 `call_id` 配对并保留结果完成顺序；
+不合并已经被工具结果、新思考或用户消息分隔的调用轮次。没有关闭思考、
+伪造思考或重复思考来绕过上游验证。回归覆盖两个及三个并行调用、逆序结果、
+说明搬动、连续工具轮次和重复规范化。
+
 ### 命名空间中的动态工具
 
 新版 Codex 的 `input.additional_tools.tools` 包含 `namespace`，例如
