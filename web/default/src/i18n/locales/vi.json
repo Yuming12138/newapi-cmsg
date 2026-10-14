@@ -4763,10 +4763,6 @@
           "guardDisabled": "Quota requests are not enabled",
           "guardSettingUnavailable": "Quota request settings are unavailable",
           "invalidUser": "Invalid user information"
-        },
-        "sidebar": {
-          "webChatDescription": "Full web chat interface with files and tools.",
-          "imageGenerationDescription": "Generate and edit images with the GPT Image API."
         }
       }
     },

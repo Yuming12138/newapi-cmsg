@@ -4843,10 +4843,6 @@
           "guardDisabled": "额度申请功能未启用",
           "guardSettingUnavailable": "额度申请设置暂不可用",
           "invalidUser": "用户信息无效"
-        },
-        "sidebar": {
-          "webChatDescription": "支持文件与工具的完整网页对话界面。",
-          "imageGenerationDescription": "使用 GPT Image API 生成或编辑图片。"
         }
       }
     },

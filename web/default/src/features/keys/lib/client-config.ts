@@ -17,16 +17,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-type StatusAddressSource = {
-  [key: string]: unknown
-  server_address?: string | null
-  serverAddress?: string | null
-  data?: {
-    [key: string]: unknown
-    server_address?: string | null
-    serverAddress?: string | null
-  } | null
-} | null | undefined
+type StatusAddressSource =
+  | {
+      [key: string]: unknown
+      server_address?: string | null
+      serverAddress?: string | null
+      data?: {
+        [key: string]: unknown
+        server_address?: string | null
+        serverAddress?: string | null
+      } | null
+    }
+  | null
+  | undefined
+
+export const DEFAULT_CODEX_MODEL = 'gpt-6.1-sol'
+
+type CodexConfigPreset = 'minimal' | 'recommended'
 
 export function isLocalAddress(address: string): boolean {
   try {
@@ -154,15 +161,16 @@ function getCodexModelDefaults(group?: string | null) {
     }
   }
   return {
-    model: 'gpt-5.5',
-    reviewModel: 'gpt-5.5',
+    model: DEFAULT_CODEX_MODEL,
+    reviewModel: DEFAULT_CODEX_MODEL,
   }
 }
 
 export function buildCodexConfigToml(
   serverAddress: string,
   group?: string | null,
-  providerName = 'cmsg'
+  providerName = 'cmsg',
+  preset: CodexConfigPreset = 'recommended'
 ): string {
   const baseUrl = getOpenAIBaseUrl(serverAddress)
   const models = getCodexModelDefaults(group)
@@ -171,11 +179,24 @@ export function buildCodexConfigToml(
     `model = "${models.model}"`,
     `review_model = "${models.reviewModel}"`,
     'model_reasoning_effort = "xhigh"',
-    'disable_response_storage = true',
-    'network_access = "enabled"',
-    'windows_wsl_setup_acknowledged = true',
     'model_context_window = 400000',
     'model_auto_compact_token_limit = 360000',
+    ...(preset === 'recommended'
+      ? [
+          'sandbox_mode = "workspace-write"',
+          'approval_policy = "on-request"',
+          'web_search = "cached"',
+          '',
+          '[history]',
+          'persistence = "save-all"',
+          '',
+          '[tui]',
+          'notifications = true',
+          '',
+          '[sandbox_workspace_write]',
+          'network_access = true',
+        ]
+      : []),
     '',
     `[model_providers.${providerName}]`,
     `name = "${providerName}"`,
