@@ -107,6 +107,41 @@ func TestRestoreNativeReasoningByOutputAnchors(t *testing.T) {
 	}
 }
 
+func TestRestoreNativeReasoningKeepsParallelCallBatchForUpstream(t *testing.T) {
+	useNativeReasoningCache(t)
+	info := nativeReasoningTestInfo()
+	info.UpstreamModelName = "deepseek-flash"
+	outputs := []dto.ResponsesOutput{
+		nativeReasoningTestOutput("rs_parallel", "authentic parallel thought"),
+		{Type: "message", ID: "msg_parallel", Role: "assistant", Content: []dto.ResponsesOutputContent{{Type: "output_text", Text: "Checking both."}}},
+		nativeReasoningTestCall("call_1"),
+		nativeReasoningTestCall("call_2"),
+	}
+	require.NoError(t, rememberNativeResponsesReasoning(info, outputs))
+	// Codex drops the upstream plaintext from replay. Restore it once for
+	// both parallel calls, then retain calls before their results.
+	request := nativeReasoningTestRequest(t,
+		map[string]any{"type": "message", "role": "user", "content": "inspect both"},
+		map[string]any{"type": "message", "id": "msg_parallel", "role": "assistant", "content": "Checking both."},
+		map[string]any{"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+		map[string]any{"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{}"},
+		map[string]any{"type": "function_call_output", "call_id": "call_2", "output": "2"},
+		map[string]any{"type": "function_call_output", "call_id": "call_1", "output": "1"},
+	)
+	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, request)
+	require.NoError(t, err)
+	items, err := normalizeResponsesInput(converted.(dto.OpenAIResponsesRequest).Input)
+	require.NoError(t, err)
+	require.Len(t, items, 7)
+	require.Equal(t, "authentic parallel thought", nativeReasoningTestText(t, items[1]))
+	require.Equal(t, []string{"message", "reasoning", "message", "function_call", "function_call", "function_call_output", "function_call_output"}, []string{
+		common.Interface2String(items[0]["type"]), common.Interface2String(items[1]["type"]), common.Interface2String(items[2]["type"]),
+		common.Interface2String(items[3]["type"]), common.Interface2String(items[4]["type"]), common.Interface2String(items[5]["type"]), common.Interface2String(items[6]["type"]),
+	})
+	require.Equal(t, "call_2", toolCallID(items[5]))
+	require.Equal(t, "call_1", toolCallID(items[6]))
+}
+
 func TestNormalizeForeignReasoningSummaryForDeepSeek(t *testing.T) {
 	useNativeReasoningCache(t)
 	request := nativeReasoningTestRequest(t,
