@@ -16,9 +16,28 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { createFileRoute } from '@tanstack/react-router'
-import { ImageGeneration } from '@/features/image-generation'
+import {
+  buildCodexConfigToml,
+  DEFAULT_CODEX_MODEL,
+} from '../keys/lib/client-config'
 
-export const Route = createFileRoute('/_authenticated/image-generation/')({
-  component: ImageGeneration,
-})
+export { DEFAULT_CODEX_MODEL }
+
+export const API_BASE_URL = 'https://api.cmsg666.xyz/v1'
+export const simpleConfig = buildCodexConfigToml(
+  API_BASE_URL,
+  undefined,
+  'cmsg',
+  'minimal'
+)
+export const recommendedConfig = buildCodexConfigToml(API_BASE_URL)
+
+export const chatApiExample = `curl ${API_BASE_URL}/chat/completions \\
+  -H "Authorization: Bearer 自己的密钥" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${DEFAULT_CODEX_MODEL}",
+    "messages": [
+      {"role": "user", "content": "用三句话说明这个接口怎么用"}
+    ]
+  }'`

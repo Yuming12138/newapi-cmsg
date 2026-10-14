@@ -26,7 +26,7 @@ This repository is CMSG's production fork of <a href="https://github.com/Quantum
 
 ## Project scope
 
-<code>new-api-cmsg</code> brings multiple AI providers, account pools, and protocols behind one operable gateway. In addition to the user, token, group, metering, and channel management inherited from New API, CMSG maintains quota-aware scheduling, CPA account pools, Codex/Claude/Gemini/DeepSeek/Kimi routing and protocol adapters, channel capability tests, Codex Radar, image workflows, and server-side long-context protection.
+<code>new-api-cmsg</code> brings multiple AI providers, account pools, and protocols behind one operable gateway. In addition to the user, token, group, metering, and channel management inherited from New API, CMSG maintains quota-aware scheduling, CPA account pools, Codex/Claude/Gemini/DeepSeek/Kimi routing and protocol adapters, channel capability tests, Codex Radar, and server-side long-context protection.
 
 The repository is designed to:
 
@@ -39,7 +39,7 @@ The repository is designed to:
 
 ## Request path
 
-~~~text
+```text
 Codex / Claude Code / OpenAI-compatible clients
                               |
                               v
@@ -55,26 +55,25 @@ Codex / Claude Code / OpenAI-compatible clients
                  |                          |
                  v                          v
     OpenAI / Claude / Gemini / Kimi    DeepSeek / Kimi / others
-~~~
+```
 
 The current production entry point is <a href="https://api.cmsg666.xyz/">api.cmsg666.xyz</a>, served by the public runtime on <code>cmsg-root</code>.
 
 ## CMSG-maintained capabilities
 
-| Area | Capabilities |
-| --- | --- |
-| Unified protocol entry | OpenAI Responses, Chat Completions, Claude Messages, Gemini, and common OpenAI-compatible requests |
-| Groups and metering | Differentiated groups, usage metering, daily subscription quotas, shared balances, and usage-based upstreams |
-| Quota-aware routing | Balance refresh, low-cost preference, fallback channels, automatic disable/recovery, temporary restriction lifts with a selectable expiry, and billing against the effective upstream model |
-| CPA account pools and quotas | Codex/Claude/Kimi/Antigravity account pools, model-level quotas, subscription windows, reset times, active-account deduplication, cooldown and retries |
-| Codex protocol compatibility | Native DeepSeek Responses plaintext reasoning replay, cross-provider history compatibility, Kimi tool adapters, custom and namespaced tools, and assistant-preamble/tool-result ordering |
-| Reliability | Pre-first-byte retries, per-host HTTP/2 pools, Mihomo node failover, and streaming disconnect cleanup |
+| Area                           | Capabilities                                                                                                                                                                                         |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unified protocol entry         | OpenAI Responses, Chat Completions, Claude Messages, Gemini, and common OpenAI-compatible requests                                                                                                   |
+| Groups and metering            | Differentiated groups, usage metering, daily subscription quotas, shared balances, and usage-based upstreams                                                                                         |
+| Quota-aware routing            | Balance refresh, low-cost preference, fallback channels, automatic disable/recovery, temporary restriction lifts with a selectable expiry, and billing against the effective upstream model          |
+| CPA account pools and quotas   | Codex/Claude/Kimi/Antigravity account pools, model-level quotas, subscription windows, reset times, active-account deduplication, cooldown and retries                                               |
+| Codex protocol compatibility   | Native DeepSeek Responses plaintext reasoning replay, cross-provider history compatibility, Kimi tool adapters, custom and namespaced tools, and assistant-preamble/tool-result ordering             |
+| Reliability                    | Pre-first-byte retries, per-host HTTP/2 pools, Mihomo node failover, and streaming disconnect cleanup                                                                                                |
 | Gemini performance and context | Tool schema caching, linear request assembly, optimized streaming event conversion, final request budget checks, oversized tool-output trimming, and bounded retries for explicit token-limit errors |
-| Channel capability tests | Current canary covers channels 1, 12, and 27; model and reasoning-effort selection, prompts, answers, latency, failure reasons, and animated SVG previews |
-| Codex Radar | Public scores for four Sol/Astra model families, task coverage and cost/latency statistics, failed-point retries, complete Redis snapshots, and automatic frontend recovery |
-| Image workspace | Text-to-image, image generation/editing, one to four references, optional masks, and matching APIs |
-| Observability | Channel usage, custom time windows, request paths, CPA scheduling, reasoning effort, stream state, and network probes |
-| User self-service | Codex desktop/terminal setup, upstream balance overview, and temporary quota requests for low-balance users |
+| Channel capability tests       | Current canary covers channels 1, 12, and 27; model and reasoning-effort selection, prompts, answers, latency, failure reasons, and animated SVG previews                                            |
+| Codex Radar                    | Public scores for four Sol/Astra model families, task coverage and cost/latency statistics, failed-point retries, complete Redis snapshots, and automatic frontend recovery                          |
+| Observability                  | Channel usage, custom time windows, request paths, CPA scheduling, reasoning effort, stream state, and network probes                                                                                |
+| User self-service              | Codex desktop/terminal setup, upstream balance overview, and temporary quota requests for low-balance users                                                                                          |
 
 Use the running instance's model list and channel configuration to find available models and groups.
 
@@ -104,52 +103,51 @@ The CPA Antigravity/Gemini path estimates context budgets on the server. Over-bu
 
 ## Primary APIs
 
-| Purpose | Endpoint |
-| --- | --- |
-| Responses | <code>POST /v1/responses</code>, <code>POST /v1/responses/compact</code> |
-| Chat Completions | <code>POST /v1/chat/completions</code> |
-| Claude Messages | <code>POST /v1/messages</code> |
-| Image generation and editing | <code>POST /v1/images/generations</code>, <code>POST /v1/images/edits</code> |
-| Model discovery | <code>GET /v1/models</code> |
+| Purpose          | Endpoint                                                                 |
+| ---------------- | ------------------------------------------------------------------------ |
+| Responses        | <code>POST /v1/responses</code>, <code>POST /v1/responses/compact</code> |
+| Chat Completions | <code>POST /v1/chat/completions</code>                                   |
+| Claude Messages  | <code>POST /v1/messages</code>                                           |
+| Model discovery  | <code>GET /v1/models</code>                                              |
 
 ## Repository layout
 
-| Path | Purpose |
-| --- | --- |
-| <code>controller/</code>, <code>service/</code>, <code>model/</code> | New API request, business, and data layers |
-| <code>relay/</code>, <code>middleware/</code>, <code>setting/</code> | Protocol conversion, distribution, billing, and runtime settings |
-| <code>web/default/</code> | The only frontend maintained by CMSG |
-| <code>cliproxyapi/</code> | CLIProxyAPI/CPA source tracked as a subtree |
-| <code>ops/</code> | Balance refresh, channel guards, quota controls, and observation scripts |
-| <code>docs/</code> | Feature documentation and runbooks for Radar, quotas, context protection, and other maintained features |
-| <code>docs/proposals/</code> | Architecture and rollout proposals |
-| <code>AGENTS.md</code> | Coding, compatibility, branch, and production-safety rules |
-| <code>DEVELOPMENT.md</code> | Development, upstream sync, build, and deployment conventions |
+| Path                                                                 | Purpose                                                                                                 |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| <code>controller/</code>, <code>service/</code>, <code>model/</code> | New API request, business, and data layers                                                              |
+| <code>relay/</code>, <code>middleware/</code>, <code>setting/</code> | Protocol conversion, distribution, billing, and runtime settings                                        |
+| <code>web/default/</code>                                            | The only frontend maintained by CMSG                                                                    |
+| <code>cliproxyapi/</code>                                            | CLIProxyAPI/CPA source tracked as a subtree                                                             |
+| <code>ops/</code>                                                    | Balance refresh, channel guards, quota controls, and observation scripts                                |
+| <code>docs/</code>                                                   | Feature documentation and runbooks for Radar, quotas, context protection, and other maintained features |
+| <code>docs/proposals/</code>                                         | Architecture and rollout proposals                                                                      |
+| <code>AGENTS.md</code>                                               | Coding, compatibility, branch, and production-safety rules                                              |
+| <code>DEVELOPMENT.md</code>                                          | Development, upstream sync, build, and deployment conventions                                           |
 
 ## Branches and development
 
-| Branch | Role |
-| --- | --- |
-| <code>dev/cmsg</code> | Default branch, daily integration, and production source |
-| <code>main</code> | Historical server baseline for comparison only |
-| <code>feature/*</code>, <code>fix/*</code>, <code>docs/*</code> | Short-lived work branches merged into <code>dev/cmsg</code> after validation |
+| Branch                         | Role                                                                         |
+| ------------------------------ | ---------------------------------------------------------------------------- |
+| <code>dev/cmsg</code>          | Default branch, daily integration, and production source                     |
+| <code>main</code>              | Historical server baseline for comparison only                               |
+| `feature/*`, `fix/*`, `docs/*` | Short-lived work branches merged into <code>dev/cmsg</code> after validation |
 
-~~~bash
+```bash
 git clone git@github.com:Yuming12138/newapi-cmsg.git
 cd newapi-cmsg
 git switch dev/cmsg
 git pull --ff-only origin dev/cmsg
 git switch -c feature/your-change
-~~~
+```
 
 Read <a href="./AGENTS.md">AGENTS.md</a> and <a href="./DEVELOPMENT.md">DEVELOPMENT.md</a> completely before making changes. Common validation commands:
 
-~~~bash
+```bash
 go test ./...
 (cd web/default && bun run build:check)
 (cd cliproxyapi && go test ./...)
 (cd cliproxyapi && go build -o test-output ./cmd/server)
-~~~
+```
 
 Validation should match the risk of the change. Documentation-only updates do not require a full build.
 

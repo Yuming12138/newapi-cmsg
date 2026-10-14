@@ -17,86 +17,35 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { ReactNode } from 'react'
-import type { LucideIcon } from 'lucide-react'
 import {
+  type LucideIcon,
   BookOpen,
   CheckCircle2,
-  Download,
   ExternalLink,
   FileJson2,
   FolderOpen,
-  ImageIcon,
   KeyRound,
   MessageSquare,
   Monitor,
-  Search,
   ShieldAlert,
   Terminal,
-  Upload,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { CopyButton } from '@/components/copy-button'
 import { PublicLayout } from '@/components/layout'
 import { Footer } from '@/components/layout/components/footer'
-
-const API_BASE_URL = 'https://api.cmsg666.xyz/v1'
-const CHAT_WEB_URL = 'https://webui.cmsg666.xyz'
-const IMAGE_GENERATION_PATH = '/image-generation'
+import {
+  API_BASE_URL,
+  DEFAULT_CODEX_MODEL,
+  chatApiExample,
+  recommendedConfig,
+  simpleConfig,
+} from './config-examples'
 
 const authJson = `{
   "OPENAI_API_KEY": "自己的秘钥"
 }`
-
-const simpleConfig = `model = "gpt-5.5"
-model_reasoning_effort = "high"
-disable_response_storage = true
-model_provider = "cmsg"
-
-[history]
-persistence = "save-all"
-
-[model_providers.cmsg]
-name = "cmsg"
-base_url = "${API_BASE_URL}"
-wire_api = "responses"
-requires_openai_auth = true`
-
-const recommendedConfig = `model = "gpt-5.5"
-model_reasoning_effort = "high"
-disable_response_storage = true
-sandbox_mode = "workspace-write"
-approval_policy = "on-request"
-windows_wsl_setup_acknowledged = true
-file_opener = "vscode"
-model_provider = "cmsg"
-web_search = "cached"
-suppress_unstable_features_warning = true
-
-[history]
-persistence = "save-all"
-
-[tui]
-notifications = true
-
-[shell_environment_policy]
-inherit = "all"
-ignore_default_excludes = false
-
-[sandbox_workspace_write]
-network_access = true
-
-[features]
-plan_tool = true
-apply_patch_freeform = true
-view_image_tool = true
-rmcp_client = true
-
-[model_providers.cmsg]
-name = "cmsg"
-base_url = "${API_BASE_URL}"
-wire_api = "responses"
-requires_openai_auth = true`
 
 const installCommands = `# Windows 桌面端
 winget install Codex -s msstore
@@ -118,39 +67,6 @@ cd 你的项目目录
 
 # 3. 启动 Codex
 codex`
-
-const chatApiExample = `curl ${API_BASE_URL}/chat/completions \\
-  -H "Authorization: Bearer 自己的密钥" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "gpt-5.5",
-    "messages": [
-      {"role": "user", "content": "用三句话说明这个接口怎么用"}
-    ]
-  }'`
-
-const imageApiExample = `curl ${API_BASE_URL}/images/generations \\
-  -H "Authorization: Bearer 自己的密钥" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "gpt-image-2",
-    "prompt": "一张干净的产品照，白色马克杯放在木桌上",
-    "size": "1024x1024",
-    "quality": "auto",
-    "output_format": "png",
-    "n": 1
-  }'`
-
-const imageEditApiExample = `curl ${API_BASE_URL}/images/edits \\
-  -H "Authorization: Bearer 自己的密钥" \\
-  -F "model=gpt-image-2" \\
-  -F "prompt=把参考图改成干净的产品宣传照，保留主体" \\
-  -F "image[]=@reference.png" \\
-  -F "mask=@mask.png" \\
-  -F "size=1024x1024" \\
-  -F "quality=auto" \\
-  -F "output_format=png" \\
-  -F "n=1"`
 
 const codexPaths = [
   {
@@ -201,68 +117,6 @@ const quickSteps: Array<{
     title: '写入配置文件',
     description: `把 API 密钥写进 auth.json，再把 ${API_BASE_URL} 写进 config.toml。`,
     icon: FileJson2,
-  },
-]
-
-const webChatSteps: Array<{
-  title: string
-  description: string
-  icon: LucideIcon
-}> = [
-  {
-    title: '打开聊天入口',
-    description:
-      '登录本站后点左侧“聊天”，也可以直接打开聊天页。首次使用按页面提示注册或登录。',
-    icon: MessageSquare,
-  },
-  {
-    title: '选择模型',
-    description:
-      '常规对话选 gpt-5.5。想快一点可选 mini 类模型，复杂任务再切回主模型。',
-    icon: CheckCircle2,
-  },
-  {
-    title: '需要联网时再打开搜索',
-    description:
-      '输入框附近有网页搜索开关。查当天信息、网页资料、新闻和价格时再打开。',
-    icon: Search,
-  },
-  {
-    title: '读文件就上传附件',
-    description:
-      '点附件按钮或把文件拖进输入框。适合读 PDF、表格、文档和代码片段。',
-    icon: Upload,
-  },
-]
-
-const imageSteps: Array<{
-  title: string
-  description: string
-  icon: LucideIcon
-}> = [
-  {
-    title: '进入图片生成',
-    description:
-      '登录本站后点左侧“图片生成”。页面可切换文生图和图生图/编辑，按需填写提示词、分组、尺寸、质量、数量和格式。',
-    icon: ImageIcon,
-  },
-  {
-    title: '分组选 cliproxy-codex',
-    description:
-      '页面默认会优先选择 cliproxy-codex。若手动改过分组，生成失败时先切回这个分组。',
-    icon: CheckCircle2,
-  },
-  {
-    title: '提示词写清楚',
-    description:
-      '把主体、场景、风格、比例和不要出现的内容写清楚。先生成 1 张，满意后再加数量。',
-    icon: FileJson2,
-  },
-  {
-    title: '生成后下载',
-    description:
-      '任务提交后页面会自动轮询。成功后可以预览和下载，最近任务会显示在页面下方。',
-    icon: Download,
   },
 ]
 
@@ -373,27 +227,6 @@ function StepCard(props: {
   )
 }
 
-function UsageCard(props: {
-  title: string
-  description: string
-  icon: LucideIcon
-}) {
-  const Icon = props.icon
-  return (
-    <div className='border-border bg-card rounded-lg border p-4'>
-      <div className='mb-3 flex items-center gap-3'>
-        <div className='bg-muted text-foreground flex size-9 items-center justify-center rounded-lg'>
-          <Icon className='size-4' />
-        </div>
-        <h3 className='font-semibold'>{props.title}</h3>
-      </div>
-      <p className='text-muted-foreground text-sm leading-6'>
-        {props.description}
-      </p>
-    </div>
-  )
-}
-
 export function Docs() {
   return (
     <PublicLayout showMainContainer={false}>
@@ -407,22 +240,14 @@ export function Docs() {
               </div>
               <div className='max-w-3xl space-y-4'>
                 <h1 className='text-3xl leading-tight font-semibold md:text-5xl'>
-                  Codex 配置、网页聊天和图片生成
+                  Codex 配置与 API 接入
                 </h1>
                 <p className='text-muted-foreground text-base leading-7 md:text-lg'>
-                  这页只放常用入口和配置：API 密钥、桌面端 Codex、终端版
-                  Codex、auth.json、config.toml、网页聊天和图片生成。只想对话，
-                  直接进聊天；要在项目里工作，再配置 Codex。
+                  从创建 API 密钥到启动 Codex，一页完成桌面端和终端版的接入。
+                  下方提供可复制的配置文件和聊天 API 示例。
                 </p>
               </div>
               <div className='flex flex-wrap gap-3'>
-                <Button render={<a href={CHAT_WEB_URL} />}>打开聊天</Button>
-                <Button
-                  variant='outline'
-                  render={<a href={IMAGE_GENERATION_PATH} />}
-                >
-                  图片生成
-                </Button>
                 <Button render={<a href='/sign-up' />}>注册账号</Button>
                 <Button variant='outline' render={<a href='/keys' />}>
                   创建 API 密钥
@@ -463,14 +288,11 @@ export function Docs() {
                 <a className='hover:text-primary' href='#config'>
                   6. config.toml
                 </a>
-                <a className='hover:text-primary' href='#web-chat'>
-                  7. 网页聊天
-                </a>
-                <a className='hover:text-primary' href='#image-generation'>
-                  8. 图片生成
+                <a className='hover:text-primary' href='#chat-api'>
+                  7. 聊天 API
                 </a>
                 <a className='hover:text-primary' href='#check'>
-                  9. 启动检查
+                  8. 启动检查
                 </a>
               </div>
             </nav>
@@ -593,21 +415,22 @@ export function Docs() {
             id='config'
             eyebrow='Configuration'
             title='config.toml 文件配置'
-            description='下面两份配置任选一份。'
+            description={`默认模型为 ${DEFAULT_CODEX_MODEL}，思考强度为 xhigh。两份示例与密钥页使用同一套配置生成逻辑；密钥页还会按 DeepSeek、MiMo 分组生成专用配置。`}
           >
             <div className='grid gap-6'>
-              <InfoBox tone='warning' icon={ShieldAlert} title='改配置前先备份'>
-                修改 provider、模型或本地状态后，旧会话可能不在当前视图里显示。
-                建议先复制一份 config.toml 作为备份，再覆盖配置。
+              <InfoBox icon={FileJson2} title='保存配置'>
+                将示例保存到用户目录下的 .codex/config.toml，已有文件先备份。
+                推荐配置采用 workspace-write 与
+                on-request，在项目内工作并按需请求授权。
               </InfoBox>
-              <InfoBox
-                tone='warning'
-                icon={ShieldAlert}
-                title='思考强度怎么选'
-              >
-                model_reasoning_effort 可填写 minimal、low、medium、high、xhigh
-                或 max。想要最高强度时填 max；不要填写 ultra 或
-                pro，这两个值目前会被上游拒绝。
+              <InfoBox icon={CheckCircle2} title='思考强度怎么选'>
+                默认使用 xhigh。low、medium、high、xhigh、max、ultra
+                等档位的支持范围取决于模型、客户端和上游渠道，可按任务需要选择。
+              </InfoBox>
+              <InfoBox icon={FileJson2} title='长会话自动压缩'>
+                示例保留 400000 token 上下文窗口，历史达到 360000 token
+                时触发自动压缩，为后续工具结果和回答留出空间。
+                自定义分组或模型时，按实际上下文能力调整这两个值。
               </InfoBox>
               <div className='grid gap-6 lg:grid-cols-2'>
                 <CodeBlock
@@ -621,30 +444,16 @@ export function Docs() {
                   code={recommendedConfig}
                 />
               </div>
-              <InfoBox
-                tone='warning'
-                icon={ShieldAlert}
-                title='不建议新手默认全权限'
-              >
-                danger-full-access 加 approval_policy = "never" 会让 Codex
-                在更大范围内直接读写和执行命令。除非你明确知道风险，否则优先使用
-                workspace-write 和 on-request。
-              </InfoBox>
             </div>
           </Section>
 
           <Section
-            id='web-chat'
-            eyebrow='Chat'
-            title='网页聊天怎么用'
-            description='网页聊天适合临时问答、读文件、联网查资料和保留对话记录。它和 API 密钥不是一回事：网页聊天不需要把自己的密钥贴进去；Codex、脚本和第三方客户端才需要创建 API 密钥。'
+            id='chat-api'
+            eyebrow='API'
+            title='聊天 API 接入'
+            description='脚本和兼容客户端可使用同一个 API 密钥，通过 Chat Completions 接口发起请求。'
           >
             <div className='grid gap-6'>
-              <div className='grid gap-4 md:grid-cols-2 lg:grid-cols-4'>
-                {webChatSteps.map((step) => (
-                  <UsageCard key={step.title} {...step} />
-                ))}
-              </div>
               <div className='grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]'>
                 <CodeBlock
                   title='聊天 API 示例'
@@ -652,66 +461,19 @@ export function Docs() {
                   code={chatApiExample}
                 />
                 <div className='grid gap-4'>
-                  <InfoBox icon={MessageSquare} title='聊天账号'>
-                    聊天页有自己的登录状态，用来分开保存会话。第一次打开时，
-                    按页面提示注册或登录即可。
+                  <InfoBox icon={MessageSquare} title='选择模型与分组'>
+                    示例使用 {DEFAULT_CODEX_MODEL}
+                    。到模型价格页查看密钥所在分组开放的模型，再填写对应模型标识。
                   </InfoBox>
-                  <InfoBox icon={Search} title='联网搜索'>
-                    只有需要查网页时才打开搜索。普通问答、改写、总结和读文件，
-                    可以先不打开。
-                  </InfoBox>
-                </div>
-              </div>
-              <div className='flex flex-wrap gap-3'>
-                <Button render={<a href={CHAT_WEB_URL} />}>打开聊天</Button>
-                <Button variant='outline' render={<a href='/keys' />}>
-                  创建 API 密钥
-                </Button>
-              </div>
-            </div>
-          </Section>
-
-          <Section
-            id='image-generation'
-            eyebrow='Images'
-            title='图片生成怎么用'
-            description='图片页面支持文生图和图生图/编辑；API 可分别调用 /v1/images/generations 和 /v1/images/edits。网页页面适合直接试提示词和参考图；脚本批量生成时再用 API。'
-          >
-            <div className='grid gap-6'>
-              <div className='grid gap-4 md:grid-cols-2 lg:grid-cols-4'>
-                {imageSteps.map((step) => (
-                  <UsageCard key={step.title} {...step} />
-                ))}
-              </div>
-              <div className='grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]'>
-                <div className='grid gap-4'>
-                  <CodeBlock
-                    title='文生图 API 示例'
-                    language='curl'
-                    code={imageApiExample}
-                  />
-                  <CodeBlock
-                    title='图片编辑 API 示例'
-                    language='curl'
-                    code={imageEditApiExample}
-                  />
-                </div>
-                <div className='grid gap-4'>
-                  <InfoBox icon={ImageIcon} title='页面参数'>
-                    文生图只需要提示词；图生图/编辑需要上传 1-4
-                    张参考图，可选上传 mask。尺寸常用
-                    1024x1024；质量不确定就选“自动”；输出格式常用 PNG。
-                  </InfoBox>
-                  <InfoBox tone='warning' icon={ShieldAlert} title='分组报错时'>
-                    如果看到“分组下模型无可用渠道”，先确认分组是
-                    cliproxy-codex。API 调用也建议使用这个分组创建密钥。
+                  <InfoBox icon={Terminal} title='运行示例'>
+                    将“自己的密钥”替换为完整 API 密钥，在 macOS、Linux 或 WSL
+                    终端运行此 curl 示例。Windows PowerShell 可使用 SDK
+                    或客户端调用同一接口。
                   </InfoBox>
                 </div>
               </div>
               <div className='flex flex-wrap gap-3'>
-                <Button render={<a href={IMAGE_GENERATION_PATH} />}>
-                  打开图片生成
-                </Button>
+                <Button render={<a href='/pricing' />}>查看可用模型</Button>
                 <Button variant='outline' render={<a href='/keys' />}>
                   创建 API 密钥
                 </Button>

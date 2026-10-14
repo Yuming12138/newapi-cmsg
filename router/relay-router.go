@@ -65,16 +65,6 @@ func SetRelayRouter(router *gin.Engine) {
 	playgroundRouter.Use(middleware.UserAuth(), middleware.Distribute())
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
-		playgroundRouter.POST("/images/generations", controller.PlaygroundImage)
-		playgroundRouter.POST("/images/edits", controller.PlaygroundImageEdit)
-	}
-	playgroundTaskRouter := router.Group("/pg")
-	playgroundTaskRouter.Use(middleware.RouteTag("api"))
-	playgroundTaskRouter.Use(middleware.UserAuth())
-	{
-		playgroundTaskRouter.GET("/images/tasks", controller.ListPlaygroundImageTasks)
-		playgroundTaskRouter.GET("/images/tasks/:id", controller.GetPlaygroundImageTask)
-		playgroundTaskRouter.POST("/images/tasks/:id/cancel", controller.CancelPlaygroundImageTask)
 	}
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))

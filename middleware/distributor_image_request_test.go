@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetModelRequestParsesPlaygroundImageEditMultipart(t *testing.T) {
+func TestGetModelRequestParsesImageEditMultipart(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	body := &bytes.Buffer{}
@@ -29,8 +29,9 @@ func TestGetModelRequestParsesPlaygroundImageEditMultipart(t *testing.T) {
 	require.NoError(t, writer.Close())
 
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/pg/images/edits", body)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", body)
 	c.Request.Header.Set("Content-Type", writer.FormDataContentType())
+	common.SetContextKey(c, constant.ContextKeyTokenGroup, "configured-token-group")
 	t.Cleanup(func() {
 		common.CleanupBodyStorage(c)
 	})
@@ -39,11 +40,10 @@ func TestGetModelRequestParsesPlaygroundImageEditMultipart(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, shouldSelectChannel)
 	require.Equal(t, "gpt-image-2", modelRequest.Model)
-	require.Equal(t, "cliproxy-codex", modelRequest.Group)
-	require.Equal(t, "cliproxy-codex", common.GetContextKeyString(c, constant.ContextKeyTokenGroup))
+	require.Equal(t, "configured-token-group", common.GetContextKeyString(c, constant.ContextKeyTokenGroup))
 }
 
-func TestPathToRelayModeIncludesPlaygroundImages(t *testing.T) {
-	require.Equal(t, relayconstant.RelayModeImagesGenerations, relayconstant.Path2RelayMode("/pg/images/generations"))
-	require.Equal(t, relayconstant.RelayModeImagesEdits, relayconstant.Path2RelayMode("/pg/images/edits"))
+func TestPathToRelayModeKeepsGeneralImageAPIs(t *testing.T) {
+	require.Equal(t, relayconstant.RelayModeImagesGenerations, relayconstant.Path2RelayMode("/v1/images/generations"))
+	require.Equal(t, relayconstant.RelayModeImagesEdits, relayconstant.Path2RelayMode("/v1/images/edits"))
 }

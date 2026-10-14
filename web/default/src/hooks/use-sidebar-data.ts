@@ -29,9 +29,7 @@ import {
   Command,
   Radio,
   FlaskConical,
-  ImageIcon,
   MessageSquare,
-  MonitorPlay,
   CreditCard,
   ListTodo,
   ServerCog,
@@ -62,18 +60,6 @@ export function useSidebarData(): SidebarData {
             title: t('Playground'),
             url: '/playground',
             icon: FlaskConical,
-          },
-          {
-            title: t('Chat'),
-            url: 'https://webui.cmsg666.xyz',
-            icon: MonitorPlay,
-            external: true,
-            configUrls: ['/open-webui'],
-          },
-          {
-            title: t('Image Generation'),
-            url: '/image-generation',
-            icon: ImageIcon,
           },
           {
             title: t('More Apps'),

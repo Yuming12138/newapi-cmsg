@@ -432,7 +432,6 @@ export const STATIC_I18N_KEYS = [
   'Playground',
   'Open WebUI',
   'AI model testing environment',
-  'Full web chat interface with files and tools.',
   'Chat session management',
   'Console Area',
   'Data management and log viewing',

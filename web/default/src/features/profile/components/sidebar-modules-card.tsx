@@ -65,16 +65,6 @@ export function SidebarModulesCard() {
           description: t('AI model testing environment'),
         },
         {
-          key: 'open_webui',
-          title: t('Chat'),
-          description: t('cmsg.profile.sidebar.webChatDescription'),
-        },
-        {
-          key: 'image_generation',
-          title: t('Image Generation'),
-          description: t('cmsg.profile.sidebar.imageGenerationDescription'),
-        },
-        {
           key: 'chat',
           title: t('Chat'),
           description: t('Chat session management'),

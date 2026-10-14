@@ -26,7 +26,7 @@
 
 ## 项目定位
 
-<code>new-api-cmsg</code> 把多种 AI 上游、账号池和协议统一到一个可运营的网关中。除了 upstream New API 提供的用户、令牌、分组、计量和渠道管理能力，CMSG 还维护了额度感知调度、CPA 账号池、Codex/Claude/Gemini/DeepSeek/Kimi 路由与协议适配、渠道能力测试、Codex Radar、图片工作台和服务端长上下文保护。
+<code>new-api-cmsg</code> 把多种 AI 上游、账号池和协议统一到一个可运营的网关中。除了 upstream New API 提供的用户、令牌、分组、计量和渠道管理能力，CMSG 还维护了额度感知调度、CPA 账号池、Codex/Claude/Gemini/DeepSeek/Kimi 路由与协议适配、渠道能力测试、Codex Radar 和服务端长上下文保护。
 
 本仓库主要解决以下问题：
 
@@ -39,7 +39,7 @@
 
 ## 请求链路
 
-~~~text
+```text
 Codex / Claude Code / OpenAI-compatible clients
                               |
                               v
@@ -55,26 +55,25 @@ Codex / Claude Code / OpenAI-compatible clients
                  |                          |
                  v                          v
     OpenAI / Claude / Gemini / Kimi    DeepSeek / Kimi / others
-~~~
+```
 
 当前生产入口为 <a href="https://api.cmsg666.xyz/">api.cmsg666.xyz</a>，由 <code>cmsg-root</code> 上的公网运行实例提供服务。
 
 ## CMSG 维护能力
 
-| 领域 | 能力 |
-| --- | --- |
-| 统一协议入口 | OpenAI Responses、Chat Completions、Claude Messages、Gemini 及常见 OpenAI-compatible 请求 |
-| 分组与计量 | 差异化分组、用量计量、订阅制每日额度、共享余额及按量上游的混合展示 |
-| 额度感知调度 | 余额刷新、低价优先、高价兜底、渠道自动禁用与恢复、可指定到期时间的临时解除限制、模型别名按真实上游模型结算 |
-| CPA 账号池与额度 | Codex/Claude/Kimi/Antigravity 账号池、模型级额度、订阅窗口、重置时间、有效账号去重、冷却与重试 |
-| Codex 协议兼容 | DeepSeek 原生 Responses 思考原文续接、跨提供方历史兼容、Kimi 工具适配、自定义与命名空间工具、助手说明与工具结果顺序处理 |
-| 稳定性 | 首包前重试、HTTP/2 per-host 连接池、Mihomo 节点故障转移、流式断连清理 |
-| Gemini 性能与上下文 | Tool Schema 缓存、请求线性拼装、流式事件转换优化、发送前预算校验、超大工具输出裁剪和明确 token 超限后的有限重试 |
-| 渠道能力测试 | 当前灰度支持渠道 1、12、27，可选模型与思考强度，展示测试题、回答、耗时、失败原因和 SVG 动画预览 |
-| Codex Radar | 同步四个 Sol/Astra 模型家族的公开评分，展示覆盖题数与成本/耗时统计，提供失败重试、Redis 完整快照和前端自动恢复 |
-| 图片工作台 | 文生图、图生图/编辑、1 至 4 张参考图、可选蒙版及对应 API |
-| 可观测性 | 渠道用量、自定义时间窗口、请求链路、CPA 调度、reasoning effort、流式状态和网络探针 |
-| 用户自助 | Codex 桌面端/终端配置说明、上游余额概览、低余额临时额度申请 |
+| 领域                | 能力                                                                                                                    |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 统一协议入口        | OpenAI Responses、Chat Completions、Claude Messages、Gemini 及常见 OpenAI-compatible 请求                               |
+| 分组与计量          | 差异化分组、用量计量、订阅制每日额度、共享余额及按量上游的混合展示                                                      |
+| 额度感知调度        | 余额刷新、低价优先、高价兜底、渠道自动禁用与恢复、可指定到期时间的临时解除限制、模型别名按真实上游模型结算              |
+| CPA 账号池与额度    | Codex/Claude/Kimi/Antigravity 账号池、模型级额度、订阅窗口、重置时间、有效账号去重、冷却与重试                          |
+| Codex 协议兼容      | DeepSeek 原生 Responses 思考原文续接、跨提供方历史兼容、Kimi 工具适配、自定义与命名空间工具、助手说明与工具结果顺序处理 |
+| 稳定性              | 首包前重试、HTTP/2 per-host 连接池、Mihomo 节点故障转移、流式断连清理                                                   |
+| Gemini 性能与上下文 | Tool Schema 缓存、请求线性拼装、流式事件转换优化、发送前预算校验、超大工具输出裁剪和明确 token 超限后的有限重试         |
+| 渠道能力测试        | 当前灰度支持渠道 1、12、27，可选模型与思考强度，展示测试题、回答、耗时、失败原因和 SVG 动画预览                         |
+| Codex Radar         | 同步四个 Sol/Astra 模型家族的公开评分，展示覆盖题数与成本/耗时统计，提供失败重试、Redis 完整快照和前端自动恢复          |
+| 可观测性            | 渠道用量、自定义时间窗口、请求链路、CPA 调度、reasoning effort、流式状态和网络探针                                      |
+| 用户自助            | Codex 桌面端/终端配置说明、上游余额概览、低余额临时额度申请                                                             |
 
 可用模型与分组以运行实例返回的模型列表和渠道配置为准。
 
@@ -104,52 +103,51 @@ CPA 的 Antigravity/Gemini 路径在服务端估算上下文预算，超限时�
 
 ## 主要 API
 
-| 用途 | 接口 |
-| --- | --- |
-| Responses | <code>POST /v1/responses</code>、<code>POST /v1/responses/compact</code> |
-| Chat Completions | <code>POST /v1/chat/completions</code> |
-| Claude Messages | <code>POST /v1/messages</code> |
-| 图片生成与编辑 | <code>POST /v1/images/generations</code>、<code>POST /v1/images/edits</code> |
-| 模型发现 | <code>GET /v1/models</code> |
+| 用途             | 接口                                                                     |
+| ---------------- | ------------------------------------------------------------------------ |
+| Responses        | <code>POST /v1/responses</code>、<code>POST /v1/responses/compact</code> |
+| Chat Completions | <code>POST /v1/chat/completions</code>                                   |
+| Claude Messages  | <code>POST /v1/messages</code>                                           |
+| 模型发现         | <code>GET /v1/models</code>                                              |
 
 ## 仓库结构
 
-| 路径 | 说明 |
-| --- | --- |
-| <code>controller/</code>、<code>service/</code>、<code>model/</code> | New API 请求、业务与数据层 |
-| <code>relay/</code>、<code>middleware/</code>、<code>setting/</code> | 协议转换、分发、计费和运行设置 |
-| <code>web/default/</code> | CMSG 唯一维护的 React 前端 |
-| <code>cliproxyapi/</code> | 作为 subtree 跟踪的 CLIProxyAPI/CPA 源码 |
-| <code>ops/</code> | 余额刷新、渠道守卫、额度控制和观测脚本 |
-| <code>docs/</code> | 雷达、额度、上下文保护等功能说明与运行手册 |
-| <code>docs/proposals/</code> | 重要架构与上线方案 |
-| <code>AGENTS.md</code> | 代码、兼容性、分支与生产安全规则 |
-| <code>DEVELOPMENT.md</code> | 开发、上游同步、构建和部署约定 |
+| 路径                                                                 | 说明                                       |
+| -------------------------------------------------------------------- | ------------------------------------------ |
+| <code>controller/</code>、<code>service/</code>、<code>model/</code> | New API 请求、业务与数据层                 |
+| <code>relay/</code>、<code>middleware/</code>、<code>setting/</code> | 协议转换、分发、计费和运行设置             |
+| <code>web/default/</code>                                            | CMSG 唯一维护的 React 前端                 |
+| <code>cliproxyapi/</code>                                            | 作为 subtree 跟踪的 CLIProxyAPI/CPA 源码   |
+| <code>ops/</code>                                                    | 余额刷新、渠道守卫、额度控制和观测脚本     |
+| <code>docs/</code>                                                   | 雷达、额度、上下文保护等功能说明与运行手册 |
+| <code>docs/proposals/</code>                                         | 重要架构与上线方案                         |
+| <code>AGENTS.md</code>                                               | 代码、兼容性、分支与生产安全规则           |
+| <code>DEVELOPMENT.md</code>                                          | 开发、上游同步、构建和部署约定             |
 
 ## 分支与开发
 
-| 分支 | 定位 |
-| --- | --- |
-| <code>dev/cmsg</code> | 默认分支、日常开发与生产集成源 |
-| <code>main</code> | 历史服务器基线，仅用于对照 |
-| <code>feature/*</code>、<code>fix/*</code>、<code>docs/*</code> | 短期工作分支，验证后合回 <code>dev/cmsg</code> |
+| 分支                           | 定位                                           |
+| ------------------------------ | ---------------------------------------------- |
+| <code>dev/cmsg</code>          | 默认分支、日常开发与生产集成源                 |
+| <code>main</code>              | 历史服务器基线，仅用于对照                     |
+| `feature/*`、`fix/*`、`docs/*` | 短期工作分支，验证后合回 <code>dev/cmsg</code> |
 
-~~~bash
+```bash
 git clone git@github.com:Yuming12138/newapi-cmsg.git
 cd newapi-cmsg
 git switch dev/cmsg
 git pull --ff-only origin dev/cmsg
 git switch -c feature/your-change
-~~~
+```
 
 开始修改前请完整阅读 <a href="./AGENTS.md">AGENTS.md</a> 和 <a href="./DEVELOPMENT.md">DEVELOPMENT.md</a>。常用验证：
 
-~~~bash
+```bash
 go test ./...
 (cd web/default && bun run build:check)
 (cd cliproxyapi && go test ./...)
 (cd cliproxyapi && go build -o test-output ./cmd/server)
-~~~
+```
 
 验证范围应与改动风险相匹配；仅文档变更不需要运行完整构建。
 

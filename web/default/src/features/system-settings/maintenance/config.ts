@@ -57,8 +57,6 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
   chat: {
     enabled: true,
     playground: true,
-    open_webui: true,
-    image_generation: true,
     chat: true,
   },
   console: {
@@ -207,6 +205,12 @@ export function parseSidebarModulesAdmin(
       Object.entries(raw as Record<string, unknown>).forEach(
         ([moduleKey, moduleValue]) => {
           if (moduleKey === 'enabled') return
+          // Old saved options must not recreate switches for retired pages.
+          if (
+            sectionKey === 'chat' &&
+            (moduleKey === 'image_generation' || moduleKey === 'open_webui')
+          )
+            return
           sectionConfig[moduleKey] = toBoolean(
             moduleValue,
             defaultSection[moduleKey] ?? true
