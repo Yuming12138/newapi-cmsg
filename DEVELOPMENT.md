@@ -82,7 +82,7 @@ New API 上游继续使用普通外层 Git 工作流同步；不要用 subtree �
 
 允许在服务器上做：
 
-- 接收 WSL 构建好的 `new-api` 或 `cli-proxy-api` 二进制；
+- 接收本地 Windows、WSL、CI 或专用构建机产出的 `new-api` 或 `cli-proxy-api` 二进制；
 - 更新 `/opt/new-api`、`/opt/cliproxyapi` 下的配置；
 - 切换 release、重启容器、查看日志和健康检查；
 - 做轻量数据库或运行态排查。
@@ -93,17 +93,18 @@ New API 上游继续使用普通外层 Git 工作流同步；不要用 subtree �
 - 大范围 `go build`、Docker build/buildx、镜像重建；
 - 把服务器当 Git 源码开发目录直接改代码。
 
-默认开发和构建位置：
-
-```bash
-/home/gmchen/work/new-api-cmsg
-```
-
-Windows 访问路径：
+当前固定开发和构建目录是本地 Windows 工作副本：
 
 ```text
-\\wsl.localhost\Ubuntu-24.04\home\gmchen\work\new-api-cmsg
+F:\WorkBuddy\2026-10-06-16-58-21\src\newapi-cmsg
 ```
+
+只维护这个工作副本，不再将旧 WSL 仓库作为开发基线。Windows 已支持 Bun 前端构建和 Go 交叉编译，不需要依赖 WSL；CI 或其他专用构建机同样可以从已集成的 `dev/cmsg` 产出部署文件。
+
+Linux AMD64 生产二进制使用 `CGO_ENABLED=0 GOOS=linux GOARCH=amd64` 构建。
+在 PowerShell 中应分别设置 `$env:CGO_ENABLED`、`$env:GOOS`、`$env:GOARCH`，不能直接照搬 Bash 的内联环境变量语法；完成后恢复原值，避免影响后续本机测试。
+先完成 `web/default` 构建，再构建嵌入前端资源的 New API 二进制，不要并行执行这两步。
+上传前核验内嵌 commit、ELF 架构、静态链接、文件大小和 SHA-256，上传后再次比对校验值。
 
 ## 上线前检查
 
@@ -127,7 +128,7 @@ git log --oneline origin/dev/cmsg..origin/<branch-name>
 ## 生产发布原则
 
 - `dev/cmsg` 是唯一日常集成源。
-- 生产构建从 WSL 或专用构建机产出。
+- 生产构建从本地 Windows、CI 或专用构建机产出；不在生产运行节点编译。
 - `cmsg-root:/opt/new-api` 和 `cmsg-root:/opt/cliproxyapi` 只作为运行环境。
 - 服务器上的 Git 历史、源码目录和临时文件不能作为后续开发基线。
 - 上线后需要验证容器状态、健康检查和相关功能页面或 API。
