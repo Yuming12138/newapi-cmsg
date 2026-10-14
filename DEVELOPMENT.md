@@ -1,137 +1,226 @@
-# CMSG 开发说明
+# CMSG 开发与部署说明
 
-本文档记录 `new-api-cmsg` 的开发、分支、构建和部署约定。仓库首页 README 只展示项目定位和功能概览。
+当前维护使用 Windows 工作副本，从 `dev/cmsg` 构建产物并发布到公网运行节点。
+本文前半部分是现行流程，末尾的上游同步记录保留各批次的历史决定和验证结果。
 
-## 分支定位
+## 环境与职责
 
-| 分支 | 定位 | 规则 |
-|------|------|------|
-| `dev/cmsg` | 默认分支、日常开发与生产集成分支 | 所有新功能、修复、上线构建都以它为准 |
-| `main` | 服务器初始基线快照 | 只用于历史对照和回溯，不作为日常开发入口 |
-| `feature/*` / `fix/*` | 短期开发分支 | 完成验证后合回 `dev/cmsg` |
+| 对象 | 路径或入口 | 职责 |
+| --- | --- | --- |
+| 源码工作副本 | `F:\WorkBuddy\2026-10-06-16-58-21\src\newapi-cmsg` | 日常开发、本地测试与构建 |
+| 集成分支 | `dev/cmsg` | 已验证修改与生产构建源 |
+| New API 运行目录 | `cmsg-root:/opt/new-api` | 接收产物、切换 release、运行服务 |
+| CPA 运行目录 | `cmsg-root:/opt/cliproxyapi` | CPA 服务及其独立发布 |
+| 公网入口 | `https://api.cmsg666.xyz` | 客户端 API 与管理界面 |
 
-推荐工作流：
+只维护上述 Windows 工作副本；旧 WSL 仓库保留为历史副本。CI 或专用构建机
+也可从同一集成 commit 产出部署文件。校园 New API 站点已停用，校园相关手册
+属于历史资料；CPA/Home 服务单独核实，不能据此推断它们的运行状态。
 
-```bash
-git clone git@github.com:Yuming12138/newapi-cmsg.git
-cd newapi-cmsg
+`cmsg-root` 是低资源生产机，负责接收已构建产物、运行配置、轻量排查和服务
+切换。Go/Bun/Docker 构建、安装依赖和源码开发在本地或构建机完成。发布前
+重新确认目标 Compose 文件、服务名、端口和二进制挂载，以实际运行结构为准。
+
+## 分支与工作副本
+
+| 分支 | 定位 |
+| --- | --- |
+| `dev/cmsg` | 默认分支、日常集成和生产构建源 |
+| `main` | 历史基线，用于对照和回溯 |
+| `feature/*`、`fix/*`、`docs/*`、`sync/*` | 短期工作分支，验证后合入 `dev/cmsg` |
+
+开始任务先读 [AGENTS.md](AGENTS.md)，检查分支、commit、remotes 和工作树。
+有未提交修改时先识别归属，保留无关修改。下列 Git 命令可在 PowerShell
+逐行执行；只在工作树允许切换时更新分支：
+
+~~~text
+git status --short --branch
+git fetch --all --prune
 git switch dev/cmsg
 git pull --ff-only origin dev/cmsg
-git switch -c feature/your-change
-```
+git switch -c docs/your-change
+~~~
 
-完成修改后：
+完成验证后，提交工作分支，再合入 `dev/cmsg`：
 
-```bash
+~~~text
 git switch dev/cmsg
 git pull --ff-only origin dev/cmsg
-git merge --no-ff feature/your-change
+git merge --no-ff docs/your-change
 git push origin dev/cmsg
-```
+~~~
 
-## 目录说明
+发布前检查 `git branch -r --no-merged origin/dev/cmsg`。结果用于识别相关遗漏，
+而非要求合入所有实验分支。生产构建使用干净、已推送的 `dev/cmsg` commit；
+紧急发布其他命名分支需要明确授权。
+
+## 目录与验证
 
 | 路径 | 说明 |
-|------|------|
-| `web/default/` | 唯一前端（`web/classic/` 已于 2026-07-26 退役删除） |
-| `ops/` | 余额刷新、渠道守卫、额度管理等生产辅助脚本 |
-| `cliproxyapi/` | CMSG 使用的 CLIProxyAPI/CPA 中转站源码 |
-| `docs/proposals/` | 重要架构调整和上线方案记录 |
-| `AGENTS.md` | 本仓库开发、分支、构建和生产安全规则 |
+| --- | --- |
+| `web/default/` | 唯一维护的前端，局部规范见其 `AGENTS.md` |
+| `cliproxyapi/` | 外层仓库跟踪的 CPA subtree，含独立 Go module |
+| `ops/` | 余额刷新、渠道守卫、额度与运行辅助脚本 |
+| `docs/`、`docs/proposals/` | 功能语义、运行手册与架构方案 |
+| `pkg/billingexpr/expr.md` | 修改表达式计费前必读 |
+| `AGENTS.md` | 项目契约与生产安全约束 |
 
-## 双上游与 CLIProxyAPI subtree
+按变更范围验证，详情见根目录及前端 `AGENTS.md`：
 
-`new-api-cmsg` 是唯一需要提交、推送和用于生产构建的 Git 仓库。它同时跟踪两个上游：
+- 文档：Markdown 格式、相对链接、`git diff --check`。
+- New API：相关包测试；后端发布前运行根目录 `go test ./...`。
+- CPA：在 `cliproxyapi/` 中运行相关测试，CPA 发布前运行其 `go test ./...`。
+- 前端：相关回归测试与 `bun run build:check`，按变更检查格式与 lint。
+- 涉及并发、计费、数据库或流式转换时，补充对应回归验证。
 
-| Remote | 上游 | 更新范围 |
-|--------|------|----------|
-| `upstream` | `https://github.com/QuantumNous/new-api.git` | 仓库根目录的 New API 代码 |
+## 双上游与 CPA subtree
+
+唯一提交和推送仓库为 `Yuming12138/newapi-cmsg`。外层 New API 与 CPA 分别
+参考以下上游；remote 名称是约定，首次使用先检查 `git remote -v`：
+
+| Remote | 上游 | 范围 |
+| --- | --- | --- |
+| `upstream` | `https://github.com/QuantumNous/new-api.git` | New API 后端与可移植修复 |
 | `cliproxy-upstream` | `https://github.com/router-for-me/CLIProxyAPI.git` | `cliproxyapi/` subtree |
 
-首次克隆后配置 CPA 上游：
+需要同步且尚未配置相应 remote 时，再添加：
 
-```bash
+~~~text
+git remote add upstream https://github.com/QuantumNous/new-api.git
 git remote add cliproxy-upstream https://github.com/router-for-me/CLIProxyAPI.git
 git config remote.cliproxy-upstream.tagOpt --no-tags
-git fetch --no-tags cliproxy-upstream main
-```
+~~~
 
-`cliproxyapi/` 是外层仓库直接跟踪的 subtree，不应包含独立 `.git`。不要在该目录内执行 `git pull`、`git merge`、`git rebase`、`git reset`、`git checkout`、`git clean` 或单独提交。
+`cliproxyapi/` 内运行 Go 测试和构建，Git 提交与上游同步则在外层仓库执行。
+该目录由外层直接跟踪，保持其没有独立 `.git`。
 
-同步 CPA 上游时使用独立分支：
+CPA 同步在独立分支完成，下面的 `main` 可替换为经过审查的 tag 或 commit。
+命令保持单行，兼容 PowerShell：
 
-```bash
+~~~text
 git switch dev/cmsg
 git pull --ff-only origin dev/cmsg
 git switch -c sync/cliproxy-vX.Y.Z
 git fetch --no-tags cliproxy-upstream main
-git subtree pull \
-  --prefix=cliproxyapi \
-  cliproxy-upstream main \
-  --squash \
-  -m "sync(cliproxy): update upstream to vX.Y.Z"
-```
+git subtree pull --prefix=cliproxyapi cliproxy-upstream main --squash -m "sync(cliproxy): update upstream to vX.Y.Z"
+~~~
 
-解决与 CMSG 定制代码的冲突后，在 `cliproxyapi/` 内完成测试和构建，再将同步分支合回 `dev/cmsg`。同步提交应记录上游 tag 和完整 commit，便于以后审计。
+审查并解决 CMSG 定制冲突，测试后合回 `dev/cmsg`，记录上游 tag 和完整 commit。
+New API 后端继续逐项审查和移植；前端修复手工移入 `web/default/`，不整体覆盖
+CMSG 前端。历史同步记录可帮助定位既有取舍，下一轮仍须依据当前代码评估。
 
-New API 上游继续使用普通外层 Git 工作流同步；不要用 subtree 命令更新仓库根目录。
+## Windows 本地构建
 
-## 构建与部署规则
+先核对本机 Go、Bun 与各模块要求，完成相关测试，再构建生产产物。
+New API 通过 `go:embed` 嵌入 `web/default/dist`：**先完成前端构建，再编译
+New API**。两步保持顺序，避免打包旧前端。
 
-`cmsg-root` 是低资源生产服务器，不能当构建机使用。
+下面是 PowerShell 构建示例，只构建本地产物，不执行上传或重启。环境变量在
+`finally` 中恢复；代码块中的路径为固定维护目录：
 
-允许在服务器上做：
+~~~powershell
+$ErrorActionPreference = 'Stop'
+$taskRepo = 'F:\WorkBuddy\2026-10-06-16-58-21\src\newapi-cmsg'
+$taskSavedEnv = @{}
+foreach ($taskName in @('CGO_ENABLED', 'GOOS', 'GOARCH', 'VITE_REACT_APP_VERSION')) {
+    $taskSavedEnv[$taskName] = [Environment]::GetEnvironmentVariable($taskName, 'Process')
+}
 
-- 接收本地 Windows、WSL、CI 或专用构建机产出的 `new-api` 或 `cli-proxy-api` 二进制；
-- 更新 `/opt/new-api`、`/opt/cliproxyapi` 下的配置；
-- 切换 release、重启容器、查看日志和健康检查；
-- 做轻量数据库或运行态排查。
+Push-Location $taskRepo
+try {
+    $taskBranch = (& git branch --show-current).Trim()
+    if ($LASTEXITCODE -ne 0 -or $taskBranch -ne 'dev/cmsg') {
+        throw 'Build from the integrated dev/cmsg branch'
+    }
+    $taskDirty = @(& git status --porcelain)
+    if ($LASTEXITCODE -ne 0 -or $taskDirty.Count -gt 0) {
+        throw 'Commit or separate pending changes before building'
+    }
+    $taskCommit = (& git rev-parse --short=12 HEAD).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve commit' }
+    $taskRelease = "new-api-$taskCommit-$(Get-Date -Format 'yyyyMMddHHmmss')"
+    $taskOut = Join-Path $env:LOCALAPPDATA "CMSG\releases\$taskRelease"
+    New-Item -ItemType Directory -Path $taskOut -ErrorAction Stop | Out-Null
+    $taskBinary = Join-Path $taskOut 'new-api'
+    $env:VITE_REACT_APP_VERSION = $taskCommit
 
-不要在服务器上做：
+    Push-Location 'web/default'
+    try {
+        & bun run build:check
+        if ($LASTEXITCODE -ne 0) { throw 'Frontend validation/build failed' }
+    } finally {
+        Pop-Location
+    }
 
-- `bun install`、`bun run build`、`vite build`、`rsbuild build`；
-- 大范围 `go build`、Docker build/buildx、镜像重建；
-- 把服务器当 Git 源码开发目录直接改代码。
+    $env:CGO_ENABLED = '0'
+    $env:GOOS = 'linux'
+    $env:GOARCH = 'amd64'
+    $taskLdFlags = "-s -w -X github.com/QuantumNous/new-api/common.Version=$taskCommit -extldflags '-static'"
+    & go build -buildvcs=false -ldflags $taskLdFlags -o $taskBinary .
+    if ($LASTEXITCODE -ne 0) { throw 'Backend build failed' }
+    & go version -m $taskBinary
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot read binary metadata' }
+    Get-Item -LiteralPath $taskBinary | Select-Object FullName, Length
+    Get-FileHash -LiteralPath $taskBinary -Algorithm SHA256
+} finally {
+    foreach ($taskName in $taskSavedEnv.Keys) {
+        [Environment]::SetEnvironmentVariable($taskName, $taskSavedEnv[$taskName], 'Process')
+    }
+    Pop-Location
+}
+~~~
 
-当前固定开发和构建目录是本地 Windows 工作副本：
+上传前核验版本、commit、ELF 64-bit AMD64 架构、静态链接、大小和 SHA-256。
+`go version -m` 可查看构建参数，架构与静态链接还需用 ELF 检查工具核实；
+Linux 上的 `file` 可用于接收后的独立验证。
 
-```text
-F:\WorkBuddy\2026-10-06-16-58-21\src\newapi-cmsg
-```
+CPA 在 `cliproxyapi/` 模块按其版本信息约定构建 `./cmd/server`，同样使用
+`CGO_ENABLED=0 GOOS=linux GOARCH=amd64`。针对 Alpine 运行镜像尤其要核验
+静态链接：带有缺失动态加载器的 ELF 会报 `no such file or directory`，
+即使二进制文件本身存在。
 
-只维护这个工作副本，不再将旧 WSL 仓库作为开发基线。Windows 已支持 Bun 前端构建和 Go 交叉编译，不需要依赖 WSL；CI 或其他专用构建机同样可以从已集成的 `dev/cmsg` 产出部署文件。
+仓库内 `scripts/cmsg-release-new-api.sh` 是 Bash 自动发布脚本，包含上传、
+重启和清理；`scripts/cmsg-rollback-new-api.sh` 会执行回滚切换。运行前读
+脚本并核对参数，确认具备 Bash 与相应传输工具；本机 PowerShell 构建和
+SSH 上传可按本节与下节单独执行。
 
-Linux AMD64 生产二进制使用 `CGO_ENABLED=0 GOOS=linux GOARCH=amd64` 构建。
-在 PowerShell 中应分别设置 `$env:CGO_ENABLED`、`$env:GOOS`、`$env:GOARCH`，不能直接照搬 Bash 的内联环境变量语法；完成后恢复原值，避免影响后续本机测试。
-先完成 `web/default` 构建，再构建嵌入前端资源的 New API 二进制，不要并行执行这两步。
-上传前核验内嵌 commit、ELF 架构、静态链接、文件大小和 SHA-256，上传后再次比对校验值。
+## 公网发布与回滚
 
-## 上线前检查
+每次发布先只读核对：
 
-常用检查：
+- 当前容器及状态、Compose 文件与服务名、实际二进制挂载源和目标；
+- 现役 release、版本和校验值，已有可回滚产物与 Compose 备份；
+- 目标实例的数据角色、端口和所改功能的验证方式。
 
-```bash
-git switch dev/cmsg
-git pull --ff-only origin dev/cmsg
-git branch -r --no-merged origin/dev/cmsg
-git status --short
-```
+New API 常用 Compose 路径为 `/opt/new-api/docker-compose.prod.yml`，
+二进制单文件只读挂载到 `/new-api`。CPA 使用自己的 Compose 与挂载，
+两种产物单独发布；CPAHome 也应单独核实来源、版本与二进制兼容性。
 
-如果有未合并分支，先查看：
+发布步骤：
 
-```bash
-git log --oneline origin/dev/cmsg..origin/<branch-name>
-```
+1. 将产物上传到新的不可变目录，例如
+   `/opt/new-api/releases/new-api-<commit>-<timestamp>/new-api`。
+   Windows 使用已配置的 `ssh.exe`/`scp.exe`，先核验 SSH 目标和权限；
+   上传后比较本地与远端 SHA-256。
+2. 保存 Compose 备份和旧 release 路径，确认目标是可执行的二进制文件。
+   只替换现有二进制挂载源，保持 `/new-api:ro`，避免把目录挂载到可执行路径。
+3. 用 `docker compose -f docker-compose.prod.yml config --quiet` 验证配置。
+   保持输出只包含所需结构，避免展开带凭据的配置或读取 `.env`。
+4. 说明重启影响后，仅重新创建目标 New API 服务。在 `/opt/new-api` 中执行
+   `sudo -n docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate new-api`。
+   CPA 发布使用其已核验的对应命令，数据库与 Redis 保持运行。
+5. 验证容器 `healthy`、真实挂载、内网
+   `http://127.0.0.1:3000/api/status` 与公网
+   `https://api.cmsg666.xyz/api/status` 的预期版本，并查看脱敏启动日志。
+   改动涉及转发、流式、余额或 UI 时，另测相应功能。
+6. 验收后保留 **3 个 release 总计：当前版本和此前 2 个版本**。清理前核实
+   所有运行挂载和回滚依赖，按精确目录操作；保留对应 Compose 备份，清理已
+   验证无用的上传临时目录。保留策略适用于单项服务的 release，历史脚本或
+   手册中的其他数量应在执行前核对。
 
-确认不需要合并后再构建或上线。
-
-## 生产发布原则
-
-- `dev/cmsg` 是唯一日常集成源。
-- 生产构建从本地 Windows、CI 或专用构建机产出；不在生产运行节点编译。
-- `cmsg-root:/opt/new-api` 和 `cmsg-root:/opt/cliproxyapi` 只作为运行环境。
-- 服务器上的 Git 历史、源码目录和临时文件不能作为后续开发基线。
-- 上线后需要验证容器状态、健康检查和相关功能页面或 API。
+回滚时恢复旧二进制挂载源或对应 Compose 备份，重新创建同一个服务，再运行
+同样的健康、版本与功能检查。发布记录包含新旧 release、commit、SHA-256、
+备份位置、验证结果和中断影响，凭据继续保存在受保护的运行配置中。
 
 ## 上游同步记录
 
