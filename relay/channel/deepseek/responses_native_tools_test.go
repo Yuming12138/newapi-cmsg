@@ -76,12 +76,16 @@ func TestNativeResponsesCodexNamespaceToolsRoundTrip(t *testing.T) {
 			require.Equal(t, "functions_wait", tools[1]["name"])
 			upstream, err := normalizeResponsesInput(got.Input)
 			require.NoError(t, err)
-			require.Len(t, upstream, 4)
-			require.Equal(t, "functions_exec", upstream[0]["name"])
-			require.Equal(t, "functions_wait", upstream[2]["name"])
-			require.NotContains(t, upstream[2], "namespace")
-			require.Equal(t, "call_exec", upstream[0]["call_id"])
-			require.JSONEq(t, `{"input":"text(1)"}`, upstream[0]["arguments"].(string))
+			// DeepSeek rejects a tool-call turn without a preceding reasoning
+			// item (verified 400 on api.deepseek.com, 2026-10-15), so the
+			// pipeline backfills a placeholder ahead of each call batch.
+			require.Len(t, upstream, 6)
+			require.Equal(t, "reasoning", upstream[0]["type"])
+			require.Equal(t, "functions_exec", upstream[1]["name"])
+			require.Equal(t, "functions_wait", upstream[4]["name"])
+			require.NotContains(t, upstream[4], "namespace")
+			require.Equal(t, "call_exec", upstream[1]["call_id"])
+			require.JSONEq(t, `{"input":"text(1)"}`, upstream[1]["arguments"].(string))
 			toolMap := buildNativeResponsesToolMap(declared)
 			outputs, changed := convertNativeResponsesOutput([]dto.ResponsesOutput{
 				{Type: "custom_tool_call", Name: "functions_exec", CallId: "call_exec", Input: rawString("text(1)")},

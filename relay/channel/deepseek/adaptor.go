@@ -189,6 +189,14 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	}
 	setNativeResponsesToolMapForRequest(c, request)
 	setNativeResponsesRequest(c, request)
+	request, backfilled, err := backfillMissingNativeReasoning(request)
+	if err != nil {
+		return nil, err
+	}
+	if backfilled && c != nil {
+		// Count only. Never log reasoning text, summaries, ciphertext, or IDs.
+		c.Set("deepseek_reasoning_backfilled", true)
+	}
 	originalTools := buildNativeResponsesToolMap(request.GetToolsMap())
 	appendNativeResponsesInputTools(originalTools, request.Input)
 	request, err = normalizeNativeResponsesToolsForUpstream(request)

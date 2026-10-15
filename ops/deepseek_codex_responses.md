@@ -74,6 +74,39 @@ reasoning → assistant preamble → call 1 → call 2 → result 1 → result 2
 `name=wait, namespace=functions`。下一轮历史再次转换为上游的函数名称，
 `call_id` 保持不变。完整响应和流式 item 都执行同样的恢复。
 
+## 2026-10-15 修复：工具轮次缺少 reasoning_text 的 400
+
+用户报告「上一个对话是 gemini，下一个对话是 deepseek」时报错：
+
+```text
+The `reasoning_text` in the thinking mode must be passed back to the API.
+```
+
+渠道 11 将 `gpt-5.6-sol` 映射到 `deepseek-flash`（白名单模型，走原生
+`/responses`）。用本地 dump 代理（渠道 base_url 临时指向透传代理，抓取
+New API 实际上游请求）加真实上游对照实验确认：**带 `tools` 且 thinking
+开启时，DeepSeek 要求每个助手轮次都回传 reasoning_text**，以下形态全部
+返回 400（`deepseek-flash` 与 `deepseek-v4-pro` 均复现）：
+
+| 历史形态 | 结果 |
+| --- | --- |
+| `… user → function_call → function_call_output`（工具轮无 reasoning） | 400 |
+| `… function_call → function_call_output → assistant message`（结果后文本轮无 reasoning） | 400 |
+| `… function_call → function_call_output → function_call`（结果后新工具轮无 reasoning） | 400 |
+| `user → assistant message`（普通文本轮无 reasoning） | 200 |
+| `… reasoning → function_call → function_call_output`（工具轮有 reasoning） | 200 |
+| `… function_call → function_call_output → 占位 reasoning → assistant message` | 200 |
+
+`normalizeForeignResponsesReasoning` 只转换已存在的 reasoning item，不会
+为缺失的轮次合成内容；gemini-CPA 的工具轮经常不带 reasoning item，客户端
+原样回传即触发上游 400。
+
+修复新增 `backfillMissingNativeReasoning`：对每个工具调用批次（其前无
+reasoning 时）和工具结果后的助手消息（其前无 reasoning 时）插入占位
+reasoning item（`reasoning_text` 为单个空格）。占位内容不满足
+`hasNativeReasoningText`（TrimSpace 后为空），不会写入明文缓存；该函数在
+会话存储之后运行，占位不会进入 `previous_response_id` 回放历史。
+
 ## 验证
 
 ```bash

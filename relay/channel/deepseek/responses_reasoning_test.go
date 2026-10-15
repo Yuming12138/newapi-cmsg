@@ -132,14 +132,20 @@ func TestRestoreNativeReasoningKeepsParallelCallBatchForUpstream(t *testing.T) {
 	require.NoError(t, err)
 	items, err := normalizeResponsesInput(converted.(dto.OpenAIResponsesRequest).Input)
 	require.NoError(t, err)
-	require.Len(t, items, 7)
+	// Both call batches need a reasoning item ahead of them: DeepSeek rejects
+	// a tools-carrying request whose assistant turn lacks reasoning_text
+	// (verified 400 on api.deepseek.com, 2026-10-15). The restored plaintext
+	// covers the first batch; the second batch after the results is backfilled
+	// with a placeholder.
+	require.Len(t, items, 9)
 	require.Equal(t, "authentic parallel thought", nativeReasoningTestText(t, items[1]))
-	require.Equal(t, []string{"message", "reasoning", "message", "function_call", "function_call", "function_call_output", "function_call_output"}, []string{
+	require.Equal(t, []string{"message", "reasoning", "message", "reasoning", "function_call", "function_call_output", "reasoning", "function_call", "function_call_output"}, []string{
 		common.Interface2String(items[0]["type"]), common.Interface2String(items[1]["type"]), common.Interface2String(items[2]["type"]),
-		common.Interface2String(items[3]["type"]), common.Interface2String(items[4]["type"]), common.Interface2String(items[5]["type"]), common.Interface2String(items[6]["type"]),
+		common.Interface2String(items[3]["type"]), common.Interface2String(items[4]["type"]), common.Interface2String(items[5]["type"]),
+		common.Interface2String(items[6]["type"]), common.Interface2String(items[7]["type"]), common.Interface2String(items[8]["type"]),
 	})
-	require.Equal(t, "call_2", toolCallID(items[5]))
-	require.Equal(t, "call_1", toolCallID(items[6]))
+	require.Equal(t, "call_1", toolCallID(items[5]))
+	require.Equal(t, "call_2", toolCallID(items[8]))
 }
 
 func TestNormalizeForeignReasoningSummaryForDeepSeek(t *testing.T) {
@@ -260,7 +266,10 @@ func TestCrossProviderReasoningToolTranscript(t *testing.T) {
 	got := converted.(dto.OpenAIResponsesRequest)
 	items, err := normalizeResponsesInput(got.Input)
 	require.NoError(t, err)
-	require.Len(t, items, 5)
+	// The assistant message after the tool result is a new assistant turn:
+	// DeepSeek rejects it without a preceding reasoning item (verified 400 on
+	// api.deepseek.com, 2026-10-15), so the pipeline backfills a placeholder.
+	require.Len(t, items, 6)
 	require.Equal(t, "reasoning", items[0]["type"])
 	require.Equal(t, "GPT summary", nativeReasoningTestText(t, items[0]))
 	require.NotContains(t, items[0], "summary")
@@ -271,8 +280,9 @@ func TestCrossProviderReasoningToolTranscript(t *testing.T) {
 	require.Equal(t, "call_1", items[1]["call_id"])
 	require.Equal(t, "function_call_output", items[2]["type"])
 	require.Equal(t, "call_1", items[2]["call_id"])
-	require.Equal(t, "assistant", items[3]["role"])
-	require.Equal(t, "user", items[4]["role"])
+	require.Equal(t, "reasoning", items[3]["type"])
+	require.Equal(t, "assistant", items[4]["role"])
+	require.Equal(t, "user", items[5]["role"])
 }
 
 func TestCrossProviderReasoningDoesNotWriteForeignTextToCache(t *testing.T) {
