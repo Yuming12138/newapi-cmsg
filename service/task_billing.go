@@ -56,13 +56,13 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
 		ChannelId:     info.ChannelId,
 		ModelName:     info.OriginModelName,
-		UpstreamModel: quotaUpstreamModel(info),
+		UpstreamModel: QuotaUpstreamModel(info),
 		TokenName:     tokenName,
-		Quota:     info.PriceData.Quota,
-		Content:   logContent,
-		TokenId:   info.TokenId,
-		Group:     info.UsingGroup,
-		Other:     other,
+		Quota:         info.PriceData.Quota,
+		Content:       logContent,
+		TokenId:       info.TokenId,
+		Group:         info.UsingGroup,
+		Other:         other,
 	})
 	model.UpdateUserUsedQuotaAndRequestCount(info.UserId, info.PriceData.Quota)
 	model.UpdateChannelUsedQuota(info.ChannelId, info.PriceData.Quota)

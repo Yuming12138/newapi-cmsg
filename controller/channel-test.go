@@ -517,6 +517,7 @@ func testChannelWithPrompt(channel *model.Channel, testUserID int, testModel str
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,
 		ModelName:        info.OriginModelName,
+		UpstreamModel:    service.QuotaUpstreamModel(info),
 		TokenName:        "模型测试",
 		Quota:            quota,
 		Content:          "模型测试",
