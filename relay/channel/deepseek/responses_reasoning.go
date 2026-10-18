@@ -529,17 +529,18 @@ func foreignReasoningSummaryTexts(summary any) []string {
 
 // backfillMissingNativeReasoning inserts a placeholder reasoning item ahead of
 // assistant content that DeepSeek would otherwise reject. In thinking mode with
-// a tools-carrying request, DeepSeek requires every assistant turn to replay
-// its reasoning_text: a tool-call batch without a preceding reasoning item, an
-// assistant message right after a tool result, and a new tool batch after a
-// result are each rejected with
-// 400 "The `reasoning_text` in the thinking mode must be passed back to the
-// API." Cross-provider histories hit this constantly: gemini-CPA tool turns
-// often arrive without any reasoning item, and the client replays them
-// verbatim. A plain user turn followed by an assistant message stays accepted
-// without reasoning, so only tool-related turns are backfilled. Verified
-// against api.deepseek.com on 2026-10-15 (deepseek-flash and deepseek-v4-pro,
-// thinking enabled, tools present).
+// a tools-carrying request, DeepSeek requires the final assistant group of the
+// transcript to open with a reasoning item: a plain "[user, assistant]" ending
+// without one is a 400, and so is any group whose first assistant item is a
+// tool call, a message after a tool result, or a new tool batch after a result
+// ("The `reasoning_text` in the thinking mode must be passed back to the
+// API."). Cross-provider histories hit this constantly: gemini-CPA and some
+// GPT turns arrive without any reasoning item, and the client replays them
+// verbatim. Only the final group is validated, but backfilling earlier groups
+// is harmless (verified: extra placeholders never change the verdict), so the
+// same rule covers all groups uniformly. Verified against api.deepseek.com on
+// 2026-10-15 and 2026-10-18 (deepseek-flash and deepseek-v4-pro, thinking
+// enabled, tools present).
 func backfillMissingNativeReasoning(request dto.OpenAIResponsesRequest) (dto.OpenAIResponsesRequest, bool, error) {
 	items, err := normalizeResponsesInput(request.Input)
 	if err != nil || len(items) == 0 {
@@ -548,7 +549,6 @@ func backfillMissingNativeReasoning(request dto.OpenAIResponsesRequest) (dto.Ope
 	out := make([]map[string]any, 0, len(items)+4)
 	changed := false
 	sawReasoning := false
-	inToolLoop := false
 	for _, item := range items {
 		itemType := common.Interface2String(item["type"])
 		switch {
@@ -561,19 +561,18 @@ func backfillMissingNativeReasoning(request dto.OpenAIResponsesRequest) (dto.Ope
 			}
 			sawReasoning = false
 		case isResponsesToolOutput(item):
+			// A tool result opens a new assistant group.
 			sawReasoning = false
-			inToolLoop = true
 		case itemType == "message" && common.Interface2String(item["role"]) == "assistant":
-			if inToolLoop && !sawReasoning {
+			if !sawReasoning {
 				out = append(out, placeholderNativeReasoningItem())
 				changed = true
 			}
 			sawReasoning = false
 		case itemType == "message" && common.Interface2String(item["role"]) == "user":
 			sawReasoning = false
-			inToolLoop = false
 		default:
-			// System/developer items neither open nor close an assistant turn.
+			// System/developer items neither open nor close an assistant group.
 		}
 		out = append(out, item)
 	}

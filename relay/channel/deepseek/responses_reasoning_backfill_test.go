@@ -95,9 +95,11 @@ func TestBackfillMissingNativeReasoning_CustomToolAfterResult(t *testing.T) {
 	require.Equal(t, []string{"message", "reasoning", "custom_tool_call", "custom_tool_call_output", "reasoning", "message"}, reasoningItemTypes(t, got))
 }
 
-// A plain user turn followed by an assistant message without reasoning is
-// accepted by DeepSeek (verified 200), so it must stay untouched.
-func TestBackfillMissingNativeReasoning_PlainAssistantMessageUnchanged(t *testing.T) {
+// A plain user turn followed by an assistant message is also backfilled: the
+// final assistant group must open with a reasoning item even without tools in
+// history (verified: [user, assistant] alone is a 400 on api.deepseek.com,
+// 2026-10-18). Extra placeholders in earlier groups never change the verdict.
+func TestBackfillMissingNativeReasoning_PlainAssistantMessage(t *testing.T) {
 	request := backfillTestRequest(t,
 		map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "hi"}}},
 		map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "hello"}}},
@@ -105,6 +107,50 @@ func TestBackfillMissingNativeReasoning_PlainAssistantMessageUnchanged(t *testin
 		map[string]any{"type": "reasoning", "content": []any{map[string]any{"type": "reasoning_text", "text": "t"}}},
 		map[string]any{"type": "function_call", "call_id": "c1", "name": "shell", "arguments": "{}"},
 		map[string]any{"type": "function_call_output", "call_id": "c1", "output": "files"},
+	)
+	got, changed, err := backfillMissingNativeReasoning(request)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, []string{"message", "reasoning", "message", "message", "reasoning", "function_call", "function_call_output"}, reasoningItemTypes(t, got))
+}
+
+// The reported "gpt then deepseek" shape: a tool turn, then a new user turn,
+// then a plain assistant answer. The final group opens without reasoning and
+// DeepSeek rejects it (verified 400 on api.deepseek.com, 2026-10-18).
+func TestBackfillMissingNativeReasoning_FinalTextGroupAfterToolHistory(t *testing.T) {
+	request := backfillTestRequest(t,
+		map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "hi"}}},
+		map[string]any{"type": "reasoning", "content": []any{map[string]any{"type": "reasoning_text", "text": "t1"}}},
+		map[string]any{"type": "function_call", "call_id": "c1", "name": "shell", "arguments": "{}"},
+		map[string]any{"type": "function_call_output", "call_id": "c1", "output": "files"},
+		map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "next"}}},
+		map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "answer"}}},
+	)
+	got, changed, err := backfillMissingNativeReasoning(request)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, []string{"message", "reasoning", "function_call", "function_call_output", "message", "reasoning", "message"}, reasoningItemTypes(t, got))
+}
+
+func TestBackfillMissingNativeReasoning_PlainTwoTurnTextHistory(t *testing.T) {
+	request := backfillTestRequest(t,
+		map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "hi"}}},
+		map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "hello"}}},
+		map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "next"}}},
+		map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "answer"}}},
+	)
+	got, changed, err := backfillMissingNativeReasoning(request)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, []string{"message", "reasoning", "message", "message", "reasoning", "message"}, reasoningItemTypes(t, got))
+}
+
+func TestBackfillMissingNativeReasoning_TrailingUserTurnUnchanged(t *testing.T) {
+	request := backfillTestRequest(t,
+		map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "hi"}}},
+		map[string]any{"type": "reasoning", "content": []any{map[string]any{"type": "reasoning_text", "text": "t1"}}},
+		map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "hello"}}},
+		map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "next"}}},
 	)
 	got, changed, err := backfillMissingNativeReasoning(request)
 	require.NoError(t, err)
