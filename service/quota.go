@@ -41,6 +41,22 @@ type QuotaInfo struct {
 	GroupRatio    float64
 }
 
+
+// quotaUpstreamModel reports the model actually called after channel mapping.
+// Unmapped relays fall back to the client model so the column is never empty
+// for rows written by this build.
+// ChannelMeta is an embedded pointer and is nil before InitChannelMeta runs,
+// so it must be checked before reading UpstreamModelName.
+func quotaUpstreamModel(relayInfo *relaycommon.RelayInfo) string {
+	if relayInfo == nil {
+		return ""
+	}
+	if relayInfo.ChannelMeta != nil && relayInfo.UpstreamModelName != "" {
+		return relayInfo.UpstreamModelName
+	}
+	return relayInfo.OriginModelName
+}
+
 func hasCustomModelRatio(modelName string, currentRatio float64) bool {
 	defaultRatio, exists := ratio_setting.GetDefaultModelRatioMap()[modelName]
 	if !exists {
@@ -253,6 +269,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		PromptTokens:     usage.InputTokens,
 		CompletionTokens: usage.OutputTokens,
 		ModelName:        logModel,
+		UpstreamModel:    quotaUpstreamModel(relayInfo),
 		TokenName:        tokenName,
 		Quota:            quota,
 		Content:          logContent,
@@ -375,6 +392,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,
 		ModelName:        logModel,
+		UpstreamModel:    quotaUpstreamModel(relayInfo),
 		TokenName:        tokenName,
 		Quota:            quota,
 		Content:          logContent,

@@ -278,13 +278,6 @@ export function Dashboard() {
                   <LazyPerformanceOverview />
                 </Suspense>
               </FadeIn>
-              {isAdmin && (
-                <FadeIn delay={0.12}>
-                  <Suspense fallback={<PerformanceOverviewFallback />}>
-                    <LazyChannelUsageTable filters={modelFilters} />
-                  </Suspense>
-                </FadeIn>
-              )}
               <FadeIn delay={0.15}>
                 <Suspense fallback={<ModelChartsFallback />}>
                   <LazyConsumptionDistributionChart
@@ -311,6 +304,13 @@ export function Dashboard() {
                   />
                 </Suspense>
               </FadeIn>
+              {isAdmin && (
+                <FadeIn delay={0.25}>
+                  <Suspense fallback={<PerformanceOverviewFallback />}>
+                    <LazyChannelUsageTable filters={modelFilters} />
+                  </Suspense>
+                </FadeIn>
+              )}
             </>
           )}
           {activeSection === 'users' && (

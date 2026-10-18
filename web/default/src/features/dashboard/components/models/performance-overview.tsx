@@ -188,7 +188,7 @@ export function PerformanceOverview() {
   const topModels = useMemo(() => models.slice(0, TOP_MODEL_LIMIT), [models])
   const loading = metricsQuery.isLoading
   const hasData = models.length > 0
-  const description = t('Performance metrics for the last 24 hours')
+  const description = t('Performance metrics for the last 24 hours, grouped by upstream model')
 
   return (
     <section className='space-y-3 sm:space-y-4'>
@@ -237,7 +237,7 @@ export function PerformanceOverview() {
             <Table className='text-sm'>
               <TableHeader>
                 <TableRow className='hover:bg-transparent'>
-                  <TableHead>{t('Model')}</TableHead>
+                  <TableHead>{t('Upstream model')}</TableHead>
                   <TableHead className='text-right'>
                     {t('Requests (24h)')}
                   </TableHead>
@@ -274,9 +274,9 @@ export function PerformanceOverview() {
                       </TableRow>
                     ))
                   : topModels.map((model) => (
-                      <TableRow key={model.model_name}>
+                      <TableRow key={model.upstream_model}>
                         <TableCell className='max-w-[220px] truncate font-mono'>
-                          {model.model_name}
+                          {model.upstream_model}
                         </TableCell>
                         <TableCell className='text-right font-mono tabular-nums'>
                           {formatNumber(model.request_count)}

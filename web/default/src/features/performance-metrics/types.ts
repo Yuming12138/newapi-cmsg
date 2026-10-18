@@ -44,7 +44,7 @@ export type PerformanceMetricsData = {
 }
 
 export type PerfModelSummary = {
-  model_name: string
+  upstream_model: string
   avg_latency_ms: number
   success_rate: number
   avg_tps: number

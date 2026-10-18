@@ -360,6 +360,7 @@ type RecordConsumeLogParams struct {
 	PromptTokens     int                    `json:"prompt_tokens"`
 	CompletionTokens int                    `json:"completion_tokens"`
 	ModelName        string                 `json:"model_name"`
+	UpstreamModel    string                 `json:"upstream_model"`
 	TokenName        string                 `json:"token_name"`
 	Quota            int                    `json:"quota"`
 	Content          string                 `json:"content"`
@@ -418,31 +419,33 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	}
 	if common.DataExportEnabled {
 		LogQuotaData(QuotaDataLogParams{
-			UserID:    userId,
-			Username:  username,
-			ModelName: params.ModelName,
-			Quota:     params.Quota,
-			CreatedAt: createdAt,
-			TokenUsed: params.PromptTokens + params.CompletionTokens,
-			UseGroup:  params.Group,
-			TokenID:   params.TokenId,
-			ChannelID: params.ChannelId,
-			NodeName:  common.NodeName,
+			UserID:        userId,
+			Username:      username,
+			ModelName:     params.ModelName,
+			UpstreamModel: params.UpstreamModel,
+			Quota:         params.Quota,
+			CreatedAt:     createdAt,
+			TokenUsed:     params.PromptTokens + params.CompletionTokens,
+			UseGroup:      params.Group,
+			TokenID:       params.TokenId,
+			ChannelID:     params.ChannelId,
+			NodeName:      common.NodeName,
 		})
 	}
 }
 
 type RecordTaskBillingLogParams struct {
-	UserId    int
-	LogType   int
-	Content   string
-	ChannelId int
-	ModelName string
-	Quota     int
-	TokenId   int
-	Group     string
-	Other     map[string]interface{}
-	NodeName  string // 任务发起节点；为空时回退当前节点
+	UserId        int
+	LogType       int
+	Content       string
+	ChannelId     int
+	ModelName     string
+	UpstreamModel string
+	Quota         int
+	TokenId       int
+	Group         string
+	Other         map[string]interface{}
+	NodeName      string // 任务发起节点；为空时回退当前节点
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
@@ -488,15 +491,16 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	}
 	if params.LogType == LogTypeConsume && common.DataExportEnabled {
 		LogQuotaData(QuotaDataLogParams{
-			UserID:    params.UserId,
-			Username:  username,
-			ModelName: params.ModelName,
-			Quota:     params.Quota,
-			CreatedAt: log.CreatedAt,
-			UseGroup:  params.Group,
-			TokenID:   params.TokenId,
-			ChannelID: params.ChannelId,
-			NodeName:  nodeName,
+			UserID:        params.UserId,
+			Username:      username,
+			ModelName:     params.ModelName,
+			UpstreamModel: params.UpstreamModel,
+			Quota:         params.Quota,
+			CreatedAt:     log.CreatedAt,
+			UseGroup:      params.Group,
+			TokenID:       params.TokenId,
+			ChannelID:     params.ChannelId,
+			NodeName:      nodeName,
 		})
 	}
 }
