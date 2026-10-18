@@ -3,6 +3,7 @@ package perfmetrics
 import (
 	"fmt"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -22,6 +23,17 @@ func flushLoop() {
 		cleanupExpiredMetrics(setting.RetentionDays)
 	}
 }
+
+// consecutiveFlushFailures guards against the retry storm that pinned a core
+// on 2026-10-18: when the metrics table or its unique index does not match the
+// binary (schema drift, failed migration), every flush failed, the drained
+// counters were added back, and the next cycle retried forever. Metrics are a
+// side feature: after a handful of consecutive failures the circuit opens and
+// buckets are dropped instead of retried, so the relay path is never the thing
+// that suffers.
+const maxConsecutiveFlushFailures = 5
+
+var consecutiveFlushFailures atomic.Int32
 
 func flushCompletedBuckets() {
 	currentBucket := bucketStart(time.Now().Unix())
@@ -52,10 +64,19 @@ func flushCompletedBuckets() {
 			GenerationMs:   drained.generationMs,
 		})
 		if err != nil {
+			failures := consecutiveFlushFailures.Add(1)
+			if failures >= maxConsecutiveFlushFailures {
+				// Circuit open: drop the drained counters and forget the bucket
+				// instead of retrying every cycle.
+				hotBuckets.Delete(key)
+				common.SysError(fmt.Sprintf("perf metric flush circuit open after %d consecutive failures (model=%s group=%s bucket=%d): %s; buckets are dropped until restart", failures, k.model, k.group, k.bucketTs, err.Error()))
+				return true
+			}
 			bucket.addCounters(drained)
-			common.SysError(fmt.Sprintf("failed to flush perf metric bucket model=%s group=%s bucket=%d: %s", k.model, k.group, k.bucketTs, err.Error()))
+			common.SysError(fmt.Sprintf("failed to flush perf metric bucket model=%s group=%s bucket=%d (attempt %d/%d): %s", k.model, k.group, k.bucketTs, failures, maxConsecutiveFlushFailures, err.Error()))
 			return true
 		}
+		consecutiveFlushFailures.Store(0)
 
 		deleteOldEmptyBucket(k, key)
 		return true
