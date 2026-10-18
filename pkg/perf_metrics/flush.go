@@ -38,8 +38,9 @@ func flushCompletedBuckets() {
 			return true
 		}
 
-		err := model.UpsertPerfMetric(&model.PerfMetric{
+		err := model.UpsertPerfMetricUpstream(&model.PerfMetricUpstream{
 			ModelName:      k.model,
+			UpstreamModel:  k.upstreamModel,
 			Group:          k.group,
 			BucketTs:       k.bucketTs,
 			RequestCount:   drained.requestCount,

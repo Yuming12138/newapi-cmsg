@@ -8,20 +8,21 @@ type Store interface {
 }
 
 type Sample struct {
-	Model        string
-	Group        string
-	LatencyMs    int64
-	TtftMs       int64
-	HasTtft      bool
-	Success      bool
-	OutputTokens int64
-	GenerationMs int64
+	Model         string
+	UpstreamModel string
+	Group         string
+	LatencyMs     int64
+	TtftMs        int64
+	HasTtft       bool
+	Success       bool
+	OutputTokens  int64
+	GenerationMs  int64
 }
 
 type QueryParams struct {
-	Model string
-	Group string
-	Hours int
+	Model   string
+	Group   string
+	Hours   int
 }
 
 type BucketPoint struct {
@@ -48,11 +49,11 @@ type QueryResult struct {
 }
 
 type ModelSummary struct {
-	ModelName    string  `json:"model_name"`
-	AvgLatencyMs int64   `json:"avg_latency_ms"`
-	SuccessRate  float64 `json:"success_rate"`
-	AvgTps       float64 `json:"avg_tps"`
-	RequestCount int64   `json:"request_count"`
+	UpstreamModel string  `json:"upstream_model"`
+	AvgLatencyMs  int64   `json:"avg_latency_ms"`
+	SuccessRate   float64 `json:"success_rate"`
+	AvgTps        float64 `json:"avg_tps"`
+	RequestCount  int64   `json:"request_count"`
 }
 
 type SummaryAllResult struct {
@@ -60,9 +61,10 @@ type SummaryAllResult struct {
 }
 
 type bucketKey struct {
-	model    string
-	group    string
-	bucketTs int64
+	model         string
+	upstreamModel string
+	group         string
+	bucketTs      int64
 }
 
 type counters struct {
