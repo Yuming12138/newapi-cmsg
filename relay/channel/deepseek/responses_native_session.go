@@ -78,6 +78,16 @@ func mergeNativeResponsesItems(baseItems, inputItems []map[string]any) []map[str
 			}
 			seen[key] = struct{}{}
 		}
+		// Codex echoes the reasoning it received back into the next request
+		// while the replayed transcript already carries the upstream copy. The
+		// id-based key never matches those two (one side has an item id, the
+		// other does not), so every tool round used to store the same reasoning
+		// twice and the prompt doubled in size. Adjacent identical reasoning
+		// items carry no extra information, and dropping one still leaves a
+		// reasoning item in front of the assistant group DeepSeek requires.
+		if len(allItems) > 0 && isAdjacentReasoningDuplicate(allItems[len(allItems)-1], item) {
+			return
+		}
 		allItems = append(allItems, item)
 	}
 	for _, item := range baseItems {
@@ -87,6 +97,42 @@ func mergeNativeResponsesItems(baseItems, inputItems []map[string]any) []map[str
 		appendItem(item)
 	}
 	return allItems
+}
+
+func isAdjacentReasoningDuplicate(previous, next map[string]any) bool {
+	nextText, ok := reasoningText(next)
+	if !ok {
+		return false
+	}
+	previousText, ok := reasoningText(previous)
+	if !ok {
+		return false
+	}
+	return nextText == previousText
+}
+
+// reasoningText reports whether the item is a reasoning item and returns its
+// concatenated text. Only the text is compared because the upstream copy
+// carries nothing but {type, content} while the client copy adds id, role and
+// annotations.
+func reasoningText(item map[string]any) (string, bool) {
+	if common.Interface2String(item["type"]) != "reasoning" {
+		return "", false
+	}
+	var b strings.Builder
+	content, ok := item["content"].([]any)
+	if !ok {
+		return "", true
+	}
+	for _, part := range content {
+		entry, ok := part.(map[string]any)
+		if !ok {
+			continue
+		}
+		b.WriteString(common.Interface2String(entry["text"]))
+		b.WriteByte('\x00')
+	}
+	return b.String(), true
 }
 
 func nativeResponsesItemKey(item map[string]any) string {

@@ -307,3 +307,53 @@ func TestBuildNativeResponsesSessionStateStoresInstructionsAndPendingTool(t *tes
 	require.Equal(t, "call_1", items[3]["call_id"])
 	require.Equal(t, pendingToolCall{CallID: "call_1", Name: "exec", Type: "custom_tool_call"}, pending["call_1"])
 }
+
+func TestMergeNativeResponsesItemsDropsAdjacentReasoningDuplicate(t *testing.T) {
+	reasoningText := "Need continue. Inspect the active release symlink."
+	inputItems := []map[string]any{
+		{
+			"type":    "reasoning",
+			"content": []any{map[string]any{"type": "reasoning_text", "text": reasoningText}},
+		},
+		{
+			"id":      "d556b7d2-ad7f-40fa-9c84-2941504fb995",
+			"type":    "reasoning",
+			"role":    "",
+			"size":    "",
+			"quality": "",
+			"content": []any{map[string]any{
+				"type":        "reasoning_text",
+				"text":        reasoningText,
+				"annotations": nil,
+			}},
+		},
+		{"type": "custom_tool_call", "call_id": "call_1", "name": "exec", "input": "text(1)"},
+		{"type": "custom_tool_call_output", "call_id": "call_1", "output": "1"},
+	}
+
+	merged := mergeNativeResponsesItems(nil, inputItems)
+
+	require.Len(t, merged, 3)
+	require.Equal(t, "reasoning", merged[0]["type"])
+	require.Equal(t, "custom_tool_call", merged[1]["type"])
+	require.Equal(t, "custom_tool_call_output", merged[2]["type"])
+}
+
+func TestMergeNativeResponsesItemsKeepsNonAdjacentReasoning(t *testing.T) {
+	reasoningText := "the same plan, repeated in a different turn"
+	baseItems := []map[string]any{
+		{"type": "reasoning", "content": []any{map[string]any{"type": "reasoning_text", "text": reasoningText}}},
+		{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "done"}}},
+	}
+	inputItems := []map[string]any{
+		{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "继续"}}},
+		{"type": "reasoning", "content": []any{map[string]any{"type": "reasoning_text", "text": reasoningText}}},
+		{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "ok"}}},
+	}
+
+	merged := mergeNativeResponsesItems(baseItems, inputItems)
+
+	require.Len(t, merged, 5)
+	require.Equal(t, "reasoning", merged[0]["type"])
+	require.Equal(t, "reasoning", merged[3]["type"])
+}
