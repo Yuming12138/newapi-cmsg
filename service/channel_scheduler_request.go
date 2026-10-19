@@ -87,7 +87,7 @@ func HandleChannelFailure(c *gin.Context, channelError types.ChannelError, err *
 	reason := buildChannelFailureReason(err)
 	ExcludeChannelForRequest(c, channelError.ChannelId, reason)
 
-	if ShouldClearChannelAffinityAfterError(err) {
+	if ShouldClearChannelAffinityForRequest(c, err) {
 		ClearChannelAffinityForRequest(c, fmt.Sprintf("channel #%d relay failure: %s", channelError.ChannelId, reason))
 	}
 
@@ -146,6 +146,45 @@ func ShouldClearChannelAffinityAfterError(err *types.NewAPIError) bool {
 		return true
 	}
 	return false
+}
+
+// ShouldClearChannelAffinityForRequest decides whether a failed attempt may
+// clear the session affinity so the retry can escape to other channels.
+//
+// CLI session rules ("codex cli trace", "claude cli trace") pin conversations
+// whose continuation context can only be served by the channel that minted it:
+// DeepSeek's native Responses replay stores the transcript server-side, and
+// CPA validates its own encrypted reasoning continuation. Sending such a
+// request to a different upstream after a transient timeout only produces
+// "The upstream could not validate encrypted continuation context" failures.
+//
+// So for skip-retry session rules the affinity survives transient transport
+// failures (upstream timeouts / 5xx) — the request fails fast and the client
+// retries while the affinity stays warm. Quota exhaustion, rate limits, auth
+// problems and disable-worthy errors still clear the affinity, because the
+// pinned channel is genuinely unusable for this user and waiting on it would
+// be worse than failing over.
+func ShouldClearChannelAffinityForRequest(c *gin.Context, err *types.NewAPIError) bool {
+	if !ShouldClearChannelAffinityAfterError(err) {
+		return false
+	}
+	if ShouldDisableChannel(err) {
+		return true
+	}
+	if c == nil {
+		return true
+	}
+	meta, hasMeta := getChannelAffinityMeta(c)
+	if !hasMeta || !meta.SkipRetry {
+		return true
+	}
+	if _, reason, ok := temporaryUnschedulableDecision(err); ok {
+		switch reason {
+		case "upstream_timeout", "upstream_unavailable":
+			return false
+		}
+	}
+	return true
 }
 
 func temporaryUnschedulableDecision(err *types.NewAPIError) (time.Duration, string, bool) {
