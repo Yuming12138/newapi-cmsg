@@ -11,6 +11,7 @@ import (
 	"net/textproto"
 	"net/url"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -612,15 +613,21 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	// A Responses session started on another provider keeps its transcript in
 	// responses_chat_sessions. Replaying it here lets an intentional switch to
 	// this channel continue the thread instead of failing continuation checks.
-	request, _, err := service.ReplayForeignResponsesSession(info, request)
+	continuationID := strings.TrimSpace(request.PreviousResponseID)
+	originalInput := append([]byte(nil), request.Input...)
+	var replayed bool
+	request, replayed, err := service.ReplayForeignResponsesSession(info, request)
 	if err != nil {
 		return nil, err
 	}
-	if isGPTResponsesModel(request, info) {
+	if isOpenAIReasoningResponsesModel(request, info) {
 		request, err = service.DropForeignReasoningItems(request)
 		if err != nil {
 			return nil, err
 		}
+	}
+	if continuationID != "" {
+		logger.LogInfo(c, fmt.Sprintf("responses continuation: previous_response_id=%s replayed=%t channel=%d items=%s", continuationID, replayed, channelIDOf(info), summarizeResponsesInput(originalInput)))
 	}
 	request, err = sanitizeGPTResponsesInputItemIDs(request, info)
 	if err != nil {
@@ -660,12 +667,69 @@ func isMoonshotResponsesChannel(info *relaycommon.RelayInfo, requestedModel stri
 	return false
 }
 
-func isGPTResponsesModel(request dto.OpenAIResponsesRequest, info *relaycommon.RelayInfo) bool {
+// isOpenAIReasoningResponsesModel reports whether the upstream validates
+// reasoning ciphertext, i.e. whether reasoning items minted elsewhere have to
+// be stripped. IsOpenAIGPT5Model only covers the gpt-5 family, while clients
+// commonly request gpt-6.1-sol / gpt-6-luna through the same channels.
+func isOpenAIReasoningResponsesModel(request dto.OpenAIResponsesRequest, info *relaycommon.RelayInfo) bool {
 	modelName := request.Model
 	if info != nil && strings.TrimSpace(info.UpstreamModelName) != "" {
 		modelName = info.UpstreamModelName
 	}
-	return dto.IsOpenAIGPT5Model(strings.TrimSpace(modelName))
+	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	for _, prefix := range []string{"gpt-5", "gpt-6", "gpt-4.1", "gpt-4o", "o1", "o3", "o4"} {
+		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// summarizeResponsesInput renders a compact item type histogram so a failing
+// cross-provider continuation can be diagnosed from the container log without
+// dumping the whole transcript.
+func summarizeResponsesInput(input json.RawMessage) string {
+	if len(bytes.TrimSpace(input)) == 0 {
+		return "empty"
+	}
+	parsed := gjson.ParseBytes(input)
+	if !parsed.IsArray() {
+		return common.GetJsonType(input)
+	}
+	counts := make(map[string]int)
+	for _, item := range parsed.Array() {
+		itemType := strings.TrimSpace(item.Get("type").String())
+		if itemType == "" {
+			itemType = "?"
+		}
+		if itemType == "reasoning" {
+			if item.Get("encrypted_content").Exists() {
+				itemType += "[enc]"
+			} else if item.Get("content.#.text").Exists() {
+				itemType += "[txt]"
+			} else {
+				itemType += "[empty]"
+			}
+		}
+		counts[itemType]++
+	}
+	keys := make([]string, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", key, counts[key]))
+	}
+	return strings.Join(parts, ",")
+}
+
+func channelIDOf(info *relaycommon.RelayInfo) int {
+	if info == nil || info.ChannelMeta == nil {
+		return 0
+	}
+	return info.ChannelMeta.ChannelId
 }
 
 func sanitizeGPTResponsesInputItemIDs(request dto.OpenAIResponsesRequest, info *relaycommon.RelayInfo) (dto.OpenAIResponsesRequest, error) {
