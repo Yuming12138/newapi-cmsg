@@ -609,7 +609,20 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if info != nil && request.Reasoning != nil && request.Reasoning.Effort != "" {
 		info.ReasoningEffort = request.Reasoning.Effort
 	}
-	request, err := sanitizeGPTResponsesInputItemIDs(request, info)
+	// A Responses session started on another provider keeps its transcript in
+	// responses_chat_sessions. Replaying it here lets an intentional switch to
+	// this channel continue the thread instead of failing continuation checks.
+	request, _, err := service.ReplayForeignResponsesSession(info, request)
+	if err != nil {
+		return nil, err
+	}
+	if isGPTResponsesModel(request, info) {
+		request, err = service.DropForeignReasoningItems(request)
+		if err != nil {
+			return nil, err
+		}
+	}
+	request, err = sanitizeGPTResponsesInputItemIDs(request, info)
 	if err != nil {
 		return nil, err
 	}
@@ -645,6 +658,14 @@ func isMoonshotResponsesChannel(info *relaycommon.RelayInfo, requestedModel stri
 		}
 	}
 	return false
+}
+
+func isGPTResponsesModel(request dto.OpenAIResponsesRequest, info *relaycommon.RelayInfo) bool {
+	modelName := request.Model
+	if info != nil && strings.TrimSpace(info.UpstreamModelName) != "" {
+		modelName = info.UpstreamModelName
+	}
+	return dto.IsOpenAIGPT5Model(strings.TrimSpace(modelName))
 }
 
 func sanitizeGPTResponsesInputItemIDs(request dto.OpenAIResponsesRequest, info *relaycommon.RelayInfo) (dto.OpenAIResponsesRequest, error) {

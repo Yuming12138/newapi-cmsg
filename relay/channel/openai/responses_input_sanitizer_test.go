@@ -117,3 +117,42 @@ func TestConvertOpenAIResponsesRequestKeepsForeignToolItemIDsForNonGPT5(t *testi
 	require.Equal(t, "fc_foreign_custom", gjson.GetBytes(converted.Input, "0.id").String())
 	require.Equal(t, "fc_foreign_function", gjson.GetBytes(converted.Input, "1.id").String())
 }
+
+func TestConvertOpenAIResponsesRequestDropsDeepSeekReasoningForGPT5(t *testing.T) {
+	request := dto.OpenAIResponsesRequest{
+		Model: "gpt-5.6-sol",
+		Input: []byte(`[{"type":"reasoning","content":[{"type":"reasoning_text","text":"deepseek thinking"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"switch to gpt"}]}]`),
+	}
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gpt-5.6-sol",
+		},
+	}
+
+	convertedAny, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, request)
+	require.NoError(t, err)
+	converted := convertedAny.(dto.OpenAIResponsesRequest)
+
+	require.Equal(t, "message", gjson.GetBytes(converted.Input, "0.type").String())
+	require.False(t, gjson.GetBytes(converted.Input, "1").Exists())
+}
+
+func TestConvertOpenAIResponsesRequestKeepsPlaintextReasoningForNonGPT5(t *testing.T) {
+	request := dto.OpenAIResponsesRequest{
+		Model: "gpt-5.6-sol",
+		Input: []byte(`[{"type":"reasoning","content":[{"type":"reasoning_text","text":"keep me"}]}]`),
+	}
+	info := &relaycommon.RelayInfo{
+		RelayMode: relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "claude-fable-5",
+		},
+	}
+
+	convertedAny, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, request)
+	require.NoError(t, err)
+	converted := convertedAny.(dto.OpenAIResponsesRequest)
+
+	require.Equal(t, "reasoning", gjson.GetBytes(converted.Input, "0.type").String())
+}

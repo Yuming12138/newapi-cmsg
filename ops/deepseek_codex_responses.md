@@ -124,3 +124,40 @@ go test ./relay/channel/deepseek ./relay/channel/openai ./relay ./service/relayc
 
 密钥通过独立测试环境读取，不打印、不写入仓库或日志。隔离运行所用的临时
 凭据在验收后删除，用户现有 Codex 配置与认证文件不改动。
+
+## 2026-10-19 跨渠道续接（deepseek → gpt）
+
+Codex 线程本身保持同一个 `previous_response_id`。该 ID 是 DeepSeek 原生
+Responses 返回的 `response.ID`，同时也是 `responses_chat_sessions` 的主键。
+用户把同一线程手动切到 GPT 渠道时，请求带着这个 ID 落到 OpenAI 兼容上游：
+
+```text
+stream disconnected before completion:
+The upstream could not validate encrypted continuation context.
+Rebuild the conversation context in the client.
+```
+
+上游既解析不了这个 ID，也校验不了与之绑定的 reasoning 密文，所以拒绝整轮。
+客户端（Codex）无法按提示「自行重建上下文」，重建只能由中转侧完成。
+
+修复分两层：
+
+1. `service.ReplayForeignResponsesSession`（`relay/channel/openai/adaptor.go`
+   在 `ConvertOpenAIResponsesRequest` 调用）：若 `previous_response_id` 命中
+   本地会话表且属于当前用户，就把存储的 transcript 与新输入合并成完整
+   `input`，清空 `previous_response_id` 与 `instructions`（原始指令已是
+   transcript 的首个 system item）。这样切到 GPT 就是一次无状态请求。
+2. 合并时丢弃全部 `reasoning` item（`buildForeignResponsesTranscript`）：
+   密文属于原上游，新上游无法校验，且可见的 message/tool 调用足以续接。
+   另加 `DropForeignReasoningItems` 兜底，处理客户端没有带
+   `previous_response_id`、只在 `input` 内联回放历史的情况：GPT 系列模型下
+   删除 `content[].type == "reasoning_text"`（DeepSeek 专有形制）的 reasoning
+   item。
+
+同时保留 `c3c6da9` 的亲和策略：`codex/claude cli trace` 这类 skip-retry 会话
+规则只在 `upstream_timeout` / `upstream_unavailable` 时保留亲和，避免**非预期
+逃逸**；用户主动切换模型/分组不受影响，走上面的重放路径。
+
+已知边界：GPT 侧产生的 `response.ID` 不入会话表，若同一个 GPT 线程再次被
+路由到另一把 CPA 密钥/渠道，仍可能触发同样的校验错误；需要时再补
+「OpenAI 侧响应入库 + 重放」。
