@@ -99,6 +99,30 @@ func mergeNativeResponsesItems(baseItems, inputItems []map[string]any) []map[str
 	return allItems
 }
 
+// dedupInlineNativeResponsesInput applies the adjacent-reasoning de-duplication
+// to a request that carries its whole transcript inline. Codex Desktop does not
+// send previous_response_id, so the replay merge never runs and the client's own
+// echo of the reasoning it received would otherwise reach DeepSeek twice.
+func dedupInlineNativeResponsesInput(request dto.OpenAIResponsesRequest) (dto.OpenAIResponsesRequest, error) {
+	if len(request.Input) == 0 || common.GetJsonType(request.Input) != "array" {
+		return request, nil
+	}
+	inputItems, err := normalizeResponsesInput(request.Input)
+	if err != nil {
+		return request, err
+	}
+	deduped := mergeNativeResponsesItems(nil, inputItems)
+	if len(deduped) == len(inputItems) {
+		return request, nil
+	}
+	encoded, err := common.Marshal(deduped)
+	if err != nil {
+		return request, err
+	}
+	request.Input = encoded
+	return request, nil
+}
+
 func isAdjacentReasoningDuplicate(previous, next map[string]any) bool {
 	nextText, ok := reasoningText(next)
 	if !ok {

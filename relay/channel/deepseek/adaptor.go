@@ -169,12 +169,21 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		return convertResponsesRequest(c, info, request)
 	}
 	applyDeepSeekV4ResponsesThinkingSuffix(info, &request)
+	continuationID := strings.TrimSpace(request.PreviousResponseID)
 	if c != nil {
-		logger.LogInfo(c, fmt.Sprintf("deepseek native responses: previous_response_id=%q input=%s", strings.TrimSpace(request.PreviousResponseID), summarizeNativeResponsesInput(request.Input)))
+		logger.LogInfo(c, fmt.Sprintf("deepseek native responses: previous_response_id=%q input=%s", continuationID, summarizeNativeResponsesInput(request.Input)))
 	}
 	request, err := prepareNativeResponsesRequest(info, request)
 	if err != nil {
 		return nil, err
+	}
+	if continuationID == "" {
+		// Codex Desktop replays its whole transcript inline instead of passing
+		// previous_response_id, so the merge-time de-duplication never runs.
+		request, err = dedupInlineNativeResponsesInput(request)
+		if err != nil {
+			return nil, err
+		}
 	}
 	request, err = restoreNativeResponsesReasoning(info, request)
 	if err != nil {

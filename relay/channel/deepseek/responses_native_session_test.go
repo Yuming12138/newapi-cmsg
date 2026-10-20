@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/stretchr/testify/require"
 )
@@ -356,4 +357,38 @@ func TestMergeNativeResponsesItemsKeepsNonAdjacentReasoning(t *testing.T) {
 	require.Len(t, merged, 5)
 	require.Equal(t, "reasoning", merged[0]["type"])
 	require.Equal(t, "reasoning", merged[3]["type"])
+}
+
+func TestDedupInlineNativeResponsesInputDropsAdjacentReasoning(t *testing.T) {
+	request := dto.OpenAIResponsesRequest{
+		Input: []byte(`[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]},
+			{"type":"reasoning","id":"rs_1","summary":[],"content":[{"type":"reasoning_text","text":"same"}]},
+			{"type":"reasoning","content":[{"type":"reasoning_text","text":"same"}]},
+			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]},
+			{"type":"reasoning","content":[{"type":"reasoning_text","text":"other"}]}
+		]`),
+	}
+
+	deduped, err := dedupInlineNativeResponsesInput(request)
+	require.NoError(t, err)
+
+	var items []map[string]any
+	require.NoError(t, common.Unmarshal(deduped.Input, &items))
+	require.Len(t, items, 4)
+	require.Equal(t, "rs_1", items[1]["id"])
+	require.Equal(t, "other", items[3]["content"].([]any)[0].(map[string]any)["text"])
+}
+
+func TestDedupInlineNativeResponsesInputKeepsDistinctReasoning(t *testing.T) {
+	request := dto.OpenAIResponsesRequest{
+		Input: []byte(`[
+			{"type":"reasoning","content":[{"type":"reasoning_text","text":"first"}]},
+			{"type":"reasoning","content":[{"type":"reasoning_text","text":"second"}]}
+		]`),
+	}
+
+	deduped, err := dedupInlineNativeResponsesInput(request)
+	require.NoError(t, err)
+	require.Equal(t, string(request.Input), string(deduped.Input))
 }
