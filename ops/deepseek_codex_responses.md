@@ -161,3 +161,74 @@ Rebuild the conversation context in the client.
 已知边界：GPT 侧产生的 `response.ID` 不入会话表，若同一个 GPT 线程再次被
 路由到另一把 CPA 密钥/渠道，仍可能触发同样的校验错误；需要时再补
 「OpenAI 侧响应入库 + 重放」。
+
+## 2026-10-21 Responses 会话增量存储
+
+旧格式把同一会话的完整 transcript 快照在每个 `response.ID` 和 canonical
+`history_*` 行各写一份。长会话会同时放大 PostgreSQL、WAL 和 Docker 日志
+占用。增量格式改为：
+
+| 表 | 内容 |
+| --- | --- |
+| `responses_chat_turns` | 每轮新增 items、父 response ID、待处理工具调用及完整性哈希 |
+| `responses_chat_checkpoints` | 第 1 轮、每 20 轮和分支点的完整状态 |
+| `responses_chat_heads` | 会话最新 response ID 和清理时间水位 |
+
+恢复时先读一个检查点，再按 `conversation_id + depth` 批量取最多 24 轮增量，
+在内存中校验消息数量、完整 items 哈希和 pending 工具调用哈希。单会话重建
+通过 singleflight 合并相同读取，并受全局并发槽限制。
+
+### 运行模式与回滚
+
+`RESPONSES_SESSION_STORAGE_MODE` 控制写入路径：
+
+| 值 | 行为 |
+| --- | --- |
+| `legacy` | 只写旧快照，作为紧急回滚模式 |
+| `shadow` | 先写旧快照，再写增量表并重建比对；默认值 |
+| `incremental` | 只写增量表，读取失败时回退旧快照 |
+
+`shadow` 下增量写入或重建差异只计数和记录日志，旧快照仍是读写的正确性来源；
+不会因为影子校验失败让请求报错。读取始终优先返回旧快照。`incremental` 下
+新线程写入后立即进入内存 LRU；仍需从旧快照续接的历史会自动回退并缓存。
+
+回滚时把模式改回 `shadow` 或 `legacy` 并重建 New API。不要删除新表或 Blob：
+`shadow` 切回 `incremental` 需要这些记录；旧快照仍保留。
+
+### 环境变量
+
+| 变量 | 生产值 | 说明 |
+| --- | --- | --- |
+| `RESPONSES_SESSION_STORAGE_MODE` | `shadow` | 首次灰度只写；验收后改 `incremental` |
+| `RESPONSES_SESSION_RETENTION_SECONDS` | `604800` | 线程保留 7 天，按 head 水位整线程清理 |
+| `RESPONSES_SESSION_REBUILD_CONCURRENCY` | `2` | 全局重建并发，限制在 1–4 |
+| `RESPONSES_SESSION_MAX_BYTES` | `134217728` | 单 items 或 pending 解压后上限，限制在 1 MiB–1 GiB |
+| `RESPONSES_SESSION_CACHE_BYTES` | `50331648` | 进程内 LRU 总字节上限，默认 48 MiB |
+| `RESPONSES_SESSION_BLOB_DIR` | `/data/responses_session_blobs` | 与 `/data` 一起持久化 |
+| `RESPONSES_SESSION_BLOB_THRESHOLD_BYTES` | `262144` | 大于 256 KiB 的 JSON 字符串外置 |
+| `RESPONSES_SESSION_BLOB_RETENTION_SECONDS` | `2592000` | 未访问 Blob 保留 30 天，默认值 |
+
+### Blob 与清理
+
+大字符串递归替换为带原长度和 SHA-256 的 `cmsg_blob_v1` 标记；文件按内容寻址
+去重，权限 `0600`，读取时同时校验长度和哈希。文件创建失败时保留内联内容并
+增加 `blob_errors`，不影响请求；数据库事务回滚可能留下未被引用的文件，由
+30 天过期回收处理。
+
+清理任务以 `responses_chat_heads.updated_at` 选择过期线程，在同一事务内删除
+turn、checkpoint、旧快照和 head，并持有该会话的保存锁。仍活跃的线程不会因
+旧 canonical 行时间较早而被误删。LRU 条目达到同样的 7 天保留期后自动失效。
+
+### 灰度验收
+
+1. 生产首次只设置 `RESPONSES_SESSION_STORAGE_MODE=shadow`。
+2. 等待清理任务至少运行一轮，检查脱敏日志中的
+   `shadow=N/N cache_hit_rate=... incremental_reads=... legacy_fallbacks=...`、
+   `shadow_read_errors=0`、`shadow_write_errors=0`、`rebuild_active=x/2`。
+3. 确认新表存在且正常增长；大附件对应 Blob 文件存在，数据库中没有完整原文。
+4. 观察请求错误率、CPU、内存、数据库增长和恢复耗时。
+5. 稳定后只改 `RESPONSES_SESSION_STORAGE_MODE=incremental` 并重建 New API，
+   继续观察 `legacy_fallbacks`、`blob_errors` 和请求错误率。
+
+测量增长时同时记录 1 小时前后的 PostgreSQL 数据目录、New API `/data` 和
+容器 writable layer。不要把一次镜像构建或镜像拉取变化误判为会话表增长。

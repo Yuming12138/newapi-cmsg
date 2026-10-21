@@ -68,4 +68,29 @@ func runResponsesChatSessionCleanupOnce() {
 	if deleted > 0 {
 		logger.LogInfo(context.Background(), fmt.Sprintf("responses session cleanup removed %d expired rows", deleted))
 	}
+	stats := model.ResponsesChatStorageStatsSnapshot()
+	if stats.ShadowChecks > 0 || stats.IncrementalReads > 0 || stats.LegacyFallbacks > 0 ||
+		stats.BlobErrors > 0 || stats.ShadowReadErrors > 0 || stats.ShadowWriteErrors > 0 ||
+		stats.RebuildWaits > 0 {
+		cacheTotal := stats.CacheHits + stats.CacheMisses
+		cacheHitRate := uint64(0)
+		if cacheTotal > 0 {
+			cacheHitRate = stats.CacheHits * 100 / cacheTotal
+		}
+		logger.LogInfo(context.Background(), fmt.Sprintf(
+			"responses session storage mode=%s shadow=%d/%d cache_hit_rate=%d%% incremental_reads=%d legacy_fallbacks=%d blob_errors=%d shadow_read_errors=%d shadow_write_errors=%d rebuild_active=%d/%d rebuild_waits=%d",
+			stats.Mode,
+			stats.ShadowMatches,
+			stats.ShadowChecks,
+			cacheHitRate,
+			stats.IncrementalReads,
+			stats.LegacyFallbacks,
+			stats.BlobErrors,
+			stats.ShadowReadErrors,
+			stats.ShadowWriteErrors,
+			stats.RebuildActive,
+			stats.RebuildLimit,
+			stats.RebuildWaits,
+		))
+	}
 }

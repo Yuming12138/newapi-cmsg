@@ -51,6 +51,10 @@ func TestMain(m *testing.M) {
 		&UserOAuthBinding{},
 		&PerfMetric{},
 		&SystemTask{},
+		&ResponsesChatSession{},
+		&ResponsesChatTurn{},
+		&ResponsesChatCheckpoint{},
+		&ResponsesChatHead{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}

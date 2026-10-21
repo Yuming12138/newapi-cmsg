@@ -14,6 +14,7 @@ import (
 )
 
 const nativeResponsesRequestKey = "deepseek_native_responses_request"
+const nativeResponsesParentIDKey = "deepseek_native_responses_parent_id"
 
 // prepareNativeResponsesRequest converts OpenAI's stateful continuation into
 // the complete input transcript required by DeepSeek's stateless Responses API.
@@ -368,7 +369,7 @@ func getNativeResponsesRequest(c *gin.Context) (dto.OpenAIResponsesRequest, bool
 	return request, ok
 }
 
-func commitNativeResponsesSession(info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest, response *dto.OpenAIResponsesResponse) error {
+func commitNativeResponsesSession(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest, response *dto.OpenAIResponsesResponse) error {
 	if response == nil || strings.TrimSpace(response.ID) == "" {
 		return errors.New("native responses output is missing response id")
 	}
@@ -389,6 +390,11 @@ func commitNativeResponsesSession(info *relaycommon.RelayInfo, request dto.OpenA
 		ConversationId:   relaycommon.ResponsesConversationID(info),
 		Items:            string(itemsJSON),
 		PendingToolCalls: string(pendingJSON),
+	}
+	if c != nil {
+		if parentID, ok := c.Get(nativeResponsesParentIDKey); ok {
+			session.ParentResponseId = common.Interface2String(parentID)
+		}
 	}
 	if info != nil {
 		session.UserId = info.UserId

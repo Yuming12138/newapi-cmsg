@@ -11,9 +11,12 @@ import (
 
 func setupResponsesChatSessionTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	require.NoError(t, DB.AutoMigrate(&ResponsesChatSession{}))
+	require.NoError(t, DB.AutoMigrate(&ResponsesChatSession{}, &ResponsesChatTurn{}, &ResponsesChatCheckpoint{}, &ResponsesChatHead{}))
 	t.Cleanup(func() {
 		DB.Exec("DELETE FROM responses_chat_sessions")
+		DB.Exec("DELETE FROM responses_chat_turns")
+		DB.Exec("DELETE FROM responses_chat_checkpoints")
+		DB.Exec("DELETE FROM responses_chat_heads")
 	})
 	return DB
 }
@@ -83,6 +86,7 @@ func TestResponsesChatSessionCanonicalHistory(t *testing.T) {
 
 func TestResponsesChatSessionLegacyRowAndCleanup(t *testing.T) {
 	db := setupResponsesChatSessionTestDB(t)
+	t.Setenv("RESPONSES_SESSION_STORAGE_MODE", responsesChatStorageModeLegacy)
 	require.NoError(t, SaveResponsesChatSession(&ResponsesChatSession{
 		ID:        "resp_legacy",
 		UserId:    3,
