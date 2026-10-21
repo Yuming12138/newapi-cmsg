@@ -32,6 +32,28 @@ func TestConvertOpenAIResponsesRequestNormalizesMaxReasoningSuffix(t *testing.T)
 	require.Equal(t, "max", info.ReasoningEffort)
 }
 
+// antigravity 等模型名自带 -high 后缀（如 gemini-3.8-flash-high），不是推理力度标记，
+// Responses 路径不得剥掉，否则上游收到不存在的 gemini-3.8-flash 报 auth_not_found。
+func TestConvertOpenAIResponsesRequestKeepsNonOpenAIEffortSuffix(t *testing.T) {
+	for _, model := range []string{"gemini-3.8-flash-high", "gemini-4-argon-high", "claude-opus-5-5-high"} {
+		request := dto.OpenAIResponsesRequest{Model: model}
+		info := &relaycommon.RelayInfo{
+			RelayMode:   relayconstant.RelayModeResponses,
+			ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: model},
+		}
+
+		convertedAny, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, request)
+		require.NoError(t, err)
+		converted := convertedAny.(dto.OpenAIResponsesRequest)
+
+		require.Equal(t, model, converted.Model, "model name must survive Responses conversion")
+		require.Equal(t, model, info.UpstreamModelName)
+		if converted.Reasoning != nil {
+			require.Empty(t, converted.Reasoning.Effort, "suffix must not become reasoning effort")
+		}
+	}
+}
+
 func TestConvertOpenAIResponsesRequestDropsForeignToolItemIDsForGPT5(t *testing.T) {
 	request := dto.OpenAIResponsesRequest{
 		Model: "gpt-5.6-sol",

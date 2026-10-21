@@ -592,19 +592,23 @@ func detectImageMimeType(filename string) string {
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	//  转换模型推理力度后缀
-	effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(request.Model)
-	if effort != "" {
-		if request.Reasoning == nil {
-			request.Reasoning = &dto.Reasoning{
-				Effort: effort,
+	//  转换模型推理力度后缀（仅限 OpenAI 推理模型，与 ConvertOpenAIRequest 保持一致。
+	//  antigravity 等模型的 -high/-medium 是模型名的组成部分，不能当力度后缀剥掉，
+	//  否则 gemini-3.8-flash-high 会被改写成 gemini-3.8-flash 导致上游无此模型）
+	if dto.IsOpenAIReasoningOModel(request.Model) || dto.IsOpenAIGPT5Model(request.Model) {
+		effort, originModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(request.Model)
+		if effort != "" {
+			if request.Reasoning == nil {
+				request.Reasoning = &dto.Reasoning{
+					Effort: effort,
+				}
+			} else {
+				request.Reasoning.Effort = effort
 			}
-		} else {
-			request.Reasoning.Effort = effort
-		}
-		request.Model = originModel
-		if info != nil && info.ChannelMeta != nil {
-			info.UpstreamModelName = originModel
+			request.Model = originModel
+			if info != nil && info.ChannelMeta != nil {
+				info.UpstreamModelName = originModel
+			}
 		}
 	}
 	if info != nil && request.Reasoning != nil && request.Reasoning.Effort != "" {
