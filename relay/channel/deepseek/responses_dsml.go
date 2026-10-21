@@ -217,7 +217,7 @@ func handleNativeResponsesResponse(c *gin.Context, resp *http.Response, info *re
 		logger.LogWarn(c, "DeepSeek reasoning continuity cache write failed")
 	}
 	if request, ok := getNativeResponsesRequest(c); ok {
-		if err := commitNativeResponsesSession(info, request, &response); err != nil {
+		if err := commitNativeResponsesSession(c, info, request, &response); err != nil {
 			return nil, types.NewOpenAIError(err, types.ErrorCodeUpdateDataError, http.StatusInternalServerError)
 		}
 	}
@@ -334,7 +334,7 @@ func handleNativeResponsesStream(c *gin.Context, resp *http.Response, info *rela
 			event.Response.Output = mergeNativeResponseTools(event.Response.Output, state.completedTools)
 			state.warnContinuity(c, rememberNativeResponsesReasoning(info, event.Response.Output))
 			if state.request != nil {
-				if err := commitNativeResponsesSession(info, *state.request, event.Response); err != nil {
+				if err := commitNativeResponsesSession(c, info, *state.request, event.Response); err != nil {
 					state.sessionErr = err
 					sr.Stop(err)
 					return

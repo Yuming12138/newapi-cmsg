@@ -9,8 +9,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/claude"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -171,6 +171,7 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	applyDeepSeekV4ResponsesThinkingSuffix(info, &request)
 	continuationID := strings.TrimSpace(request.PreviousResponseID)
 	if c != nil {
+		c.Set(nativeResponsesParentIDKey, continuationID)
 		logger.LogInfo(c, fmt.Sprintf("deepseek native responses: previous_response_id=%q input=%s", continuationID, summarizeNativeResponsesInput(request.Input)))
 	}
 	request, err := prepareNativeResponsesRequest(info, request)

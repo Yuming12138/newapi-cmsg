@@ -653,13 +653,13 @@ func TestNativeReasoningPreviousResponseDatabaseReplay(t *testing.T) {
 		sqlDB, _ := db.DB()
 		_ = sqlDB.Close()
 	})
-	require.NoError(t, db.AutoMigrate(&model.ResponsesChatSession{}))
+	require.NoError(t, db.AutoMigrate(&model.ResponsesChatSession{}, &model.ResponsesChatTurn{}, &model.ResponsesChatCheckpoint{}, &model.ResponsesChatHead{}))
 	info := nativeReasoningTestInfo()
 	request := nativeReasoningTestRequest(t, map[string]any{"role": "user", "content": "look this up"})
 	response := &dto.OpenAIResponsesResponse{ID: "resp_db_1", Output: []dto.ResponsesOutput{
 		nativeReasoningTestOutput("rs_db_1", "database original"), nativeReasoningTestCall("call_db_1"),
 	}}
-	require.NoError(t, commitNativeResponsesSession(info, request, response))
+	require.NoError(t, commitNativeResponsesSession(nil, info, request, response))
 	next := nativeReasoningTestRequest(t, map[string]any{"type": "function_call_output", "call_id": "call_db_1", "output": "ok"})
 	next.PreviousResponseID = response.ID
 	got, err := prepareNativeResponsesRequest(info, next)

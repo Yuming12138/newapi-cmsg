@@ -854,6 +854,7 @@ func commitResponsesSession(info *relaycommon.RelayInfo, state *responsesTurnSta
 		UserId:           info.UserId,
 		TokenId:          info.TokenId,
 		ConversationId:   relaycommon.ResponsesConversationID(info),
+		ParentResponseId: state.PreviousResponseID,
 		ModelName:        info.OriginModelName,
 		Items:            string(itemsJSON),
 		PendingToolCalls: string(pendingJSON),
