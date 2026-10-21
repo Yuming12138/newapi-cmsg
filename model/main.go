@@ -15,6 +15,7 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 var commonGroupCol string
@@ -64,6 +65,28 @@ func initCol() {
 var DB *gorm.DB
 
 var LOG_DB *gorm.DB
+
+func newGORMConfig() *gorm.Config {
+	return &gorm.Config{
+		PrepareStmt: true,
+		Logger:      gormlogger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), newGORMLoggerConfig()),
+	}
+}
+
+func newGORMLoggerConfig() gormlogger.Config {
+	logLevel := gormlogger.Warn
+	if common.DebugEnabled {
+		logLevel = gormlogger.Info
+	}
+	return gormlogger.Config{
+		SlowThreshold:             time.Second,
+		LogLevel:                  logLevel,
+		IgnoreRecordNotFoundError: true,
+		// Session transcripts can contain multi-megabyte prompts and tool output.
+		// Slow-query logs must retain the SQL shape, never the bound parameters.
+		ParameterizedQueries: true,
+	}
+}
 
 func createRootAccountIfNeed() error {
 	var user User
@@ -132,9 +155,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 			return gorm.Open(postgres.New(postgres.Config{
 				DSN:                  dsn,
 				PreferSimpleProtocol: true, // disables implicit prepared statement usage
-			}), &gorm.Config{
-				PrepareStmt: true, // precompile SQL
-			})
+			}), newGORMConfig())
 		}
 		if strings.HasPrefix(dsn, "local") {
 			common.SysLog("SQL_DSN not set, using SQLite as database")
@@ -143,9 +164,7 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 			} else {
 				common.LogSqlType = common.DatabaseTypeSQLite
 			}
-			return gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
-				PrepareStmt: true, // precompile SQL
-			})
+			return gorm.Open(sqlite.Open(common.SQLitePath), newGORMConfig())
 		}
 		// Use MySQL
 		common.SysLog("using MySQL as database")
@@ -162,24 +181,17 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 		} else {
 			common.LogSqlType = common.DatabaseTypeMySQL
 		}
-		return gorm.Open(mysql.Open(dsn), &gorm.Config{
-			PrepareStmt: true, // precompile SQL
-		})
+		return gorm.Open(mysql.Open(dsn), newGORMConfig())
 	}
 	// Use SQLite
 	common.SysLog("SQL_DSN not set, using SQLite as database")
 	common.UsingSQLite = true
-	return gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
-		PrepareStmt: true, // precompile SQL
-	})
+	return gorm.Open(sqlite.Open(common.SQLitePath), newGORMConfig())
 }
 
 func InitDB() (err error) {
 	db, err := chooseDB("SQL_DSN", false)
 	if err == nil {
-		if common.DebugEnabled {
-			db = db.Debug()
-		}
 		DB = db
 		// MySQL charset/collation startup check: ensure Chinese-capable charset
 		if common.UsingMySQL {
@@ -217,9 +229,6 @@ func InitLogDB() (err error) {
 	}
 	db, err := chooseDB("LOG_SQL_DSN", true)
 	if err == nil {
-		if common.DebugEnabled {
-			db = db.Debug()
-		}
 		LOG_DB = db
 		// If log DB is MySQL, also ensure Chinese-capable charset
 		if common.LogSqlType == common.DatabaseTypeMySQL {

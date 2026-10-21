@@ -3,6 +3,11 @@ services:
     image: new-api-cmsg-root:affinity-drain-20260611-2320
     container_name: new-api
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     command: --log-dir /app/logs
     ports:
       - "${NEW_API_PORT:-3000}:3000"
