@@ -55,11 +55,18 @@ func TestIncrementalResponsesChatCheckpointAndBranch(t *testing.T) {
 
 	var secondTurn ResponsesChatTurn
 	require.NoError(t, db.Where("response_id = ?", "resp_incremental_02").First(&secondTurn).Error)
-	var deltaItems []map[string]any
 	delta, err := decodeResponsesChatPayload(secondTurn.DeltaItems)
 	require.NoError(t, err)
-	require.NoError(t, common.UnmarshalJsonStr(delta, &deltaItems))
-	require.Len(t, deltaItems, 2)
+	var deltaPayload responsesChatDelta
+	require.NoError(t, common.UnmarshalJsonStr(delta, &deltaPayload))
+	require.Equal(t, responsesChatDeltaVersion, deltaPayload.Version)
+	require.Len(t, deltaPayload.Append, 2)
+
+	var firstTurn ResponsesChatTurn
+	require.NoError(t, db.Where("response_id = ?", "resp_incremental_01").First(&firstTurn).Error)
+	firstDelta, err := decodeResponsesChatPayload(firstTurn.DeltaItems)
+	require.NoError(t, err)
+	require.Equal(t, "[]", firstDelta)
 
 	clearResponsesChatSessionCacheForTest()
 	ten, err := GetResponsesChatSession("resp_incremental_10")
@@ -98,6 +105,68 @@ func TestIncrementalResponsesChatCheckpointAndBranch(t *testing.T) {
 	branch, err := GetResponsesChatSession("resp_incremental_branch")
 	require.NoError(t, err)
 	require.Equal(t, string(branchJSON), branch.Items)
+}
+
+func TestResponsesChatDeltaReplacesChangedParentItems(t *testing.T) {
+	db := setupResponsesChatSessionTestDB(t)
+	t.Setenv("RESPONSES_SESSION_STORAGE_MODE", responsesChatStorageModeIncremental)
+	clearResponsesChatSessionCacheForTest()
+	t.Cleanup(clearResponsesChatSessionCacheForTest)
+	conversationID := "conv_prefix_replacement"
+	firstItems := []map[string]any{
+		{"type": "message", "role": "user", "content": "first"},
+		{"type": "reasoning", "content": "before"},
+	}
+	secondItems := []map[string]any{
+		{"type": "message", "role": "user", "content": "first"},
+		{"type": "reasoning", "content": "rewritten"},
+		{"type": "message", "role": "assistant", "content": "answer"},
+		{"type": "message", "role": "user", "content": "next"},
+	}
+	firstJSON, err := common.Marshal(firstItems)
+	require.NoError(t, err)
+	secondJSON, err := common.Marshal(secondItems)
+	require.NoError(t, err)
+	require.NoError(t, SaveResponsesChatSession(&ResponsesChatSession{
+		ID:               "resp_prefix_replacement_1",
+		UserId:           81,
+		TokenId:          82,
+		ConversationId:   conversationID,
+		ModelName:        "deepseek-flash",
+		Items:            string(firstJSON),
+		PendingToolCalls: `{}`,
+	}))
+	require.NoError(t, SaveResponsesChatSession(&ResponsesChatSession{
+		ID:               "resp_prefix_replacement_2",
+		UserId:           81,
+		TokenId:          82,
+		ConversationId:   conversationID,
+		ParentResponseId: "resp_prefix_replacement_1",
+		ModelName:        "deepseek-flash",
+		Items:            string(secondJSON),
+		PendingToolCalls: `{}`,
+	}))
+
+	var secondTurn ResponsesChatTurn
+	require.NoError(t, db.Where("response_id = ?", "resp_prefix_replacement_2").First(&secondTurn).Error)
+	require.Equal(t, "resp_prefix_replacement_1", secondTurn.CheckpointResponseId)
+	require.NotEqual(t, string(secondJSON), secondTurn.DeltaItems)
+	var checkpointCount int64
+	require.NoError(t, db.Model(&ResponsesChatCheckpoint{}).Where("conversation_id = ?", conversationID).Count(&checkpointCount).Error)
+	require.EqualValues(t, 1, checkpointCount)
+
+	clearResponsesChatSessionCacheForTest()
+	loaded, err := GetResponsesChatSession("resp_prefix_replacement_2")
+	require.NoError(t, err)
+	require.Equal(t, string(secondJSON), loaded.Items)
+}
+
+func TestResponsesChatDeltaReadsLegacyAppendArrays(t *testing.T) {
+	current := []map[string]any{{"type": "message", "content": "base"}}
+	next, err := applyResponsesChatItemsDelta(current, `[{"type":"message","content":"append"}]`)
+	require.NoError(t, err)
+	require.Len(t, next, 2)
+	require.Equal(t, "append", next[1]["content"])
 }
 
 func TestResponsesChatShadowDetectsLegacyMismatch(t *testing.T) {

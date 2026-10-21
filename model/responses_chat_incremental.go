@@ -25,6 +25,7 @@ const (
 	responsesChatSaveLockSlots          = 64
 	responsesChatRebuildDefaultLimit    = 2
 	responsesChatRebuildMaximumLimit    = 4
+	responsesChatDeltaVersion           = 2
 )
 
 type ResponsesChatTurn struct {
@@ -87,6 +88,18 @@ type responsesChatPreparedTurn struct {
 	checkpoint *ResponsesChatCheckpoint
 	fullItems  string
 	pending    string
+}
+
+type responsesChatItemReplacement struct {
+	Index int            `json:"index"`
+	Item  map[string]any `json:"item"`
+}
+
+type responsesChatDelta struct {
+	Version       int                            `json:"version"`
+	BaseItemCount int                            `json:"base_item_count"`
+	Replacements  []responsesChatItemReplacement `json:"replacements,omitempty"`
+	Append        []map[string]any               `json:"append,omitempty"`
 }
 
 var (
@@ -199,7 +212,7 @@ func canonicalResponsesChatPending(pending string) (string, error) {
 	return string(data), nil
 }
 
-func responsesChatItemsAppendPrefix(parentItems, fullItems string) (string, bool, error) {
+func responsesChatItemsDelta(parentItems, fullItems string) (string, bool, error) {
 	var parent []map[string]any
 	if strings.TrimSpace(parentItems) == "" {
 		parent = nil
@@ -213,6 +226,7 @@ func responsesChatItemsAppendPrefix(parentItems, fullItems string) (string, bool
 	if len(parent) > len(full) {
 		return fullItems, false, nil
 	}
+	replacements := make([]responsesChatItemReplacement, 0)
 	for index := range parent {
 		parentJSON, err := common.Marshal(parent[index])
 		if err != nil {
@@ -223,14 +237,68 @@ func responsesChatItemsAppendPrefix(parentItems, fullItems string) (string, bool
 			return "", false, err
 		}
 		if string(parentJSON) != string(fullJSON) {
-			return fullItems, false, nil
+			replacements = append(replacements, responsesChatItemReplacement{Index: index, Item: full[index]})
 		}
 	}
-	delta, err := common.Marshal(full[len(parent):])
+	delta, err := common.Marshal(responsesChatDelta{
+		Version:       responsesChatDeltaVersion,
+		BaseItemCount: len(parent),
+		Replacements:  replacements,
+		Append:        full[len(parent):],
+	})
 	if err != nil {
 		return "", false, err
 	}
 	return string(delta), true, nil
+}
+
+func applyResponsesChatItemsDelta(current []map[string]any, payload string) ([]map[string]any, error) {
+	payload = strings.TrimSpace(payload)
+	if payload == "" || payload == "[]" {
+		return current, nil
+	}
+	if payload[0] == '[' {
+		var legacyAppend []map[string]any
+		if err := common.UnmarshalJsonStr(payload, &legacyAppend); err != nil {
+			return nil, err
+		}
+		combined := make([]map[string]any, 0, len(current)+len(legacyAppend))
+		combined = append(combined, current...)
+		return append(combined, legacyAppend...), nil
+	}
+	if payload[0] != '{' {
+		return nil, errors.New("responses session delta format is invalid")
+	}
+	var metadata struct {
+		Version int `json:"version"`
+	}
+	if err := common.UnmarshalJsonStr(payload, &metadata); err != nil {
+		return nil, err
+	}
+	if metadata.Version != responsesChatDeltaVersion {
+		return nil, errors.New("responses session delta version is unsupported")
+	}
+	var delta responsesChatDelta
+	if err := common.UnmarshalJsonStr(payload, &delta); err != nil {
+		return nil, err
+	}
+	if delta.BaseItemCount != len(current) {
+		return nil, errors.New("responses session delta base count mismatch")
+	}
+	next := make([]map[string]any, len(current), len(current)+len(delta.Append))
+	copy(next, current)
+	lastIndex := -1
+	for _, replacement := range delta.Replacements {
+		if replacement.Index <= lastIndex || replacement.Index >= delta.BaseItemCount {
+			return nil, errors.New("responses session delta replacement index is invalid")
+		}
+		if replacement.Item == nil {
+			return nil, errors.New("responses session delta replacement item is missing")
+		}
+		next[replacement.Index] = replacement.Item
+		lastIndex = replacement.Index
+	}
+	return append(next, delta.Append...), nil
 }
 
 func lockResponsesChatConversation(conversationID string) func() {
@@ -299,13 +367,13 @@ func prepareResponsesChatTurn(session *ResponsesChatSession) (*responsesChatPrep
 		}
 		if parentSession != nil {
 			checkpointID = parentTurn.CheckpointResponseId
-			delta, prefixMatched, err := responsesChatItemsAppendPrefix(parentSession.Items, fullItems)
+			delta, deltaSupported, err := responsesChatItemsDelta(parentSession.Items, fullItems)
 			if err != nil {
 				return nil, err
 			}
 			deltaItems = delta
-			forceCheckpoint = !prefixMatched || !parentIsHead
-			if !prefixMatched {
+			forceCheckpoint = !deltaSupported || !parentIsHead
+			if !deltaSupported {
 				checkpointID = ""
 			}
 		} else {
@@ -341,6 +409,7 @@ func prepareResponsesChatTurn(session *ResponsesChatSession) (*responsesChatPrep
 	}
 	if forceCheckpoint {
 		prepared.turn.CheckpointResponseId = session.ID
+		prepared.turn.DeltaItems = "[]"
 		prepared.checkpoint = &ResponsesChatCheckpoint{
 			ResponseId:     session.ID,
 			ConversationId: session.ConversationId,
@@ -499,13 +568,10 @@ func loadIncrementalResponsesChatSessionWithDB(db *gorm.DB, id string) (*Respons
 		if err != nil {
 			return nil, err
 		}
-		var deltaItems []map[string]any
-		if strings.TrimSpace(delta) != "" {
-			if err := common.UnmarshalJsonStr(delta, &deltaItems); err != nil {
-				return nil, err
-			}
+		items, err = applyResponsesChatItemsDelta(items, delta)
+		if err != nil {
+			return nil, err
 		}
-		items = append(items, deltaItems...)
 	}
 	fullItems, err := canonicalResponsesChatItems(items)
 	if err != nil {

@@ -170,13 +170,17 @@ Rebuild the conversation context in the client.
 
 | 表 | 内容 |
 | --- | --- |
-| `responses_chat_turns` | 每轮新增 items、父 response ID、待处理工具调用及完整性哈希 |
+| `responses_chat_turns` | 每轮增量、父 response ID、待处理工具调用及完整性哈希 |
 | `responses_chat_checkpoints` | 第 1 轮、每 20 轮和分支点的完整状态 |
 | `responses_chat_heads` | 会话最新 response ID 和清理时间水位 |
 
 恢复时先读一个检查点，再按 `conversation_id + depth` 批量取最多 24 轮增量，
-在内存中校验消息数量、完整 items 哈希和 pending 工具调用哈希。单会话重建
-通过 singleflight 合并相同读取，并受全局并发槽限制。
+在内存中重放。增量不是整份数组：它记录父 items 中哪些索引被上游改写、基准
+长度和新追加的 items。这样可处理 DeepSeek 在新一轮重新规范化旧 reasoning
+内容的情况，不必因为前缀文本变化而每轮保存整份 transcript。最后仍校验消息
+数量、完整 items 哈希和 pending 工具调用哈希。单会话重建通过 singleflight
+合并相同读取，并受全局并发槽限制。检查点轮自己的 delta 留空，因为该轮直接
+从完整检查点恢复。
 
 ### 运行模式与回滚
 
