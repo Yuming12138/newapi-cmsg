@@ -105,7 +105,12 @@ git fetch --no-tags cliproxy-upstream main
 git subtree pull --prefix=cliproxyapi cliproxy-upstream main --squash -m "sync(cliproxy): update upstream to vX.Y.Z"
 ~~~
 
-审查并解决 CMSG 定制冲突，测试后合回 `dev/cmsg`，记录上游 tag 和完整 commit。
+`cliproxyapi/` 自 2026-10-21 起为 pristine upstream v8（基线 `ce07d18`，
+即 v8.0.37）：CMSG 定制已全部丢弃（ Mihomo 路由恢复、antigravity/gemini
+预算防护、管理端点扩展、调度审计等，历史见 `dev/cmsg` 分支），集成暂在
+`dev/cmsg-v8` 验证后合回 `dev/cmsg`。此后同步为纯上游跟进，正常不产生
+冲突；审查上游 diff 与发布说明，在 `cliproxyapi/` 内完成 `go test ./...`
+与生产二进制构建，再合回并记录上游 tag 和完整 commit。
 New API 后端继续逐项审查和移植；前端修复手工移入 `web/default/`，不整体覆盖
 CMSG 前端。历史同步记录可帮助定位既有取舍，下一轮仍须依据当前代码评估。
 
