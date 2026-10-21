@@ -117,6 +117,9 @@ func main() {
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
 
+	// Retain bounded DeepSeek/MiMo Responses continuation history.
+	service.StartResponsesChatSessionCleanupTask()
+
 	// Report this process as a system instance for multi-node runtime visibility.
 	service.StartSystemInstanceReporter()
 

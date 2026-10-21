@@ -386,6 +386,7 @@ func commitNativeResponsesSession(info *relaycommon.RelayInfo, request dto.OpenA
 	}
 	session := &model.ResponsesChatSession{
 		ID:               response.ID,
+		ConversationId:   relaycommon.ResponsesConversationID(info),
 		Items:            string(itemsJSON),
 		PendingToolCalls: string(pendingJSON),
 	}
