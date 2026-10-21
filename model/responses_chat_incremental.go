@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -212,31 +213,19 @@ func canonicalResponsesChatPending(pending string) (string, error) {
 	return string(data), nil
 }
 
-func responsesChatItemsDelta(parentItems, fullItems string) (string, bool, error) {
+func responsesChatItemsDelta(parentItems string, full []map[string]any) (string, bool, error) {
 	var parent []map[string]any
 	if strings.TrimSpace(parentItems) == "" {
 		parent = nil
 	} else if err := common.UnmarshalJsonStr(parentItems, &parent); err != nil {
 		return "", false, err
 	}
-	var full []map[string]any
-	if err := common.UnmarshalJsonStr(fullItems, &full); err != nil {
-		return "", false, err
-	}
 	if len(parent) > len(full) {
-		return fullItems, false, nil
+		return "", false, nil
 	}
 	replacements := make([]responsesChatItemReplacement, 0)
 	for index := range parent {
-		parentJSON, err := common.Marshal(parent[index])
-		if err != nil {
-			return "", false, err
-		}
-		fullJSON, err := common.Marshal(full[index])
-		if err != nil {
-			return "", false, err
-		}
-		if string(parentJSON) != string(fullJSON) {
+		if !reflect.DeepEqual(parent[index], full[index]) {
 			replacements = append(replacements, responsesChatItemReplacement{Index: index, Item: full[index]})
 		}
 	}
@@ -367,7 +356,7 @@ func prepareResponsesChatTurn(session *ResponsesChatSession) (*responsesChatPrep
 		}
 		if parentSession != nil {
 			checkpointID = parentTurn.CheckpointResponseId
-			delta, deltaSupported, err := responsesChatItemsDelta(parentSession.Items, fullItems)
+			delta, deltaSupported, err := responsesChatItemsDelta(parentSession.Items, full)
 			if err != nil {
 				return nil, err
 			}
