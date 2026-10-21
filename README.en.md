@@ -69,14 +69,27 @@ The current production entry point is <a href="https://api.cmsg666.xyz/">api.cms
 | CPA account pools and quotas   | Codex/Claude/Kimi/Antigravity account pools, model-level quotas, subscription windows, reset times, active-account deduplication, cooldown and retries                                               |
 | Codex protocol compatibility   | Native DeepSeek Responses plaintext reasoning replay, cross-provider history compatibility, Kimi tool adapters, custom and namespaced tools, and assistant-preamble/tool-result ordering             |
 | Responses session storage      | Per-turn deltas, periodic and branch checkpoints, batched recovery, byte-bounded LRU, single-flight, limited concurrent rebuilds, and SHA-256 externalization for large attachments                  |
-| Reliability                    | Pre-first-byte retries, per-host HTTP/2 pools, Mihomo node failover, and streaming disconnect cleanup                                                                                                |
+| Reliability                    | Pre-first-byte retries, CLI affinity retention on transient failures, per-host HTTP/2 pools, metric-flush circuit breaking, Mihomo node failover, and streaming disconnect cleanup                   |
 | Gemini performance and context | Tool schema caching, linear request assembly, optimized streaming event conversion, final request budget checks, oversized tool-output trimming, and bounded retries for explicit token-limit errors |
 | Channel capability tests       | Current canary covers channels 1, 12, and 27; model and reasoning-effort selection, prompts, answers, latency, failure reasons, and animated SVG previews                                            |
 | Codex Radar                    | Public scores for four Sol/Astra model families, task coverage and cost/latency statistics, failed-point retries, complete Redis snapshots, and automatic frontend recovery                          |
-| Observability                  | Channel usage, custom time windows, request paths, CPA scheduling, reasoning effort, stream state, and network probes                                                                                |
+| Observability                  | Performance metrics grouped by effective upstream model, channel usage, custom time windows, request paths, CPA scheduling, reasoning effort, stream state, and network probes                       |
 | User self-service              | Codex desktop/terminal setup, upstream balance overview, and temporary quota requests for low-balance users                                                                                          |
 
 Use the running instance's model list and channel configuration to find available models and groups.
+
+## Capability updates since 2026-10-14
+
+| Topic | Commits | Update |
+| --- | --- | --- |
+| DeepSeek thinking continuation | `59a8988` `d1b6e17` | Backfill placeholder reasoning for assistant groups that omit it in thinking + tools requests, covering tool turns and the final assistant group and preventing `reasoning_text must be passed back` failures. |
+| Reasoning deduplication | `7626159` `df5e9a9` | Remove adjacent duplicate reasoning from both server-side session replay and Codex Desktop inline histories, preventing long-context growth from doubling. |
+| Cross-channel continuation | `26ed4fa` `3d9c84c` | Replay a local transcript when a DeepSeek thread moves to a GPT channel, removing the original provider reasoning and `previous_response_id`; GPT-5/GPT-6 request sanitization and diagnostic logging were completed in the same batch. |
+| Affinity stability | `c3c6da9` | Preserve channel affinity for Codex/Claude CLI sessions on pre-first-byte timeout or 5xx failures; deterministic quota, rate-limit, and authentication failures still clear affinity for failover. |
+| Performance and usage panels | `06affc8` `4fe400b` `5d48a54` `f99ca9b` | Group model performance, channel usage, channel tests, and asynchronous tasks by the effective mapped upstream model; open a circuit after repeated metric-flush failures so observability cannot starve relay traffic. |
+| Session diagnostics | `c944397` | Record a sanitized item-type histogram for native Responses inputs to diagnose long threads that end early or contain abnormal reasoning/tool items. |
+| Runtime resource limits | `89d3086` | Use compressed canonical Responses snapshots with seven-day cleanup; emit parameterized SQL shapes from GORM; cap Docker logs at `20 MiB × 5`. |
+| Incremental session storage | `37bf925` `ad41544` `fdcdbb8` | Add rewrite-aware deltas, periodic and branch checkpoints, batched recovery, LRU, single-flight, bounded concurrent rebuilds, and SHA-256 attachment externalization; follow-up commits fix full checkpoints caused by rewritten old reasoning and remove redundant encoding. |
 
 ## Channel tests and benchmark references
 

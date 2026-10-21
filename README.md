@@ -69,14 +69,27 @@ Codex / Claude Code / OpenAI-compatible clients
 | CPA 账号池与额度    | Codex/Claude/Kimi/Antigravity 账号池、模型级额度、订阅窗口、重置时间、有效账号去重、冷却与重试                          |
 | Codex 协议兼容      | DeepSeek 原生 Responses 思考原文续接、跨提供方历史兼容、Kimi 工具适配、自定义与命名空间工具、助手说明与工具结果顺序处理 |
 | Responses 会话存储  | 每轮增量、周期与分支检查点、批量恢复、字节上限 LRU、single-flight、受限并发重建及 SHA-256 大附件外置                   |
-| 稳定性              | 首包前重试、HTTP/2 per-host 连接池、Mihomo 节点故障转移、流式断连清理                                                   |
+| 稳定性              | 首包前重试、瞬时故障保留 CLI 会话亲和、HTTP/2 per-host 连接池、指标刷盘熔断、Mihomo 节点故障转移、流式断连清理            |
 | Gemini 性能与上下文 | Tool Schema 缓存、请求线性拼装、流式事件转换优化、发送前预算校验、超大工具输出裁剪和明确 token 超限后的有限重试         |
 | 渠道能力测试        | 当前灰度支持渠道 1、12、27，可选模型与思考强度，展示测试题、回答、耗时、失败原因和 SVG 动画预览                         |
 | Codex Radar         | 同步四个 Sol/Astra 模型家族的公开评分，展示覆盖题数与成本/耗时统计，提供失败重试、Redis 完整快照和前端自动恢复          |
-| 可观测性            | 渠道用量、自定义时间窗口、请求链路、CPA 调度、reasoning effort、流式状态和网络探针                                      |
+| 可观测性            | 按映射后上游模型归组的性能指标、渠道用量、自定义时间窗口、请求链路、CPA 调度、reasoning effort、流式状态和网络探针       |
 | 用户自助            | Codex 桌面端/终端配置说明、上游余额概览、低余额临时额度申请                                                             |
 
 可用模型与分组以运行实例返回的模型列表和渠道配置为准。
+
+## 2026-10-14 以来的能力更新
+
+| 主题 | 提交 | 更新 |
+| --- | --- | --- |
+| DeepSeek thinking 续接 | `59a8988` `d1b6e17` | 为 thinking + tools 请求中缺少 reasoning 的助手组补齐占位内容，覆盖工具轮和最终助手组，避免上游返回 `reasoning_text must be passed back`。 |
+| Reasoning 去重 | `7626159` `df5e9a9` | 服务端会话回放和 Codex Desktop 内联历史都会删除相邻重复 reasoning，避免长上下文成倍增长。 |
+| 跨渠道续接 | `26ed4fa` `3d9c84c` | DeepSeek 线程切到 GPT 渠道时重放本地 transcript，移除原提供方 reasoning 和 `previous_response_id`；GPT-5/GPT-6 等模型的请求清洗与诊断日志同步完善。 |
+| 亲和稳定性 | `c3c6da9` | Codex/Claude CLI 会话遇到首包前超时或 5xx 时保留渠道亲和；限额、限流、鉴权等确定性错误仍正常清除亲和并故障转移。 |
+| 性能与用量看板 | `06affc8` `4fe400b` `5d48a54` `f99ca9b` | 模型性能、渠道用量、渠道测试和异步任务统一按映射后的实际上游模型归组；指标刷盘连续失败后开熔断，避免拖垮转发主链路。 |
+| 会话诊断 | `c944397` | 原生 Responses 入参记录脱敏类型直方图，便于定位长线程提前结束、reasoning 或工具条目异常。 |
+| 运行资源边界 | `89d3086` | Responses 历史使用压缩 canonical 快照和 7 天清理；GORM 只记录参数化 SQL 形状；Docker 日志限制为 `20 MiB × 5`。 |
+| 增量会话存储 | `37bf925` `ad41544` `fdcdbb8` | 引入改写感知增量、周期/分支检查点、批量恢复、LRU、single-flight、受限并发重建和大附件 SHA-256 外置；后续提交修复旧 reasoning 改写导致的逐轮完整检查点，并去除重复编码。 |
 
 ## 渠道测试与评分参考
 
