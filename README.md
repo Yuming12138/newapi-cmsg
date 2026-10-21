@@ -26,7 +26,7 @@
 
 ## 项目定位
 
-<code>new-api-cmsg</code> 把多种 AI 上游、账号池和协议统一到一个可运营的网关中。除了 upstream New API 提供的用户、令牌、分组、计量和渠道管理能力，CMSG 还维护了额度感知调度、CPA 账号池、Codex/Claude/Gemini/DeepSeek/Kimi 路由与协议适配、渠道能力测试、Codex Radar 和服务端长上下文保护。
+<code>new-api-cmsg</code> 把多种 AI 上游、账号池和协议统一到一个可运营的网关中。除了 upstream New API 提供的用户、令牌、分组、计量和渠道管理能力，CMSG 还维护了额度感知调度、CPA 账号池、Codex/Claude/Gemini/DeepSeek/Kimi 路由与协议适配、渠道能力测试、Codex Radar、服务端长上下文保护和 Responses 会话增量持久化。
 
 本仓库主要解决以下问题：
 
@@ -68,6 +68,7 @@ Codex / Claude Code / OpenAI-compatible clients
 | 额度感知调度        | 余额刷新、低价优先、高价兜底、渠道自动禁用与恢复、可指定到期时间的临时解除限制、模型别名按真实上游模型结算              |
 | CPA 账号池与额度    | Codex/Claude/Kimi/Antigravity 账号池、模型级额度、订阅窗口、重置时间、有效账号去重、冷却与重试                          |
 | Codex 协议兼容      | DeepSeek 原生 Responses 思考原文续接、跨提供方历史兼容、Kimi 工具适配、自定义与命名空间工具、助手说明与工具结果顺序处理 |
+| Responses 会话存储  | 每轮增量、周期与分支检查点、批量恢复、字节上限 LRU、single-flight、受限并发重建及 SHA-256 大附件外置                   |
 | 稳定性              | 首包前重试、HTTP/2 per-host 连接池、Mihomo 节点故障转移、流式断连清理                                                   |
 | Gemini 性能与上下文 | Tool Schema 缓存、请求线性拼装、流式事件转换优化、发送前预算校验、超大工具输出裁剪和明确 token 超限后的有限重试         |
 | 渠道能力测试        | 当前灰度支持渠道 1、12、27，可选模型与思考强度，展示测试题、回答、耗时、失败原因和 SVG 动画预览                         |
@@ -98,6 +99,14 @@ Codex / Claude Code / OpenAI-compatible clients
 渠道页与仪表盘按美元、人民币和订阅额度百分比展示数据，缺失字段标记为未知。Codex、Kimi 与 Gemini CPA 使用各自的额度采集链路，展示上游提供的订阅窗口和重置时间。Gemini 按独立额度池汇总百分比，并保留各账号的重置时间。详见 <a href="./docs/gemini-cpa-quota.md">Gemini CPA 额度语义</a>。
 
 DeepSeek 原生 Responses 适配保留返回的思考原文，并按用户、令牌、渠道和线程隔离恢复缓存。GPT/Kimi 等跨提供方历史使用独立兼容策略。自定义、动态和命名空间工具在请求与返回流中保持调用标识和客户端名称。详见 <a href="./ops/deepseek_codex_responses.md">DeepSeek 与 Codex 工具续接说明</a>。
+
+### Responses 会话增量存储
+
+长会话按 `response ID` 保存独立增量，第 1 轮、每 20 轮和分支点保存完整检查点。增量格式记录父历史的基准长度、被上游改写的旧项索引和新追加项，兼容 DeepSeek 在新一轮重新规范化 reasoning 内容的情况。恢复时批量读取最多 24 轮增量，并校验消息数量、完整 items 哈希与 pending 工具调用哈希。
+
+运行层提供按字节淘汰的进程内 LRU、same-ID single-flight、默认 2 路受限重建和 128 MiB 会话上限；超过 256 KiB 的文本、图片或工具输出按 SHA-256 外置到持久化 Blob 目录。清理任务按会话 head 水位整线程删除，避免删除仍活跃的线程。
+
+存储模式支持 `legacy`、`shadow` 和 `incremental`。`shadow` 同时写入旧快照和增量表并比对重建结果，生产默认使用 `incremental`。配置项、灰度步骤和回滚方法见 <a href="./ops/deepseek_codex_responses.md#2026-10-21-responses-会话增量存储">Responses 增量存储运行说明</a>。
 
 CPA 的 Antigravity/Gemini 路径在服务端估算上下文预算，超限时按规则裁剪历史或超大工具输出，并插入截断说明；裁剪会移除部分原文。最终请求仍超过预算则返回明确错误，上游明确报告输入 token 超限时，最多进行一次缩小请求后的重试。详见 <a href="./docs/antigravity-context-budget.md">长上下文保护说明</a>。
 
@@ -147,14 +156,17 @@ go test ./...
 (cd web/default && bun run build:check)
 (cd cliproxyapi && go test ./...)
 (cd cliproxyapi && go build -o test-output ./cmd/server)
+# 并发相关改动；需要 CGO 和 gcc/clang
+CGO_ENABLED=1 go test -race ./model ./relay/channel/deepseek ./relay/channel/mimo
 ```
 
-验证范围应与改动风险相匹配；仅文档变更不需要运行完整构建。
+在 Windows 上，race 测试需要先安装 MinGW 或兼容的 LLVM 工具链，并让 `CC` 指向编译器。验证范围应与改动风险相匹配；仅文档变更不需要运行完整构建。
 
 ## 构建与部署边界
 
 - 当前维护使用本地 Windows 工作副本，CI 或专用构建机也可产出部署文件；
 - Windows 可使用 <code>CGO_ENABLED=0 GOOS=linux GOARCH=amd64</code> 交叉编译生产二进制，部署前核验版本、目标架构、静态链接与 SHA-256；
+- 生产二进制使用 <code>CGO_ENABLED=0</code>；race 检测是本地验证步骤，使用单独的 CGO 构建，不影响发布产物；
 - 公网节点负责运行服务，接收已验证的不可变产物；源码开发和重型构建在本地或构建机完成；
 - <code>dev/cmsg</code> 是日常集成和生产构建的唯一源分支；
 - 发布前核验目标实例的 Compose、数据角色和渠道配置；

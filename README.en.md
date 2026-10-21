@@ -26,7 +26,7 @@ This repository is CMSG's production fork of <a href="https://github.com/Quantum
 
 ## Project scope
 
-<code>new-api-cmsg</code> brings multiple AI providers, account pools, and protocols behind one operable gateway. In addition to the user, token, group, metering, and channel management inherited from New API, CMSG maintains quota-aware scheduling, CPA account pools, Codex/Claude/Gemini/DeepSeek/Kimi routing and protocol adapters, channel capability tests, Codex Radar, and server-side long-context protection.
+<code>new-api-cmsg</code> brings multiple AI providers, account pools, and protocols behind one operable gateway. In addition to the user, token, group, metering, and channel management inherited from New API, CMSG maintains quota-aware scheduling, CPA account pools, Codex/Claude/Gemini/DeepSeek/Kimi routing and protocol adapters, channel capability tests, Codex Radar, server-side long-context protection, and incremental Responses session persistence.
 
 The repository is designed to:
 
@@ -68,6 +68,7 @@ The current production entry point is <a href="https://api.cmsg666.xyz/">api.cms
 | Quota-aware routing            | Balance refresh, low-cost preference, fallback channels, automatic disable/recovery, temporary restriction lifts with a selectable expiry, and billing against the effective upstream model          |
 | CPA account pools and quotas   | Codex/Claude/Kimi/Antigravity account pools, model-level quotas, subscription windows, reset times, active-account deduplication, cooldown and retries                                               |
 | Codex protocol compatibility   | Native DeepSeek Responses plaintext reasoning replay, cross-provider history compatibility, Kimi tool adapters, custom and namespaced tools, and assistant-preamble/tool-result ordering             |
+| Responses session storage      | Per-turn deltas, periodic and branch checkpoints, batched recovery, byte-bounded LRU, single-flight, limited concurrent rebuilds, and SHA-256 externalization for large attachments                  |
 | Reliability                    | Pre-first-byte retries, per-host HTTP/2 pools, Mihomo node failover, and streaming disconnect cleanup                                                                                                |
 | Gemini performance and context | Tool schema caching, linear request assembly, optimized streaming event conversion, final request budget checks, oversized tool-output trimming, and bounded retries for explicit token-limit errors |
 | Channel capability tests       | Current canary covers channels 1, 12, and 27; model and reasoning-effort selection, prompts, answers, latency, failure reasons, and animated SVG previews                                            |
@@ -98,6 +99,14 @@ Administrators can use channel test outputs and Radar scores to evaluate channel
 Channel and dashboard panels show USD balances, CNY balances, and subscription quota percentages in their original units, with missing fields marked unknown. Codex, Kimi, and Gemini CPA use their own collection paths and display upstream-provided subscription windows and reset times. Gemini summarizes independent quota pools as percentages and retains per-account reset times. See <a href="./docs/gemini-cpa-quota.md">Gemini CPA quota semantics</a>.
 
 The native DeepSeek Responses adapter preserves returned plaintext reasoning and isolates continuity caches by user, token, channel, and thread. Cross-provider GPT/Kimi histories use a separate compatibility strategy. Custom, dynamic, and namespaced tools retain call identifiers and client-facing names across requests and response streams. See <a href="./ops/deepseek_codex_responses.md">DeepSeek and Codex tool continuation</a>.
+
+### Incremental Responses session storage
+
+Long-running sessions store an independent delta per response ID, with full checkpoints at the first turn, every 20 turns, and branch points. A delta records the parent history length, indexes of items rewritten by the upstream, and newly appended items. This preserves recovery when DeepSeek normalizes earlier reasoning content on a later turn. Recovery reads at most 24 deltas in one bounded pass and validates item counts, full-history hashes, and pending tool-call hashes.
+
+The runtime adds a byte-bounded in-process LRU, same-ID single-flight, a default two-slot rebuild limit, and a 128 MiB session ceiling. Text, images, and tool outputs larger than 256 KiB are externalized by SHA-256 into the persistent blob directory. Cleanup uses the conversation head watermark to remove whole expired threads without deleting active sessions.
+
+Storage modes are `legacy`, `shadow`, and `incremental`. `shadow` writes both the legacy snapshot and incremental tables, then rebuilds for comparison; production uses `incremental`. Configuration, staged rollout, and rollback details are in <a href="./ops/deepseek_codex_responses.md#2026-10-21-responses-会话增量存储">Responses incremental-storage operations</a>.
 
 The CPA Antigravity/Gemini path estimates context budgets on the server. Over-budget requests may have history or oversized tool output trimmed with explicit truncation notices; trimming removes part of the original text. Requests that remain over budget receive a clear error. When the upstream explicitly reports an input-token limit, the executor retries at most once with a smaller request. See <a href="./docs/antigravity-context-budget.md">Long-context protection</a>.
 
@@ -147,14 +156,17 @@ go test ./...
 (cd web/default && bun run build:check)
 (cd cliproxyapi && go test ./...)
 (cd cliproxyapi && go build -o test-output ./cmd/server)
+# Concurrency-sensitive changes; requires CGO and gcc/clang
+CGO_ENABLED=1 go test -race ./model ./relay/channel/deepseek ./relay/channel/mimo
 ```
 
-Validation should match the risk of the change. Documentation-only updates do not require a full build.
+On Windows, race tests require MinGW or a compatible LLVM toolchain with `CC` pointing to the compiler. Validation should match the risk of the change. Documentation-only updates do not require a full build.
 
 ## Build and deployment boundaries
 
 - Current maintenance uses a local Windows checkout. CI or a dedicated build host can also produce release artifacts.
 - Windows can cross-compile production binaries with <code>CGO_ENABLED=0 GOOS=linux GOARCH=amd64</code>. Verify the embedded version, target architecture, static linkage, and SHA-256 before deployment.
+- Production binaries use <code>CGO_ENABLED=0</code>. Race detection is a local validation step using a separate CGO build and does not affect release artifacts.
 - Public nodes run the service and receive verified immutable artifacts. Source development and heavy builds run locally or on a build host.
 - <code>dev/cmsg</code> is the only daily integration and production-build source.
 - Verify the target instance's Compose layout, data roles, and channel configuration before release.
