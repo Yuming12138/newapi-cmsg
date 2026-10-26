@@ -304,7 +304,9 @@ func resolveUserQuotaGuardUnlockedQuota(ctx context.Context, cfg *operation_sett
 		if !handled || summary.ChannelCount == 0 {
 			return cfg.UnlockedQuotaUSD, "static", nil
 		}
-		return summary.RemainingUSD, "daily_quota_pool", nil
+		// Keep the configured baseline on top of the pooled balance so an
+		// exhausted pool still leaves every user with the floor amount.
+		return summary.RemainingUSD + math.Max(cfg.UnlockedQuotaUSD, 0), "daily_quota_pool", nil
 	case "asxs_channel_pool", "asxs_pool", "channel_pool", "quota_source_pool", "unified_quota_source_pool":
 		summary, handled, err := RefreshASXSChannelBudgetPoolSummary(ctx)
 		if err != nil {
@@ -313,10 +315,11 @@ func resolveUserQuotaGuardUnlockedQuota(ctx context.Context, cfg *operation_sett
 		if !handled || summary.ChannelCount == 0 {
 			return cfg.UnlockedQuotaUSD, "static", nil
 		}
+		poolTotal := summary.RemainingUSD + math.Max(cfg.UnlockedQuotaUSD, 0)
 		if source == "quota_source_pool" || source == "unified_quota_source_pool" {
-			return summary.RemainingUSD, "quota_source_pool", nil
+			return poolTotal, "quota_source_pool", nil
 		}
-		return summary.RemainingUSD, "asxs_channel_pool", nil
+		return poolTotal, "asxs_channel_pool", nil
 	default:
 		return cfg.UnlockedQuotaUSD, "static", fmt.Errorf("unsupported unlocked_quota_source %q", cfg.UnlockedQuotaSource)
 	}

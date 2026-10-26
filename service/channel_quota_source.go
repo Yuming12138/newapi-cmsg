@@ -234,6 +234,39 @@ func summarizeDailyQuotaPool(asxs ChannelBudgetPoolSummary, asxsHandled bool, ch
 			summary.FailedChannelCount++
 		}
 	}
+	// Fallback: a Gemini CPA channel keeps its spendable balance in
+	// channels.balance (maintained by the Gemini quota guard). When the legacy
+	// per-account quota snapshot is absent, the provider above reports nothing,
+	// so fold the channel balance into the pool instead of dropping it.
+	geminiFallbackUSD := 0.0
+	geminiFallbackCount := 0
+	for _, channel := range channels {
+		if channel == nil || channel.Status != common.ChannelStatusEnabled || !IsGeminiCPAChannel(channel) {
+			continue
+		}
+		if _, ok := channel.GetOtherInfo()[geminiCPAQuotaInfoKey]; ok {
+			continue
+		}
+		if channel.Balance <= 0 {
+			continue
+		}
+		geminiFallbackUSD += channel.Balance
+		geminiFallbackCount++
+	}
+	if geminiFallbackCount > 0 {
+		group := DailyQuotaPoolGroup{
+			Source:       "gemini_cpa_balance",
+			Group:        "gemini",
+			ChannelCount: geminiFallbackCount,
+			TotalUSD:     geminiFallbackUSD,
+			RemainingUSD: geminiFallbackUSD,
+			UpdatedAt:    time.Now().Unix(),
+			Available:    true,
+		}
+		appendDailyQuotaPoolGroup(&summary, &group, quotaPerUSD)
+		groups["gemini"] = struct{}{}
+		summary.AvailableChannelCount += geminiFallbackCount
+	}
 	summary.Group = joinQuotaPoolGroups(groups)
 	summary.TotalUSD = roundFloat(summary.TotalUSD, 6)
 	summary.UsedUSD = roundFloat(summary.UsedUSD, 6)
