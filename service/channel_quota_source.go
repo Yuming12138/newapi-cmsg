@@ -244,8 +244,14 @@ func summarizeDailyQuotaPool(asxs ChannelBudgetPoolSummary, asxsHandled bool, ch
 		if channel == nil || channel.Status != common.ChannelStatusEnabled || !IsGeminiCPAChannel(channel) {
 			continue
 		}
-		if _, ok := channel.GetOtherInfo()[geminiCPAQuotaInfoKey]; ok {
-			continue
+		if raw, ok := channel.GetOtherInfo()[geminiCPAQuotaInfoKey]; ok {
+			// A zero/partial legacy snapshot must not mask a healthy channel
+			// balance; only defer to the snapshot when it reports usable quota.
+			if snapshot, isMap := raw.(map[string]interface{}); isMap {
+				if pct, okPct := guardObjectFloat(snapshot, "remaining_percent"); okPct && pct > 0 {
+					continue
+				}
+			}
 		}
 		if channel.Balance <= 0 {
 			continue
