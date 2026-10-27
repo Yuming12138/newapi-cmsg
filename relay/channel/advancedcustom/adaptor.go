@@ -123,6 +123,9 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		if err != nil {
 			return nil, err
 		}
+		// The upstream bridge drops system/developer turns, so the instructions
+		// have to travel as user turns or the model never sees them.
+		chatReq.Messages = relayconvert.ChatMessagesSystemRoleToUser(chatReq.Messages)
 		return a.convertOpenAICompatibleRequest(c, info, chatReq)
 	default:
 		return nil, fmt.Errorf("converter %q does not support OpenAI Responses requests", converter)

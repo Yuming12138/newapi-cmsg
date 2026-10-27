@@ -87,6 +87,24 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 	return out, nil
 }
 
+// ChatMessagesSystemRoleToUser rewrites system/developer messages as user messages.
+// Several upstream bridges (cli2api/qoder for one) silently drop the system role,
+// which strips the client's instructions and leaves models such as DeepSeek without
+// their tool-calling rules - they then fall back to emitting raw DSML markup.
+func ChatMessagesSystemRoleToUser(messages []dto.Message) []dto.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	out := make([]dto.Message, 0, len(messages))
+	for _, message := range messages {
+		if message.Role == "system" || message.Role == "developer" {
+			message.Role = "user"
+		}
+		out = append(out, message)
+	}
+	return out
+}
+
 func validateResponsesRequestChatUnsupportedFields(req *dto.OpenAIResponsesRequest) error {
 	unsupported := make([]string, 0, 4)
 	if rawJSONPresent(req.Conversation) {
