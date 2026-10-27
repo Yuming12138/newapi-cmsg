@@ -53,6 +53,41 @@ func TestNamespacedCustomToolsFlattenToChatFunctions(t *testing.T) {
 	assert.NotContains(t, names, "read_file")
 }
 
+// Codex Desktop ships its whole tool set in an "additional_tools" input item and
+// leaves the top-level "tools" array empty, so a converter that only reads "tools"
+// would relay a request with no tools at all.
+func TestAdditionalToolsInputItemBecomesChatTools(t *testing.T) {
+	req := &dto.OpenAIResponsesRequest{
+		Model: "gpt-test",
+		Input: mustRawMessage(t, []any{
+			map[string]any{
+				"type":        "additional_tools",
+				"id":          "at_1",
+				"role":        "developer",
+				"description": "",
+				"tools": []any{
+					map[string]any{
+						"type": "namespace",
+						"name": "functions",
+						"tools": []any{
+							map[string]any{"type": "custom", "name": "exec", "description": "run code"},
+						},
+					},
+				},
+			},
+			map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "hi"}}},
+		}),
+	}
+
+	chatReq, err := ResponsesRequestToChatCompletionsRequest(req)
+	require.NoError(t, err)
+	require.Len(t, chatReq.Tools, 1)
+	assert.Equal(t, "exec", chatReq.Tools[0].Function.Name)
+	// The declaration itself must not turn into a message.
+	require.Len(t, chatReq.Messages, 1)
+	assert.Contains(t, ResponsesRequestCustomToolNames(req), "exec")
+}
+
 func TestCustomToolCallRestoredAsCustomToolCall(t *testing.T) {
 	chatResp := &dto.OpenAITextResponse{
 		Model: "gpt-test",

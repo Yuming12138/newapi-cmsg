@@ -14,6 +14,7 @@ const (
 	responsesInputTypeFunctionCall       = "function_call"
 	responsesInputTypeFunctionCallOutput = "function_call_output"
 	responsesInputTypeCustomToolCall     = "custom_tool_call"
+	responsesInputTypeAdditionalTools    = "additional_tools"
 )
 
 func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (*dto.GeneralOpenAIRequest, error) {
@@ -32,7 +33,7 @@ func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (
 		return nil, err
 	}
 
-	tools, err := responsesRequestToolsToChat(req.Tools)
+	tools, err := responsesRequestTools(req)
 	if err != nil {
 		return nil, err
 	}
@@ -186,6 +187,10 @@ func responsesInputItemToChatMessages(item map[string]any, messages []dto.Messag
 		callID := strings.TrimSpace(common.Interface2String(item["call_id"]))
 		content := responseToolOutputToChatContent(item["output"])
 		return append(messages, dto.Message{Role: "tool", ToolCallId: callID, Content: content}), nil
+	case responsesInputTypeAdditionalTools:
+		// Tool declarations only; they are converted into Chat Completions tools
+		// and must not become an empty message.
+		return messages, nil
 	}
 
 	role := strings.TrimSpace(common.Interface2String(item["role"]))
@@ -322,6 +327,73 @@ func appendToolCallToLastAssistant(messages []dto.Message, toolCall dto.ToolCall
 	return messages
 }
 
+// responsesRequestTools gathers every tool declaration on the request: the
+// top-level "tools" array plus anything declared inside an "additional_tools"
+// input item (Codex Desktop only uses the latter).
+func responsesRequestTools(req *dto.OpenAIResponsesRequest) ([]dto.ToolCallRequest, error) {
+	declared, err := responsesRequestToolsToChat(req.Tools)
+	if err != nil {
+		return nil, err
+	}
+	extra, err := additionalToolsFromResponsesInput(req)
+	if err != nil {
+		return nil, err
+	}
+	if len(extra) == 0 {
+		return declared, nil
+	}
+	existing := make(map[string]struct{}, len(declared))
+	for _, tool := range declared {
+		if name := strings.TrimSpace(tool.Function.Name); name != "" {
+			existing[name] = struct{}{}
+		}
+	}
+	for _, tool := range extra {
+		name := strings.TrimSpace(tool.Function.Name)
+		if name == "" {
+			declared = append(declared, tool)
+			continue
+		}
+		if _, ok := existing[name]; ok {
+			continue
+		}
+		existing[name] = struct{}{}
+		declared = append(declared, tool)
+	}
+	return declared, nil
+}
+
+// additionalToolsFromResponsesInput extracts tool declarations that clients ship
+// inside an "additional_tools" input item. Without this the upstream never learns
+// about the tools and models such as DeepSeek fall back to emitting their native
+// DSML markup instead of a tool call.
+func additionalToolsFromResponsesInput(req *dto.OpenAIResponsesRequest) ([]dto.ToolCallRequest, error) {
+	if !rawJSONPresent(req.Input) || common.GetJsonType(req.Input) != "array" {
+		return nil, nil
+	}
+	var items []map[string]any
+	if err := common.Unmarshal(req.Input, &items); err != nil {
+		return nil, nil
+	}
+	tools := make([]any, 0)
+	for _, item := range items {
+		if strings.TrimSpace(common.Interface2String(item["type"])) != responsesInputTypeAdditionalTools {
+			continue
+		}
+		if declared, ok := item["tools"].([]any); ok {
+			tools = append(tools, declared...)
+		}
+	}
+	if len(tools) == 0 {
+		return nil, nil
+	}
+	raw, err := common.Marshal(tools)
+	if err != nil {
+		return nil, err
+	}
+	return responsesRequestToolsToChat(raw)
+}
+
 func responsesRequestToolsToChat(raw json.RawMessage) ([]dto.ToolCallRequest, error) {
 	if !rawJSONPresent(raw) {
 		return nil, nil
@@ -430,31 +502,50 @@ func customToolRequest(name string, description string) dto.ToolCallRequest {
 // this list.
 func ResponsesRequestCustomToolNames(req *dto.OpenAIResponsesRequest) map[string]struct{} {
 	names := make(map[string]struct{})
-	if req == nil || !rawJSONPresent(req.Tools) {
+	if req == nil {
 		return names
 	}
-	var tools []map[string]any
-	if err := common.Unmarshal(req.Tools, &tools); err != nil {
-		return names
-	}
-	for _, tool := range tools {
-		switch strings.TrimSpace(common.Interface2String(tool["type"])) {
-		case "custom":
-			if name := strings.TrimSpace(common.Interface2String(tool["name"])); name != "" {
-				names[name] = struct{}{}
-			}
-		case "namespace":
-			children, _ := tool["tools"].([]any)
-			for _, rawChild := range children {
-				child, ok := rawChild.(map[string]any)
-				if !ok {
-					continue
-				}
-				if strings.TrimSpace(common.Interface2String(child["type"])) != "custom" {
-					continue
-				}
-				if name := strings.TrimSpace(common.Interface2String(child["name"])); name != "" {
+	collect := func(raw json.RawMessage) {
+		if !rawJSONPresent(raw) {
+			return
+		}
+		var tools []map[string]any
+		if err := common.Unmarshal(raw, &tools); err != nil {
+			return
+		}
+		for _, tool := range tools {
+			switch strings.TrimSpace(common.Interface2String(tool["type"])) {
+			case "custom":
+				if name := strings.TrimSpace(common.Interface2String(tool["name"])); name != "" {
 					names[name] = struct{}{}
+				}
+			case "namespace":
+				children, _ := tool["tools"].([]any)
+				for _, rawChild := range children {
+					child, ok := rawChild.(map[string]any)
+					if !ok {
+						continue
+					}
+					if strings.TrimSpace(common.Interface2String(child["type"])) != "custom" {
+						continue
+					}
+					if name := strings.TrimSpace(common.Interface2String(child["name"])); name != "" {
+						names[name] = struct{}{}
+					}
+				}
+			}
+		}
+	}
+	collect(req.Tools)
+	if rawJSONPresent(req.Input) && common.GetJsonType(req.Input) == "array" {
+		var items []map[string]any
+		if err := common.Unmarshal(req.Input, &items); err == nil {
+			for _, item := range items {
+				if strings.TrimSpace(common.Interface2String(item["type"])) != responsesInputTypeAdditionalTools {
+					continue
+				}
+				if declared, err := common.Marshal(item["tools"]); err == nil {
+					collect(declared)
 				}
 			}
 		}
