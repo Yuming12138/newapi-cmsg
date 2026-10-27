@@ -220,7 +220,7 @@ func summarizeDailyQuotaPool(asxs ChannelBudgetPoolSummary, asxsHandled bool, ch
 			summary.FailedChannelCount++
 		}
 	}
-	for _, provider := range []func([]*model.Channel) (DailyQuotaPoolGroup, bool){geminiDailyQuotaPoolGroup, deepSeekDailyQuotaPoolGroup} {
+	for _, provider := range []func([]*model.Channel) (DailyQuotaPoolGroup, bool){geminiDailyQuotaPoolGroup, deepSeekDailyQuotaPoolGroup, cli2apiDailyQuotaPoolGroup} {
 		group, handled := provider(channels)
 		if !handled {
 			continue
