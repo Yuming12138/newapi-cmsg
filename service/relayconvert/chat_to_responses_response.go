@@ -68,6 +68,12 @@ func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id
 					Text: reasoning,
 				},
 			},
+			Summary: &[]dto.ResponsesReasoningSummaryPart{
+				{
+					Type: "summary_text",
+					Text: reasoning,
+				},
+			},
 		})
 	}
 
@@ -305,6 +311,19 @@ func (s *ChatToResponsesStreamState) appendReasoningDelta(delta string) []ChatTo
 				ID:      s.reasoningID(),
 				Status:  "in_progress",
 				Content: []dto.ResponsesOutputContent{},
+				Summary: &[]dto.ResponsesReasoningSummaryPart{},
+			},
+		}))
+		// OpenAI emits a summary part before reasoning summary deltas; Codex relies on it
+		// to create the active reasoning item, otherwise it drops the deltas.
+		events = append(events, responsesStreamEvent(responsesEventReasoningSummaryPartAdded, dto.ResponsesStreamResponse{
+			Type:         responsesEventReasoningSummaryPartAdded,
+			OutputIndex:  intPtr(s.reasoningIndex),
+			SummaryIndex: intPtr(0),
+			ItemID:       s.reasoningID(),
+			Part: &dto.ResponsesReasoningSummaryPart{
+				Type: "summary_text",
+				Text: "",
 			},
 		}))
 	}
@@ -525,6 +544,12 @@ func (s *ChatToResponsesStreamState) reasoningOutput(status string) *dto.Respons
 		ID:     s.reasoningID(),
 		Status: status,
 		Content: []dto.ResponsesOutputContent{
+			{
+				Type: "summary_text",
+				Text: s.reasoning.String(),
+			},
+		},
+		Summary: &[]dto.ResponsesReasoningSummaryPart{
 			{
 				Type: "summary_text",
 				Text: s.reasoning.String(),
