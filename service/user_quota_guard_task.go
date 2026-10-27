@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
+	"gorm.io/gorm"
 )
 
 const userQuotaGuardStateOptionKey = "user_quota_guard_state"
@@ -241,6 +242,9 @@ func applyUserQuotaGuardPolicy(cfg *operation_setting.UserQuotaGuardSetting, use
 		targetQuota := quotaFromUSD(targetUSD, quotaPerUSD)
 		shouldEnter := !exists || state.Phase != "restricted" || state.Date != phase.DateKey
 		remark := fmt.Sprintf("个人限额时段额度 $%g（基础 $%g，追加 $%g）；%s 后解锁", targetUSD, baseUSD, extraUSD, defaultString(cfg.RestrictedEnd, "18:00"))
+		if cfg.RestrictedBalanceCapUSD > 0 {
+			remark += fmt.Sprintf("；余额硬上限 $%g", cfg.RestrictedBalanceCapUSD)
+		}
 		if shouldEnter {
 			if err := updateGuardedUserQuota(user, targetQuota, remark); err != nil {
 				return state, false, err
@@ -249,16 +253,19 @@ func applyUserQuotaGuardPolicy(cfg *operation_setting.UserQuotaGuardSetting, use
 		}
 		if targetQuota != state.AppliedRestrictedGrantQuota {
 			delta := targetQuota - state.AppliedRestrictedGrantQuota
-			newQuota := user.Quota + delta
-			if newQuota < 0 {
-				newQuota = 0
-			}
-			if err := updateGuardedUserQuota(user, newQuota, remark); err != nil {
+			if err := adjustGuardedUserQuota(user, delta, targetQuota, cfg.RestrictedBalanceCapUSD > 0, remark); err != nil {
 				return state, false, err
 			}
 			state.AppliedRestrictedGrantQuota = targetQuota
 			state.AppliedExtraUSD = extraUSD
 			return state, true, nil
+		}
+		if cfg.RestrictedBalanceCapUSD > 0 {
+			// A manual top-up or a demotion must not leave an oversized wallet
+			// after today's grant has already been applied. Only lower balances;
+			// never refill the amount already consumed during this window.
+			changed, err := capGuardedUserQuota(user, targetQuota, remark)
+			return state, changed, err
 		}
 		return state, false, nil
 	}
@@ -359,6 +366,44 @@ func updateGuardedUserQuota(user *model.User, quota int, remark string) error {
 	return model.InvalidateUserCache(user.Id)
 }
 
+func adjustGuardedUserQuota(user *model.User, delta, capQuota int, capped bool, remark string) error {
+	quota := gorm.Expr("CASE WHEN quota + ? < 0 THEN 0 ELSE quota + ? END", delta, delta)
+	if capped {
+		quota = gorm.Expr("CASE WHEN quota + ? < 0 THEN 0 WHEN quota + ? > ? THEN ? ELSE quota + ? END",
+			delta, delta, capQuota, capQuota, delta)
+	}
+	result := model.DB.Model(&model.User{}).
+		Where("id = ? AND role < ? AND status = ?", user.Id, common.RoleAdminUser, common.UserStatusEnabled).
+		Updates(map[string]interface{}{"quota": quota, "remark": remark})
+	if result.Error != nil || result.RowsAffected == 0 {
+		return result.Error
+	}
+	if err := model.InvalidateUserCache(user.Id); err != nil {
+		return err
+	}
+	return model.DB.Select("quota", "remark").First(user, user.Id).Error
+}
+
+func capGuardedUserQuota(user *model.User, capQuota int, remark string) (bool, error) {
+	// Check the live row in the UPDATE itself: a request may have consumed the
+	// stale snapshot's excess, or the user may have been promoted meanwhile.
+	result := model.DB.Model(&model.User{}).
+		Where("id = ? AND role < ? AND status = ? AND quota > ?", user.Id, common.RoleAdminUser, common.UserStatusEnabled, capQuota).
+		Updates(map[string]interface{}{"quota": capQuota, "remark": remark})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return false, nil
+	}
+	user.Quota, user.Remark = capQuota, remark
+	if err := model.InvalidateUserCache(user.Id); err != nil {
+		return true, err
+	}
+	logger.LogInfo(context.Background(), fmt.Sprintf("user quota guard: capped user_id=%d balance_quota=%d", user.Id, capQuota))
+	return true, nil
+}
+
 func userQuotaExtraUSD(cfg *operation_setting.UserQuotaGuardSetting, dateKey string, userID int) float64 {
 	key := strconv.Itoa(userID)
 	extra := 0.0
@@ -385,6 +430,12 @@ func userQuotaRestrictedUSD(cfg *operation_setting.UserQuotaGuardSetting, dateKe
 	}
 	extraUSD = userQuotaExtraUSD(cfg, dateKey, userID)
 	targetUSD = math.Max(0, baseUSD+extraUSD)
+	if cfg.RestrictedBalanceCapUSD > 0 {
+		baseUSD = math.Min(baseUSD, cfg.RestrictedBalanceCapUSD)
+		targetUSD = math.Min(targetUSD, cfg.RestrictedBalanceCapUSD)
+		// Report only the part of an approval that can actually be granted.
+		extraUSD = targetUSD - baseUSD
+	}
 	return baseUSD, extraUSD, targetUSD
 }
 

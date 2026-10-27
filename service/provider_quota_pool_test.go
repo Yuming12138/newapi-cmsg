@@ -161,7 +161,7 @@ func TestUnlockedPoolIncludesGeminiAndDeepSeekWithRestrictedPolicyIntact(t *test
 	usd, source, err := resolveUserQuotaGuardUnlockedQuota(context.Background(), cfg)
 	require.NoError(t, err)
 	require.Equal(t, "daily_quota_pool", source)
-	require.InDelta(t, 35.3, usd, 0.000001)
+	require.InDelta(t, 405+35.3, usd, 0.000001)
 	user := &model.User{Id: 2, Username: "ordinary", AffCode: "test", Quota: 0}
 	require.NoError(t, db.Create(user).Error)
 	state, changed, err := applyUserQuotaGuardPolicy(cfg, user, userQuotaGuardUserState{}, false,
@@ -174,7 +174,7 @@ func TestUnlockedPoolIncludesGeminiAndDeepSeekWithRestrictedPolicyIntact(t *test
 		userQuotaPhase{DateKey: "2026-10-14", Phase: "unlocked"}, 500000, usd, source)
 	require.NoError(t, err)
 	require.True(t, changed)
-	require.Equal(t, 17650000, user.Quota)
+	require.Equal(t, 220150000, user.Quota)
 	_, _, restrictedUSD := userQuotaRestrictedUSD(cfg, "2026-10-14", 3)
 	require.Equal(t, 10.0, restrictedUSD)
 }

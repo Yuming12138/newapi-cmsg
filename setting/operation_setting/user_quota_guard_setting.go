@@ -12,23 +12,26 @@ type UserQuotaGuardApproval struct {
 }
 
 type UserQuotaGuardSetting struct {
-	Enabled             bool                                         `json:"enabled"`
-	TickIntervalMinutes int                                          `json:"tick_interval_minutes"`
-	QuotaPerUSD         int                                          `json:"quota_per_usd"`
-	Timezone            string                                       `json:"timezone"`
-	RestrictedStart     string                                       `json:"restricted_start"`
-	RestrictedEnd       string                                       `json:"restricted_end"`
-	DaytimeBaseUSD      float64                                      `json:"daytime_base_usd"`
-	UnlockedQuotaUSD    float64                                      `json:"unlocked_quota_usd"`
-	UnlockedQuotaSource string                                       `json:"unlocked_quota_source"`
-	AutoManage          bool                                         `json:"auto_manage"`
-	IncludeRoles        []int                                        `json:"include_roles"`
-	IncludeGroups       []string                                     `json:"include_groups"`
-	IncludeUserIDs      []int                                        `json:"include_user_ids"`
-	ExcludeUserIDs      []int                                        `json:"exclude_user_ids"`
-	PerUserBaseUSD      map[string]float64                           `json:"per_user_base_usd"`
-	PerUserExtraUSD     map[string]float64                           `json:"per_user_extra_usd"`
-	DailyApprovals      map[string]map[string]UserQuotaGuardApproval `json:"daily_approvals"`
+	Enabled             bool    `json:"enabled"`
+	TickIntervalMinutes int     `json:"tick_interval_minutes"`
+	QuotaPerUSD         int     `json:"quota_per_usd"`
+	Timezone            string  `json:"timezone"`
+	RestrictedStart     string  `json:"restricted_start"`
+	RestrictedEnd       string  `json:"restricted_end"`
+	DaytimeBaseUSD      float64 `json:"daytime_base_usd"`
+	// RestrictedBalanceCapUSD caps the personal grant and remaining wallet
+	// during the restricted window. Zero keeps the legacy uncapped policy.
+	RestrictedBalanceCapUSD float64                                      `json:"restricted_balance_cap_usd"`
+	UnlockedQuotaUSD        float64                                      `json:"unlocked_quota_usd"`
+	UnlockedQuotaSource     string                                       `json:"unlocked_quota_source"`
+	AutoManage              bool                                         `json:"auto_manage"`
+	IncludeRoles            []int                                        `json:"include_roles"`
+	IncludeGroups           []string                                     `json:"include_groups"`
+	IncludeUserIDs          []int                                        `json:"include_user_ids"`
+	ExcludeUserIDs          []int                                        `json:"exclude_user_ids"`
+	PerUserBaseUSD          map[string]float64                           `json:"per_user_base_usd"`
+	PerUserExtraUSD         map[string]float64                           `json:"per_user_extra_usd"`
+	DailyApprovals          map[string]map[string]UserQuotaGuardApproval `json:"daily_approvals"`
 }
 
 var userQuotaGuardSetting = UserQuotaGuardSetting{
