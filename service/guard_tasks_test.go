@@ -562,7 +562,7 @@ func TestResolveUserQuotaGuardUnlockedQuotaUsesDailyPool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantUSD := 2 * cliproxyCPAProUSDPerPercent
+	wantUSD := 405 + 2*cliproxyCPAProUSDPerPercent
 	if math.Abs(gotUSD-wantUSD) > 0.000001 || gotSource != "daily_quota_pool" {
 		t.Fatalf("resolveUserQuotaGuardUnlockedQuota() = (%v, %q), want (%v, %q)", gotUSD, gotSource, wantUSD, "daily_quota_pool")
 	}

@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -88,7 +89,7 @@ func GetSelfUserQuotaRequestStatus(userID int, currentQuota int) (UserQuotaReque
 	state := loadUserQuotaRequestState()
 	requests := append([]UserQuotaRequest(nil), state.Days[dateKey][strconv.Itoa(userID)]...)
 	quotaPerUSD := userQuotaGuardQuotaPerUSD(cfg)
-	return buildUserQuotaRequestStatus(cfg, dateKey, quotaPerUSD, currentQuota, requests), nil
+	return buildUserQuotaRequestStatus(cfg, dateKey, userID, quotaPerUSD, currentQuota, requests), nil
 }
 
 func CreateSelfUserQuotaRequest(user *model.User) (UserQuotaRequestStatus, error) {
@@ -111,7 +112,7 @@ func CreateSelfUserQuotaRequest(user *model.User) (UserQuotaRequestStatus, error
 
 	userKey := strconv.Itoa(user.Id)
 	requests := append([]UserQuotaRequest(nil), state.Days[dateKey][userKey]...)
-	status := buildUserQuotaRequestStatus(cfg, dateKey, quotaPerUSD, user.Quota, requests)
+	status := buildUserQuotaRequestStatus(cfg, dateKey, user.Id, quotaPerUSD, user.Quota, requests)
 	if !status.CanRequest {
 		return status, fmt.Errorf("%s", status.Reason)
 	}
@@ -123,7 +124,7 @@ func CreateSelfUserQuotaRequest(user *model.User) (UserQuotaRequestStatus, error
 		UserID:            user.Id,
 		Username:          user.Username,
 		DisplayName:       user.DisplayName,
-		AmountUSD:         userQuotaRequestAmountUSD,
+		AmountUSD:         status.RequestAmountUSD,
 		Status:            UserQuotaRequestStatusPending,
 		CreatedAt:         now,
 		UpdatedAt:         now,
@@ -150,7 +151,7 @@ func CreateSelfUserQuotaRequest(user *model.User) (UserQuotaRequestStatus, error
 		runUserQuotaGuardOnce()
 	}
 
-	status = buildUserQuotaRequestStatus(cfg, dateKey, quotaPerUSD, user.Quota, requests)
+	status = buildUserQuotaRequestStatus(cfg, dateKey, user.Id, quotaPerUSD, user.Quota, requests)
 	return status, nil
 }
 
@@ -233,9 +234,14 @@ func ReviewUserQuotaRequest(review UserQuotaRequestReview) (UserQuotaRequest, er
 	return UserQuotaRequest{}, fmt.Errorf("request not found")
 }
 
-func buildUserQuotaRequestStatus(cfg *operation_setting.UserQuotaGuardSetting, dateKey string, quotaPerUSD int, currentQuota int, requests []UserQuotaRequest) UserQuotaRequestStatus {
+func buildUserQuotaRequestStatus(cfg *operation_setting.UserQuotaGuardSetting, dateKey string, userID int, quotaPerUSD int, currentQuota int, requests []UserQuotaRequest) UserQuotaRequestStatus {
 	thresholdQuota := quotaFromUSD(userQuotaRequestThresholdUSD, quotaPerUSD)
-	requestAmountQuota := quotaFromUSD(userQuotaRequestAmountUSD, quotaPerUSD)
+	requestAmountUSD := userQuotaRequestAmountUSD
+	if cfg != nil && cfg.RestrictedBalanceCapUSD > 0 {
+		_, _, targetUSD := userQuotaRestrictedUSD(cfg, dateKey, userID)
+		requestAmountUSD = math.Min(requestAmountUSD, math.Max(0, cfg.RestrictedBalanceCapUSD-targetUSD))
+	}
+	requestAmountQuota := quotaFromUSD(requestAmountUSD, quotaPerUSD)
 	requestCount := len(requests)
 	remaining := userQuotaRequestMaxPerDay - requestCount
 	if remaining < 0 {
@@ -248,7 +254,7 @@ func buildUserQuotaRequestStatus(cfg *operation_setting.UserQuotaGuardSetting, d
 		QuotaPerUSD:        quotaPerUSD,
 		ThresholdUSD:       userQuotaRequestThresholdUSD,
 		ThresholdQuota:     thresholdQuota,
-		RequestAmountUSD:   userQuotaRequestAmountUSD,
+		RequestAmountUSD:   requestAmountUSD,
 		RequestAmountQuota: requestAmountQuota,
 		MaxRequestsPerDay:  userQuotaRequestMaxPerDay,
 		AutoApproveLimit:   userQuotaRequestAutoApproveMax,
@@ -263,6 +269,8 @@ func buildUserQuotaRequestStatus(cfg *operation_setting.UserQuotaGuardSetting, d
 	switch {
 	case cfg == nil || !cfg.Enabled:
 		status.Reason = "quota guard is not enabled"
+	case requestAmountQuota == 0:
+		status.Reason = fmt.Sprintf("daily quota cap of $%g has been reached", cfg.RestrictedBalanceCapUSD)
 	case currentQuota >= thresholdQuota:
 		status.Reason = fmt.Sprintf("current quota is not below $%g", userQuotaRequestThresholdUSD)
 	case requestCount >= userQuotaRequestMaxPerDay:
@@ -301,6 +309,12 @@ func userQuotaRequestDateKey(cfg *operation_setting.UserQuotaGuardSetting) strin
 func addUserQuotaGuardDailyApproval(cfg *operation_setting.UserQuotaGuardSetting, dateKey string, userID int, extraUSD float64, note string, updatedAt int64) error {
 	if cfg == nil {
 		return fmt.Errorf("quota guard setting is not available")
+	}
+	if cfg.RestrictedBalanceCapUSD > 0 {
+		_, _, targetUSD := userQuotaRestrictedUSD(cfg, dateKey, userID)
+		if extraUSD > math.Max(0, cfg.RestrictedBalanceCapUSD-targetUSD) {
+			return fmt.Errorf("approval would exceed the daily quota cap of $%g", cfg.RestrictedBalanceCapUSD)
+		}
 	}
 	if cfg.DailyApprovals == nil {
 		cfg.DailyApprovals = map[string]map[string]operation_setting.UserQuotaGuardApproval{}
