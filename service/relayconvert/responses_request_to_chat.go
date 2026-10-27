@@ -618,6 +618,9 @@ func responsesRequestTextToChatResponseFormat(raw json.RawMessage) (*dto.Respons
 
 func responsesImagePartToChatImageURL(part map[string]any) any {
 	if imageURL, ok := part["image_url"]; ok {
+		if normalized, changed := chatImageURLObject(imageURL, part["detail"]); changed {
+			return normalized
+		}
 		return imageURL
 	}
 	imageURL := map[string]any{}
@@ -629,7 +632,38 @@ func responsesImagePartToChatImageURL(part map[string]any) any {
 	if len(imageURL) == 0 {
 		return part
 	}
+	// Chat Completions expects image_url to be an object; a bare string url has
+	// to be wrapped (upstreams reject it with "cannot unmarshal string into
+	// ***.ImageContent").
+	if url, ok := imageURL["url"]; ok {
+		if normalized, changed := chatImageURLObject(url, imageURL["detail"]); changed {
+			return normalized
+		}
+	}
 	return imageURL
+}
+
+// chatImageURLObject normalizes a Responses-style image reference into the Chat
+// Completions object form {"url": ..., "detail": ...}. The second return value
+// reports whether a conversion happened.
+func chatImageURLObject(value any, detail any) (any, bool) {
+	var url string
+	switch v := value.(type) {
+	case string:
+		url = strings.TrimSpace(v)
+	case map[string]any:
+		return nil, false
+	default:
+		return nil, false
+	}
+	if url == "" {
+		return nil, false
+	}
+	out := map[string]any{"url": url}
+	if detail != nil {
+		out["detail"] = detail
+	}
+	return out, true
 }
 
 func responsesFilePartToChatFile(part map[string]any) any {
