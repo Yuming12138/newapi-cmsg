@@ -29,6 +29,7 @@ type DashboardProviderBalances struct {
 	ASXS           ASXSAccountDailyBalance `json:"asxs"`
 	Kimi           ProviderAccountBalance  `json:"kimi"`
 	DeepSeek       ProviderAccountBalance  `json:"deepseek"`
+	C2A            ProviderAccountBalance  `json:"c2a"`
 	DailyQuotaPool *DailyQuotaPoolSummary  `json:"daily_quota_pool,omitempty"`
 }
 
@@ -76,7 +77,37 @@ func summarizeDashboardProviderBalances(channels []*model.Channel) DashboardProv
 		DeepSeek: summarizeProviderAccountBalance(channels, func(channel *model.Channel) bool {
 			return isDeepSeekBalanceChannel(channel, deepSeekSetting)
 		}),
+		C2A: summarizeC2ACreditBalance(channels),
 	}
+}
+
+// summarizeC2ACreditBalance sums Advanced Custom (cli2api) channel balances.
+// The channel balance is stored in upstream credits (not USD), so it is
+// reported as-is with currency "credits" until a conversion ratio is decided.
+func summarizeC2ACreditBalance(channels []*model.Channel) ProviderAccountBalance {
+	summary := ProviderAccountBalance{Currency: "credits"}
+	var total float64
+	for _, channel := range channels {
+		if channel == nil || channel.Status != common.ChannelStatusEnabled ||
+			channel.Type != constant.ChannelTypeAdvancedCustom {
+			continue
+		}
+		summary.ChannelCount++
+		if channel.BalanceUpdatedTime <= 0 || math.IsNaN(channel.Balance) || math.IsInf(channel.Balance, 0) {
+			summary.Partial = true
+			continue
+		}
+		summary.SyncedAccountCount++
+		total += channel.Balance
+		if channel.BalanceUpdatedTime > summary.UpdatedAt {
+			summary.UpdatedAt = channel.BalanceUpdatedTime
+		}
+	}
+	if summary.SyncedAccountCount > 0 {
+		rounded := math.Round(total*100) / 100
+		summary.Balance = &rounded
+	}
+	return summary
 }
 
 func isOfficialKimiChannel(channel *model.Channel) bool {

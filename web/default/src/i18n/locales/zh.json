@@ -729,7 +729,7 @@
     "Failed to load channel usage": "渠道用量加载失败",
     "No channel usage data": "暂无渠道用量数据",
     "Top Channels": "消耗最高的渠道",
-    "Top {{count}}": "前 {{count}} 名",
+    "Top {{count}}": "前 {{count}}",
     "Use the controls to inspect per-channel consumption across longer windows": "使用上方控件查看更长时间范围内各渠道的消耗情况",
     "Channel Affinity": "渠道亲和性",
     "Channel affinity reuses the last successful channel based on keys extracted from the request context or JSON body.": "渠道亲和性会基于从请求上下文或 JSON Body 提取的 Key，优先复用上一次成功的渠道。",
@@ -1900,7 +1900,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相关项目",
     "footer.defaultCopyright": "版权所有。",
-    "footer.new\u0061pi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
+    "footer.newapi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "对于 2025 年 5 月 10 日之后添加的渠道，在部署时无需从模型名称中移除 \".\"",
     "For private deployments, format: https://fastgpt.run/api/openapi": "对于私有部署，格式为：https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "强制返回语法合法的 JSON",
@@ -4254,7 +4254,6 @@
     "Tool prices": "工具价格",
     "Tool-choice policy or specific tool name": "工具选择策略或具体工具名",
     "Tools": "工具",
-    "Top {{count}}": "前 {{count}}",
     "Top app": "领头应用",
     "Top apps": "热门应用",
     "Top Apps": "热门应用",
@@ -4881,6 +4880,7 @@
           "attribution": "数据来自 Codex 雷达 codexradar.com"
         }
       }
-    }
+    },
+    "Upstream account credits total": "上游账号积分合计"
   }
 }

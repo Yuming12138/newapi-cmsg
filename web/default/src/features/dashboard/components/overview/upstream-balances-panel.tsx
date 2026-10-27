@@ -29,7 +29,7 @@ type BalanceRowProps = {
   name: string
   caption: string
   amount: number | null | undefined
-  currency: 'USD' | 'CNY'
+  currency: 'USD' | 'CNY' | 'credits'
   updatedAt?: number
   unavailableText: string
   partial?: boolean
@@ -41,12 +41,17 @@ function BalanceRow(props: BalanceRowProps) {
   const { t, i18n } = useTranslation()
   const formattedAmount =
     props.amount != null && Number.isFinite(props.amount)
-      ? new Intl.NumberFormat(i18n.language, {
-          style: 'currency',
-          currency: props.currency,
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        }).format(props.amount)
+      ? props.currency === 'credits'
+        ? new Intl.NumberFormat(i18n.language, {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 0,
+          }).format(props.amount)
+        : new Intl.NumberFormat(i18n.language, {
+            style: 'currency',
+            currency: props.currency,
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          }).format(props.amount)
       : '--'
   const updatedAt = props.updatedAt
     ? new Intl.DateTimeFormat(i18n.language, {
@@ -241,10 +246,8 @@ export function UpstreamBalancesPanel() {
   const kimi = balancesQuery.data?.kimi
   const deepSeek = balancesQuery.data?.deepseek
   const asxs = balancesQuery.data?.asxs
+  const c2a = balancesQuery.data?.c2a
   const pool = balancesQuery.data?.daily_quota_pool
-  const gemini = pool?.group_breakdown?.find(
-    (group) => group.source === 'gemini_cpa_subscription_estimate'
-  )
   const noChannel = t('No active channel')
   const waiting = t('Waiting for balance sync')
   const unavailable = t('Balance temporarily unavailable')
@@ -324,15 +327,19 @@ export function UpstreamBalancesPanel() {
           loading={balancesQuery.isPending}
           tone='text-cyan-700 dark:text-cyan-300'
         />
-        {gemini && (
+        {c2a && (
           <BalanceRow
-            name='Gemini CPA'
-            caption={t('Estimated subscription quota in USD')}
-            amount={gemini.remaining_usd}
-            currency='USD'
-            updatedAt={gemini.updated_at}
-            unavailableText={waiting}
-            partial={gemini.partial}
+            name='C2A'
+            caption={t('Upstream account credits total')}
+            amount={c2a.balance}
+            currency='credits'
+            updatedAt={c2a.updated_at}
+            unavailableText={
+              balancesQuery.isError
+                ? unavailable
+                : providerUnavailableText(c2a, noChannel, waiting)
+            }
+            partial={c2a.partial}
             loading={balancesQuery.isPending}
             tone='text-blue-700 dark:text-blue-300'
           />

@@ -510,6 +510,66 @@ func updateChannelMoonshotBalance(channel *model.Channel) (float64, error) {
 	return service.UpdateKimiBalance(channel)
 }
 
+func updateChannelCli2APIBalance(channel *model.Channel) (float64, error) {
+	consoleKey := ""
+	if path := strings.TrimSpace(os.Getenv("CLI2API_CONSOLE_KEY_FILE")); path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil || len(strings.TrimSpace(string(raw))) == 0 {
+			return 0, fmt.Errorf("cli2api console key file %s is unavailable", path)
+		}
+		consoleKey = strings.TrimSpace(string(raw))
+	} else {
+		consoleKey = strings.TrimSpace(os.Getenv("CLI2API_CONSOLE_KEY"))
+	}
+	if consoleKey == "" {
+		return 0, errors.New("CLI2API_CONSOLE_KEY is not configured")
+	}
+	baseURL := strings.TrimSuffix(channel.GetBaseURL(), "/")
+	req, err := http.NewRequest(http.MethodGet, baseURL+"/api/accounts", nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+consoleKey)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		msg := string(body)
+		if len(msg) > 200 {
+			msg = msg[:200]
+		}
+		return 0, fmt.Errorf("cli2api /api/accounts status %d: %s", resp.StatusCode, msg)
+	}
+	var out struct {
+		Data []struct {
+			Enabled bool   `json:"enabled"`
+			Status  string `json:"status"`
+			Quota   struct {
+				Remaining      float64 `json:"remaining"`
+				AddOnRemaining float64 `json:"add_on_remaining"`
+			} `json:"quota"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return 0, err
+	}
+	total := 0.0
+	for _, acc := range out.Data {
+		if acc.Enabled && acc.Status == "ready" {
+			total += acc.Quota.Remaining + acc.Quota.AddOnRemaining
+		}
+	}
+	channel.UpdateBalance(total)
+	return total, nil
+}
+
 func updateChannelBalance(channel *model.Channel) (float64, error) {
 	if service.IsGeminiCPAChannel(channel) {
 		return service.UpdateGeminiCPAQuotaBalance(context.Background(), channel)
@@ -530,6 +590,14 @@ func updateChannelBalance(channel *model.Channel) (float64, error) {
 	baseURL := constant.ChannelBaseURLs[channel.Type]
 	if channel.GetBaseURL() == "" {
 		channel.BaseURL = &baseURL
+	}
+	// cli2api (Advanced Custom) exposes account credits only through its
+	// console endpoint /api/accounts; the per-channel proxy key gets 403.
+	// The console key is injected via CLI2API_CONSOLE_KEY(_FILE). Balance is
+	// the sum of credits (remaining + add_on_remaining) across ready accounts,
+	// kept in $ units until a credits->USD ratio is decided (2026-10-27).
+	if channel.Type == constant.ChannelTypeAdvancedCustom {
+		return updateChannelCli2APIBalance(channel)
 	}
 	if isUsageBalanceBaseURL(channel.GetBaseURL()) {
 		return updateChannelUsageBalance(channel)

@@ -46,7 +46,7 @@ export interface ChannelQuotaDataItem {
 
 export interface ProviderAccountBalance {
   balance: number | null
-  currency: 'CNY'
+  currency: 'CNY' | 'USD' | 'credits'
   updated_at: number
   channel_count: number
   account_count: number
@@ -91,6 +91,7 @@ export interface DashboardProviderBalances {
   }
   kimi: ProviderAccountBalance
   deepseek: ProviderAccountBalance
+  c2a?: ProviderAccountBalance
   daily_quota_pool?: DailyQuotaPoolStatus
 }
 
