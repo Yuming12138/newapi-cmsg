@@ -17,6 +17,14 @@ const (
 )
 
 func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id string) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
+	return ChatCompletionsResponseToResponsesResponseWithCustom(resp, id, nil)
+}
+
+// ChatCompletionsResponseToResponsesResponseWithCustom behaves like
+// ChatCompletionsResponseToResponsesResponse but restores calls to the Responses
+// "custom" tools listed in customToolNames as custom_tool_call items instead of
+// function_call items, so clients that declared them (e.g. Codex) accept them.
+func ChatCompletionsResponseToResponsesResponseWithCustom(resp *dto.OpenAITextResponse, id string, customToolNames map[string]struct{}) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
 	if resp == nil {
 		return nil, nil, errors.New("response is nil")
 	}
@@ -78,7 +86,7 @@ func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id
 	}
 
 	for i, toolCall := range choice.Message.ParseToolCalls() {
-		toolOutput, err := chatToolCallToResponsesOutput(toolCall, id, i, responseOutputStatus(out))
+		toolOutput, err := chatToolCallToResponsesOutput(toolCall, id, i, responseOutputStatus(out), customToolNames)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -154,6 +162,7 @@ type ChatToResponsesStreamState struct {
 	Created int64
 	Usage   *dto.Usage
 
+	customToolNames   map[string]struct{}
 	status            string
 	incompleteDetails *dto.IncompleteDetails
 	sentCreated       bool
@@ -178,6 +187,10 @@ type chatToResponsesStreamTool struct {
 	Name        string
 	Arguments   strings.Builder
 	Done        bool
+	// Custom marks a call that the client declared as a Responses custom tool,
+	// which has to be handed back as custom_tool_call rather than function_call.
+	Custom    bool
+	InputSent int
 }
 
 type chatToResponsesOutputRef struct {
@@ -196,6 +209,15 @@ func NewChatToResponsesStreamState(id string, model string) *ChatToResponsesStre
 		reasoningIndex:  -1,
 		toolsByIndex:    make(map[int]*chatToResponsesStreamTool),
 	}
+}
+
+// SetCustomToolNames declares the Responses custom tools the client announced, so
+// calls to them can be emitted as custom_tool_call items.
+func (s *ChatToResponsesStreamState) SetCustomToolNames(names map[string]struct{}) {
+	if s == nil {
+		return
+	}
+	s.customToolNames = names
 }
 
 func ChatCompletionsStreamChunkToResponsesEvents(chunk *dto.ChatCompletionsStreamResponse, state *ChatToResponsesStreamState) ([]ChatToResponsesStreamEvent, error) {
@@ -355,19 +377,28 @@ func (s *ChatToResponsesStreamState) appendToolCallDelta(toolCall dto.ToolCallRe
 		if tool.ID == "" {
 			tool.ID = fmt.Sprintf("%s_call_%d", s.ID, chatIndex)
 		}
+		if _, ok := s.customToolNames[tool.Name]; ok {
+			tool.Custom = true
+		}
 		s.toolsByIndex[chatIndex] = tool
+		item := &dto.ResponsesOutput{
+			Type:      responsesOutputTypeFunctionCall,
+			ID:        tool.ID,
+			Status:    "in_progress",
+			CallId:    tool.ID,
+			Name:      tool.Name,
+			Arguments: []byte(`""`),
+		}
+		if tool.Custom {
+			item.Type = responsesOutputTypeCustomToolCall
+			item.Arguments = nil
+			item.Input = []byte(`""`)
+		}
 		events = append(events, responsesStreamEvent(responsesEventOutputItemAdded, dto.ResponsesStreamResponse{
 			Type:        responsesEventOutputItemAdded,
 			OutputIndex: intPtr(tool.OutputIndex),
 			ItemID:      tool.ID,
-			Item: &dto.ResponsesOutput{
-				Type:      responsesOutputTypeFunctionCall,
-				ID:        tool.ID,
-				Status:    "in_progress",
-				CallId:    tool.ID,
-				Name:      tool.Name,
-				Arguments: []byte(`""`),
-			},
+			Item:        item,
 		}))
 	}
 	if strings.TrimSpace(toolCall.ID) != "" {
@@ -378,14 +409,39 @@ func (s *ChatToResponsesStreamState) appendToolCallDelta(toolCall dto.ToolCallRe
 	}
 	if toolCall.Function.Arguments != "" {
 		tool.Arguments.WriteString(toolCall.Function.Arguments)
-		events = append(events, responsesStreamEvent(responsesEventFunctionArgsDelta, dto.ResponsesStreamResponse{
-			Type:        responsesEventFunctionArgsDelta,
-			OutputIndex: intPtr(tool.OutputIndex),
-			ItemID:      tool.ID,
-			Delta:       toolCall.Function.Arguments,
-		}))
+		if tool.Custom {
+			events = append(events, s.customInputDeltaEvents(tool)...)
+		} else {
+			events = append(events, responsesStreamEvent(responsesEventFunctionArgsDelta, dto.ResponsesStreamResponse{
+				Type:        responsesEventFunctionArgsDelta,
+				OutputIndex: intPtr(tool.OutputIndex),
+				ItemID:      tool.ID,
+				Delta:       toolCall.Function.Arguments,
+			}))
+		}
 	}
 	return events, nil
+}
+
+// customInputDeltaEvents forwards the unwrapped "input" argument of a custom tool
+// call. Arguments only become decodable once the upstream finishes the JSON object,
+// so intermediate fragments are buffered instead of being relayed verbatim.
+func (s *ChatToResponsesStreamState) customInputDeltaEvents(tool *chatToResponsesStreamTool) []ChatToResponsesStreamEvent {
+	if tool == nil {
+		return nil
+	}
+	input, ok := customToolInputFromArguments(tool.Arguments.String())
+	if !ok || len(input) <= tool.InputSent {
+		return nil
+	}
+	delta := input[tool.InputSent:]
+	tool.InputSent = len(input)
+	return []ChatToResponsesStreamEvent{responsesStreamEvent(responsesEventCustomToolInputDelta, dto.ResponsesStreamResponse{
+		Type:        responsesEventCustomToolInputDelta,
+		OutputIndex: intPtr(tool.OutputIndex),
+		ItemID:      tool.ID,
+		Delta:       delta,
+	})}
 }
 
 func (s *ChatToResponsesStreamState) doneDeltaEvents() []ChatToResponsesStreamEvent {
@@ -428,11 +484,20 @@ func (s *ChatToResponsesStreamState) doneDeltaEvents() []ChatToResponsesStreamEv
 			continue
 		}
 		tool.Done = true
-		events = append(events, responsesStreamEvent(responsesEventFunctionArgsDone, dto.ResponsesStreamResponse{
-			Type:        responsesEventFunctionArgsDone,
-			OutputIndex: intPtr(tool.OutputIndex),
-			ItemID:      tool.ID,
-		}))
+		if tool.Custom {
+			events = append(events, s.customInputDeltaEvents(tool)...)
+			events = append(events, responsesStreamEvent(responsesEventCustomToolInputDone, dto.ResponsesStreamResponse{
+				Type:        responsesEventCustomToolInputDone,
+				OutputIndex: intPtr(tool.OutputIndex),
+				ItemID:      tool.ID,
+			}))
+		} else {
+			events = append(events, responsesStreamEvent(responsesEventFunctionArgsDone, dto.ResponsesStreamResponse{
+				Type:        responsesEventFunctionArgsDone,
+				OutputIndex: intPtr(tool.OutputIndex),
+				ItemID:      tool.ID,
+			}))
+		}
 		events = append(events, responsesStreamEvent(responsesEventOutputItemDone, dto.ResponsesStreamResponse{
 			Type:        responsesEventOutputItemDone,
 			OutputIndex: intPtr(tool.OutputIndex),
@@ -559,13 +624,27 @@ func (s *ChatToResponsesStreamState) reasoningOutput(status string) *dto.Respons
 }
 
 func (s *ChatToResponsesStreamState) toolOutput(tool *chatToResponsesStreamTool, status string) *dto.ResponsesOutput {
+	if tool.Custom {
+		input, ok := customToolInputFromArguments(tool.Arguments.String())
+		if !ok {
+			input = customInputFromArguments(tool.Arguments.String())
+		}
+		return &dto.ResponsesOutput{
+			Type:   responsesOutputTypeCustomToolCall,
+			ID:     tool.ID,
+			Status: status,
+			CallId: tool.ID,
+			Name:   tool.Name,
+			Input:  chatRawString(input),
+		}
+	}
 	return &dto.ResponsesOutput{
 		Type:      responsesOutputTypeFunctionCall,
 		ID:        tool.ID,
 		Status:    status,
 		CallId:    tool.ID,
 		Name:      tool.Name,
-		Arguments: chatArgumentsRawMessage(tool.Arguments.String()),
+		Arguments: chatRawString(tool.Arguments.String()),
 	}
 }
 
@@ -576,10 +655,20 @@ func responseOutputStatus(resp *dto.OpenAIResponsesResponse) string {
 	return "incomplete"
 }
 
-func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID string, index int, status string) (dto.ResponsesOutput, error) {
+func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID string, index int, status string, customToolNames map[string]struct{}) (dto.ResponsesOutput, error) {
 	callID := strings.TrimSpace(toolCall.ID)
 	if callID == "" {
 		callID = fmt.Sprintf("%s_call_%d", responseID, index)
+	}
+	if _, ok := customToolNames[strings.TrimSpace(toolCall.Function.Name)]; ok {
+		return dto.ResponsesOutput{
+			Type:   responsesOutputTypeCustomToolCall,
+			ID:     callID,
+			Status: status,
+			CallId: callID,
+			Name:   toolCall.Function.Name,
+			Input:  chatRawString(customInputFromArguments(toolCall.Function.Arguments)),
+		}, nil
 	}
 	if toolCall.Type == "" || toolCall.Type == "function" {
 		return dto.ResponsesOutput{
@@ -588,7 +677,7 @@ func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID stri
 			Status:    status,
 			CallId:    callID,
 			Name:      toolCall.Function.Name,
-			Arguments: chatArgumentsRawMessage(toolCall.Function.Arguments),
+			Arguments: chatRawString(toolCall.Function.Arguments),
 		}, nil
 	}
 	return dto.ResponsesOutput{
@@ -600,12 +689,49 @@ func chatToolCallToResponsesOutput(toolCall dto.ToolCallRequest, responseID stri
 	}, nil
 }
 
-func chatArgumentsRawMessage(arguments string) []byte {
-	raw, err := common.Marshal(arguments)
+func chatRawString(value string) []byte {
+	raw, err := common.Marshal(value)
 	if err != nil {
 		return []byte(`""`)
 	}
 	return raw
+}
+
+// customInputFromArguments pulls the freeform "input" argument out of a tool-call
+// payload. Custom tools are exposed upstream as a single string parameter, so the
+// whole JSON object has to be unwrapped before the value can be handed back as
+// the custom_tool_call input.
+func customInputFromArguments(arguments string) string {
+	trimmed := strings.TrimSpace(arguments)
+	if trimmed == "" {
+		return ""
+	}
+	var parsed map[string]any
+	if err := common.Unmarshal(common.StringToByteSlice(trimmed), &parsed); err != nil {
+		return trimmed
+	}
+	if input, ok := parsed["input"]; ok {
+		return common.Interface2String(input)
+	}
+	return ""
+}
+
+// customToolInputFromArguments is the streaming counterpart of
+// customInputFromArguments: it only reports a value once the accumulated
+// arguments decode cleanly, otherwise partial JSON would be forwarded as input.
+func customToolInputFromArguments(arguments string) (string, bool) {
+	trimmed := strings.TrimSpace(arguments)
+	if trimmed == "" {
+		return "", false
+	}
+	var parsed map[string]any
+	if err := common.Unmarshal(common.StringToByteSlice(trimmed), &parsed); err != nil {
+		return "", false
+	}
+	if input, ok := parsed["input"]; ok {
+		return common.Interface2String(input), true
+	}
+	return "", true
 }
 
 func chatCreatedAt(created any) int {

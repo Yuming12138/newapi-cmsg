@@ -318,15 +318,45 @@ func responsesRequestToolsToChat(raw json.RawMessage) ([]dto.ToolCallRequest, er
 	for _, tool := range tools {
 		toolType := strings.TrimSpace(common.Interface2String(tool["type"]))
 		if toolType == "function" {
-			out = append(out, dto.ToolCallRequest{
-				Type: "function",
-				Function: dto.FunctionRequest{
-					Name:        strings.TrimSpace(common.Interface2String(tool["name"])),
-					Description: common.Interface2String(tool["description"]),
-					Parameters:  tool["parameters"],
-				},
-			})
+			out = append(out, functionToolRequest(tool))
 			continue
+		}
+		if toolType == "namespace" {
+			// Codex Desktop groups its tools into namespaces (functions, clock,
+			// collaboration). Chat Completions has no such concept, so the children
+			// are flattened and the namespace is dropped from the wire name.
+			children, _ := tool["tools"].([]any)
+			for _, rawChild := range children {
+				child, ok := rawChild.(map[string]any)
+				if !ok {
+					continue
+				}
+				childType := strings.TrimSpace(common.Interface2String(child["type"]))
+				switch childType {
+				case "function":
+					out = append(out, functionToolRequest(child))
+				case "custom":
+					name := strings.TrimSpace(common.Interface2String(child["name"]))
+					if name == "" {
+						continue
+					}
+					out = append(out, customToolRequest(name, common.Interface2String(child["description"])))
+				default:
+					rawChild, err := common.Marshal(child)
+					if err != nil {
+						return nil, err
+					}
+					out = append(out, dto.ToolCallRequest{Type: childType, Custom: rawChild})
+				}
+			}
+			continue
+		}
+		if toolType == "custom" {
+			name := strings.TrimSpace(common.Interface2String(tool["name"]))
+			if name != "" {
+				out = append(out, customToolRequest(name, common.Interface2String(tool["description"])))
+				continue
+			}
 		}
 
 		rawTool, err := common.Marshal(tool)
@@ -339,6 +369,79 @@ func responsesRequestToolsToChat(raw json.RawMessage) ([]dto.ToolCallRequest, er
 		})
 	}
 	return out, nil
+}
+
+func functionToolRequest(tool map[string]any) dto.ToolCallRequest {
+	return dto.ToolCallRequest{
+		Type: "function",
+		Function: dto.FunctionRequest{
+			Name:        strings.TrimSpace(common.Interface2String(tool["name"])),
+			Description: common.Interface2String(tool["description"]),
+			Parameters:  tool["parameters"],
+		},
+	}
+}
+
+// customToolRequest maps a Responses "custom" tool (freeform text input, no JSON
+// schema, e.g. the Codex exec tool) onto a Chat Completions function whose single
+// argument carries the same freeform input.
+func customToolRequest(name string, description string) dto.ToolCallRequest {
+	return dto.ToolCallRequest{
+		Type: "function",
+		Function: dto.FunctionRequest{
+			Name:        name,
+			Description: description,
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"input": map[string]any{
+						"type":        "string",
+						"description": "Freeform input for the custom tool.",
+					},
+				},
+				"required":             []string{"input"},
+				"additionalProperties": false,
+			},
+		},
+	}
+}
+
+// ResponsesRequestCustomToolNames returns the names of the custom tools declared by
+// the client, including those nested inside namespaces. Chat Completions has no
+// custom tool type, so callers that want to restore them on the response side need
+// this list.
+func ResponsesRequestCustomToolNames(req *dto.OpenAIResponsesRequest) map[string]struct{} {
+	names := make(map[string]struct{})
+	if req == nil || !rawJSONPresent(req.Tools) {
+		return names
+	}
+	var tools []map[string]any
+	if err := common.Unmarshal(req.Tools, &tools); err != nil {
+		return names
+	}
+	for _, tool := range tools {
+		switch strings.TrimSpace(common.Interface2String(tool["type"])) {
+		case "custom":
+			if name := strings.TrimSpace(common.Interface2String(tool["name"])); name != "" {
+				names[name] = struct{}{}
+			}
+		case "namespace":
+			children, _ := tool["tools"].([]any)
+			for _, rawChild := range children {
+				child, ok := rawChild.(map[string]any)
+				if !ok {
+					continue
+				}
+				if strings.TrimSpace(common.Interface2String(child["type"])) != "custom" {
+					continue
+				}
+				if name := strings.TrimSpace(common.Interface2String(child["name"])); name != "" {
+					names[name] = struct{}{}
+				}
+			}
+		}
+	}
+	return names
 }
 
 func responsesRequestToolChoiceToChat(raw json.RawMessage) (any, error) {
@@ -357,7 +460,10 @@ func responsesRequestToolChoiceToChat(raw json.RawMessage) (any, error) {
 	if err := common.Unmarshal(raw, &choice); err != nil {
 		return nil, fmt.Errorf("invalid tool_choice: %w", err)
 	}
-	if common.Interface2String(choice["type"]) == "function" {
+	// "custom" (and namespaced) tool choices have no Chat Completions equivalent;
+	// they are pinned to the matching function the custom tool was mapped onto.
+	switch strings.TrimSpace(common.Interface2String(choice["type"])) {
+	case "function", "custom":
 		name := strings.TrimSpace(common.Interface2String(choice["name"]))
 		if name != "" {
 			return map[string]any{

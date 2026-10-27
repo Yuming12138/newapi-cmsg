@@ -36,7 +36,7 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 
 	responseID := helper.GetResponseID(c)
-	responsesResp, usage, err := service.ChatCompletionsResponseToResponsesResponse(&chatResp, responseID)
+	responsesResp, usage, err := service.ChatCompletionsResponseToResponsesResponseWithCustom(&chatResp, responseID, info.CustomToolNames)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
@@ -63,6 +63,7 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	responseID := helper.GetResponseID(c)
 	state := relayconvert.NewChatToResponsesStreamState(responseID, info.UpstreamModelName)
+	state.SetCustomToolNames(info.CustomToolNames)
 	streamErr := (*types.NewAPIError)(nil)
 
 	sendEvent := func(event relayconvert.ChatToResponsesStreamEvent) bool {

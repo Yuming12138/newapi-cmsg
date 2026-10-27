@@ -160,6 +160,10 @@ type RelayInfo struct {
 	IsFirstRequest         bool
 	AudioUsage             bool
 	ReasoningEffort        string
+	// CustomToolNames records the Responses "custom" tools requested by the client
+	// (including namespaced ones). Chat Completions has no custom tool type, so the
+	// response converter needs this set to rebuild custom_tool_call items.
+	CustomToolNames        map[string]struct{}
 	UserSetting            dto.UserSetting
 	UserEmail              string
 	UserQuota              int

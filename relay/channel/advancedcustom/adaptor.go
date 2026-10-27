@@ -17,6 +17,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/service/relayconvert"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
@@ -112,6 +113,11 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 			// Keep the requested effort for billing logs, mirroring the native
 			// OpenAI Responses path (relay/channel/openai/adaptor.go).
 			info.ReasoningEffort = request.Reasoning.Effort
+		}
+		if info != nil {
+			// Chat Completions has no custom tool type, so the response converter
+			// needs the declared custom tool names to rebuild custom_tool_call items.
+			info.CustomToolNames = relayconvert.ResponsesRequestCustomToolNames(&request)
 		}
 		chatReq, err := service.ResponsesRequestToChatCompletionsRequest(&request)
 		if err != nil {

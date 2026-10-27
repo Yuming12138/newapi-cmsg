@@ -17,6 +17,10 @@ func ChatCompletionsResponseToResponsesResponse(resp *dto.OpenAITextResponse, id
 	return relayconvert.ChatCompletionsResponseToResponsesResponse(resp, id)
 }
 
+func ChatCompletionsResponseToResponsesResponseWithCustom(resp *dto.OpenAITextResponse, id string, customToolNames map[string]struct{}) (*dto.OpenAIResponsesResponse, *dto.Usage, error) {
+	return relayconvert.ChatCompletionsResponseToResponsesResponseWithCustom(resp, id, customToolNames)
+}
+
 func ResponsesResponseToChatCompletionsResponse(resp *dto.OpenAIResponsesResponse, id string) (*dto.OpenAITextResponse, *dto.Usage, error) {
 	return relayconvert.ResponsesResponseToChatCompletionsResponse(resp, id)
 }

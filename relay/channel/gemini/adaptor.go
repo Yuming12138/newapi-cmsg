@@ -244,6 +244,9 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		return nil, err
 	}
 
+	if info != nil {
+		info.CustomToolNames = relayconvert.ResponsesRequestCustomToolNames(&request)
+	}
 	chatRequest, err := relayconvert.ResponsesRequestToChatCompletionsRequest(&request)
 	if err != nil {
 		return nil, err

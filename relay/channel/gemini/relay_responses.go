@@ -54,7 +54,7 @@ func GeminiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 	usage := buildUsageFromGeminiMetadata(geminiResponse.UsageMetadata, info.GetEstimatePromptTokens())
 	chatResp.Usage = usage
 
-	responsesResp, responsesUsage, err := service.ChatCompletionsResponseToResponsesResponse(chatResp, helper.GetResponseID(c))
+	responsesResp, responsesUsage, err := service.ChatCompletionsResponseToResponsesResponseWithCustom(chatResp, helper.GetResponseID(c), info.CustomToolNames)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
@@ -74,6 +74,7 @@ func GeminiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, r
 	responseID := helper.GetResponseID(c)
 	created := common.GetTimestamp()
 	state := relayconvert.NewChatToResponsesStreamState(responseID, info.UpstreamModelName)
+	state.SetCustomToolNames(info.CustomToolNames)
 	state.Created = created
 	finishReason := constant.FinishReasonStop
 	toolCallIndexByChoice := make(map[int]map[string]int)
