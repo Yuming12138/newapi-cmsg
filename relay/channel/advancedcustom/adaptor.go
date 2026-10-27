@@ -23,6 +23,20 @@ import (
 	"github.com/samber/lo"
 )
 
+// rewriteReasoningEffort applies the channel's reasoning_effort_map so an
+// unsupported level (xhigh on cli2api's DeepSeek models) reaches upstream as
+// the level we actually want (max) instead of being silently downgraded.
+func rewriteReasoningEffort(info *relaycommon.RelayInfo, effort *string) {
+	if effort == nil || *effort == "" || info == nil {
+		return
+	}
+	config := info.ChannelOtherSettings.AdvancedCustom
+	if config == nil {
+		return
+	}
+	*effort = config.MapReasoningEffort(*effort)
+}
+
 const ChannelName = "advanced_custom"
 
 const advancedCustomModelPlaceholder = "{model}"
@@ -50,6 +64,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		return nil, err
 	}
 	if converter == dto.AdvancedCustomConverterNone {
+		rewriteReasoningEffort(info, &request.ReasoningEffort)
 		return a.convertOpenAICompatibleRequest(c, info, request)
 	}
 
@@ -126,6 +141,7 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		// The upstream bridge drops system/developer turns, so the instructions
 		// have to travel as user turns or the model never sees them.
 		chatReq.Messages = relayconvert.ChatMessagesSystemRoleToUser(chatReq.Messages)
+		rewriteReasoningEffort(info, &chatReq.ReasoningEffort)
 		return a.convertOpenAICompatibleRequest(c, info, chatReq)
 	default:
 		return nil, fmt.Errorf("converter %q does not support OpenAI Responses requests", converter)

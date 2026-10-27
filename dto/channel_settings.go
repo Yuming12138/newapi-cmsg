@@ -84,6 +84,27 @@ const (
 
 type AdvancedCustomConfig struct {
 	Routes []AdvancedCustomRoute `json:"advanced_routes,omitempty"`
+	// ReasoningEffortMap rewrites the requested reasoning effort before it is
+	// sent upstream. Bridges such as cli2api downgrade levels the model does
+	// not advertise (e.g. xhigh -> high on WorkBuddy DeepSeek, whose top level
+	// is max), so an explicit xhigh->max mapping keeps the strongest setting.
+	ReasoningEffortMap map[string]string `json:"reasoning_effort_map,omitempty"`
+}
+
+// MapReasoningEffort returns the effort to send upstream for the requested
+// level, falling back to the requested value when no mapping is configured.
+func (c *AdvancedCustomConfig) MapReasoningEffort(effort string) string {
+	effort = strings.TrimSpace(effort)
+	if c == nil || effort == "" || len(c.ReasoningEffortMap) == 0 {
+		return effort
+	}
+	if mapped, ok := c.ReasoningEffortMap[strings.ToLower(effort)]; ok {
+		mapped = strings.TrimSpace(mapped)
+		if mapped != "" {
+			return mapped
+		}
+	}
+	return effort
 }
 
 type AdvancedCustomRoute struct {
