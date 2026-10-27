@@ -108,6 +108,11 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	case dto.AdvancedCustomConverterNone:
 		return a.convertOpenAICompatibleResponsesRequest(c, info, request)
 	case dto.AdvancedCustomConverterOpenAIResponsesToOpenAIChatCompletions:
+		if info != nil && request.Reasoning != nil && request.Reasoning.Effort != "" {
+			// Keep the requested effort for billing logs, mirroring the native
+			// OpenAI Responses path (relay/channel/openai/adaptor.go).
+			info.ReasoningEffort = request.Reasoning.Effort
+		}
 		chatReq, err := service.ResponsesRequestToChatCompletionsRequest(&request)
 		if err != nil {
 			return nil, err
