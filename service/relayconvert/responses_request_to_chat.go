@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	responsesInputTypeFunctionCall       = "function_call"
-	responsesInputTypeFunctionCallOutput = "function_call_output"
-	responsesInputTypeCustomToolCall     = "custom_tool_call"
-	responsesInputTypeAdditionalTools    = "additional_tools"
+	responsesInputTypeFunctionCall            = "function_call"
+	responsesInputTypeFunctionCallOutput      = "function_call_output"
+	responsesInputTypeCustomToolCall          = "custom_tool_call"
+	responsesInputTypeCustomToolCallOutput    = "custom_tool_call_output"
+	responsesInputTypeAdditionalTools         = "additional_tools"
 )
 
 func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (*dto.GeneralOpenAIRequest, error) {
@@ -183,9 +184,12 @@ func responsesInputItemToChatMessages(item map[string]any, messages []dto.Messag
 			return nil, err
 		}
 		return appendToolCallToLastAssistant(messages, toolCall), nil
-	case responsesInputTypeFunctionCallOutput:
+	case responsesInputTypeFunctionCallOutput, responsesInputTypeCustomToolCallOutput:
+		// custom_tool_call_output carries the result of a custom tool call; dropping
+		// it would leave the model without its own command results, so it keeps
+		// re-running read-only checks forever.
 		callID := strings.TrimSpace(common.Interface2String(item["call_id"]))
-		content := responseToolOutputToChatContent(item["output"])
+		content := responsesToolOutputToChatContent(item["output"])
 		return append(messages, dto.Message{Role: "tool", ToolCallId: callID, Content: content}), nil
 	case responsesInputTypeAdditionalTools:
 		// Tool declarations only; they are converted into Chat Completions tools
@@ -299,17 +303,23 @@ func responsesFunctionCallItemToChatToolCall(item map[string]any) (dto.ToolCallR
 }
 
 func responsesCustomToolCallItemToChatToolCall(item map[string]any) (dto.ToolCallRequest, error) {
-	raw, err := common.Marshal(item)
+	name := strings.TrimSpace(common.Interface2String(item["name"]))
+	if name == "" {
+		return dto.ToolCallRequest{}, errors.New("custom_tool_call item is missing name")
+	}
+	// The custom tool was exposed upstream as a function with a single "input"
+	// argument, so the freeform input has to be re-wrapped as that JSON argument -
+	// Chat Completions has no "custom" tool call type for the upstream to read.
+	args, err := common.Marshal(map[string]any{"input": responsesArgumentsString(item["input"])})
 	if err != nil {
 		return dto.ToolCallRequest{}, err
 	}
 	return dto.ToolCallRequest{
-		ID:     responsesCallID(item),
-		Type:   dto.CustomType,
-		Custom: raw,
+		ID:   responsesCallID(item),
+		Type: "function",
 		Function: dto.FunctionRequest{
-			Name:      strings.TrimSpace(common.Interface2String(item["name"])),
-			Arguments: responsesArgumentsString(item["input"]),
+			Name:      name,
+			Arguments: string(args),
 		},
 	}, nil
 }
@@ -734,19 +744,38 @@ func responsesArgumentsString(value any) string {
 	}
 }
 
-func responseToolOutputToChatContent(value any) any {
+// responsesToolOutputToChatContent flattens a tool output into plain text. Codex
+// sends custom_tool_call_output.output as a content-part array
+// ([{"type":"input_text","text":...}]), while Chat Completions tool messages only
+// carry text.
+func responsesToolOutputToChatContent(value any) string {
 	switch v := value.(type) {
 	case nil:
 		return ""
 	case string:
 		return v
-	default:
-		raw, err := common.Marshal(v)
-		if err != nil {
-			return fmt.Sprintf("%v", v)
+	case []any:
+		var sb strings.Builder
+		for _, rawPart := range v {
+			part, ok := rawPart.(map[string]any)
+			if !ok {
+				continue
+			}
+			if text := common.Interface2String(part["text"]); text != "" {
+				sb.WriteString(text)
+			} else if output := common.Interface2String(part["output"]); output != "" {
+				sb.WriteString(output)
+			}
 		}
-		return string(raw)
+		if sb.Len() > 0 {
+			return sb.String()
+		}
 	}
+	raw, err := common.Marshal(value)
+	if err != nil {
+		return fmt.Sprintf("%v", value)
+	}
+	return string(raw)
 }
 
 func responsesJSONString(raw json.RawMessage) (string, error) {

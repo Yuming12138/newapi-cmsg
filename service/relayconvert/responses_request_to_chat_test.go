@@ -202,7 +202,7 @@ func TestResponsesRequestToChatCompletionsRequestToolsToolChoiceAndTextFormat(t 
 	assert.True(t, gjson.GetBytes(got.ResponseFormat.JsonSchema, "strict").Bool())
 }
 
-func TestResponsesRequestToChatCompletionsRequestCustomToolCallPreservesRawShape(t *testing.T) {
+func TestResponsesRequestToChatCompletionsRequestCustomToolCallBecomesFunction(t *testing.T) {
 	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
 		Model: "gpt-test",
 		Input: mustRawMessage(t, []map[string]any{
@@ -212,19 +212,31 @@ func TestResponsesRequestToChatCompletionsRequestCustomToolCallPreservesRawShape
 				"name":    "apply_patch",
 				"input":   "patch body",
 			},
+			{
+				"type":    "custom_tool_call_output",
+				"call_id": "call_custom",
+				"output": []any{
+					map[string]any{"type": "input_text", "text": "applied"},
+				},
+			},
 		}),
 	})
 	require.NoError(t, err)
 
-	require.Len(t, got.Messages, 1)
+	// The custom tool was exposed upstream as a function with a single "input"
+	// argument, so the replayed call has to match that schema.
+	require.Len(t, got.Messages, 2)
 	toolCalls := got.Messages[0].ParseToolCalls()
 	require.Len(t, toolCalls, 1)
-	assert.Equal(t, dto.CustomType, toolCalls[0].Type)
+	assert.Equal(t, "function", toolCalls[0].Type)
 	assert.Equal(t, "call_custom", toolCalls[0].ID)
 	assert.Equal(t, "apply_patch", toolCalls[0].Function.Name)
-	assert.Equal(t, "patch body", toolCalls[0].Function.Arguments)
-	assert.Equal(t, "custom_tool_call", gjson.GetBytes(toolCalls[0].Custom, "type").String())
-	assert.Equal(t, "patch body", gjson.GetBytes(toolCalls[0].Custom, "input").String())
+	assert.Equal(t, `{"input":"patch body"}`, toolCalls[0].Function.Arguments)
+
+	toolMsg := got.Messages[1]
+	assert.Equal(t, "tool", toolMsg.Role)
+	assert.Equal(t, "call_custom", toolMsg.ToolCallId)
+	assert.Equal(t, "applied", toolMsg.StringContent())
 }
 
 func TestResponsesRequestToChatCompletionsRequestRejectsStatefulFields(t *testing.T) {
