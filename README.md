@@ -75,6 +75,7 @@ Codex / Claude Code / OpenAI-compatible clients
 | Codex Radar         | 同步四个 Sol/Astra 模型家族的公开评分，展示覆盖题数与成本/耗时统计，提供失败重试、Redis 完整快照和前端自动恢复          |
 | 可观测性            | 按映射后上游模型归组的性能指标、渠道用量、自定义时间窗口、请求链路、CPA 调度、reasoning effort、流式状态和网络探针       |
 | 用户自助            | Codex 桌面端/终端配置说明、上游余额概览、低余额临时额度申请                                                             |
+| 上游积分与折算      | cli2api 账号 credits 汇总、渠道余额刷新、按参考模型单价折算进每日额度池、仪表盘积分口径展示                               |
 
 可用模型与分组以运行实例返回的模型列表和渠道配置为准。
 
@@ -90,6 +91,11 @@ Codex / Claude Code / OpenAI-compatible clients
 | 会话诊断 | `c944397` | 原生 Responses 入参记录脱敏类型直方图，便于定位长线程提前结束、reasoning 或工具条目异常。 |
 | 运行资源边界 | `89d3086` | Responses 历史使用压缩 canonical 快照和 7 天清理；GORM 只记录参数化 SQL 形状；Docker 日志限制为 `20 MiB × 5`。 |
 | 增量会话存储 | `37bf925` `ad41544` `fdcdbb8` | 引入改写感知增量、周期/分支检查点、批量恢复、LRU、single-flight、受限并发重建和大附件 SHA-256 外置；后续提交修复旧 reasoning 改写导致的逐轮完整检查点，并去除重复编码。 |
+| Codex 工具续接修复 | `73e6f5d` `23821ad` `0116443` `9e0b899` `745c458` | 修复工具调用标记被当作纯文本吐出的问题：从 `additional_tools` 输入项读取工具声明、把 namespace 与 custom 工具展平为函数、system/developer 轮降级为 user 轮、`custom_tool_call_output` 转为 tool 消息（此前丢弃会导致模型看不到命令结果而反复重试）。 |
+| 图片与 reasoning 兼容 | `ed53ffb` `36e74ad` | Responses→Chat 转换把字符串形式的 `input_image.image_url` 归一化为对象；同时记录 reasoning effort，供计费与诊断使用。 |
+| cli2api 渠道余额 | `fe1e402` | Advanced Custom（type 59）渠道补齐余额刷新，调用上游 `/api/accounts` 汇总 ready 账号的 credits；仪表盘新增 `c2a` 字段，按积分口径展示，替代原先的 Gemini CPA 美元估算行。 |
+| 上游积分折算 | `928df7a` | 新增 `c2a_credit_pool_setting`，把上游 credits 先按模型倍率折算成 token、再按站内参考模型单价折算成美元并入每日额度池；参考模型、倍率与输出占比均可配置。 |
+| 推理档位映射 | `07ed900` | 新增 `advanced_custom.reasoning_effort_map`，按渠道改写发往上游的 reasoning 档位，解决上游把 `xhigh` 静默降级为 `high`（DeepSeek 系最高档为 `max`）的问题；默认关闭，不做改写。 |
 
 ## 渠道测试与评分参考
 
@@ -110,6 +116,8 @@ Codex / Claude Code / OpenAI-compatible clients
 ## 额度面板与协议保护
 
 渠道页与仪表盘按美元、人民币和订阅额度百分比展示数据，缺失字段标记为未知。Codex、Kimi 与 Gemini CPA 使用各自的额度采集链路，展示上游提供的订阅窗口和重置时间。Gemini 按独立额度池汇总百分比，并保留各账号的重置时间。详见 <a href="./docs/gemini-cpa-quota.md">Gemini CPA 额度语义</a>。
+
+cli2api（Advanced Custom）渠道的上游额度以 credits 计价，渠道余额与仪表盘均按积分原值展示；参与每日额度池时先按模型倍率换算成 token，再按站内参考模型单价折算成美元，换算参数见 `c2a_credit_pool_setting`，未配置折算时该渠道不计入池。
 
 DeepSeek 原生 Responses 适配保留返回的思考原文，并按用户、令牌、渠道和线程隔离恢复缓存。GPT/Kimi 等跨提供方历史使用独立兼容策略。自定义、动态和命名空间工具在请求与返回流中保持调用标识和客户端名称。详见 <a href="./ops/deepseek_codex_responses.md">DeepSeek 与 Codex 工具续接说明</a>。
 

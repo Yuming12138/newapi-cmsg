@@ -227,6 +227,40 @@ New API 常用 Compose 路径为 `/opt/new-api/docker-compose.prod.yml`，
 同样的健康、版本与功能检查。发布记录包含新旧 release、commit、SHA-256、
 备份位置、验证结果和中断影响，凭据继续保存在受保护的运行配置中。
 
+## cli2api 上游服务
+
+cli2api 是独立于 New API 的兼容网关，供渠道 36（Advanced Custom，type 59）反代。
+Compose 位于 `/opt/cli2api/deploy/docker-compose.yml`，容器 `qoder-api-proxy`，
+仅监听 `127.0.0.1:3010`，数据在 `/opt/cli2api/data`。
+
+镜像 tag 固定为具体版本，不要使用 `:latest`：否则会出现镜像已更新而容器仍运行
+旧版本的情况。升级步骤：
+
+1. 核对目标版本与当前版本：`curl -s http://127.0.0.1:3010/health`；
+2. `sudo docker pull ghcr.io/caigee-cmd/cli2api:<tag>`；
+3. 修改 Compose 中的 image tag（先备份 Compose），执行
+   `sudo docker compose --env-file .env -f docker-compose.yml up -d qoder-api-proxy`；
+4. 验证 `/health` 版本、`/api/accounts` 结构与真实请求。
+
+宿主更新器（可选，面板「立即更新」依赖它）由 `deploy/install-updater.sh` 安装：
+二进制在 `/usr/local/bin/cli2api-updater`，systemd 单元 `cli2api-updater.service`，
+socket 为 `/run/cli2api-updater/updater.sock`，状态文件
+`/var/lib/cli2api-updater/status.json`。安装完成后需强制重建一次容器。
+状态文件可能残留历史失败记录，以 `GET /api/system/update` 的实时返回为准。
+
+网络：本机直连 GitHub 与 ghcr.io 均超时，下载必须走本机代理
+`http://127.0.0.1:7897`（mihomo 容器映射端口）。代理需要配置两处：
+
+- 更新器：`/etc/systemd/system/cli2api-updater.service.d/proxy.conf`；
+- Docker daemon：`/etc/systemd/system/docker.service.d/http-proxy.conf`，
+  因 `docker pull` 由 daemon 执行，容器级环境变量无效。该项**需要重启
+  docker**，会同时重启全部容器（约 30 秒），重启后 mihomo 自动恢复、代理端口
+  随之可用。验证方法是拉取一个不存在的 tag：返回 `not found` 说明已连通，
+  超时说明代理未生效。
+
+cli2api 的 `/api/*` 控制台接口需要控制台密钥，渠道自带的客户端密钥不具权限；
+New API 侧通过 `CLI2API_CONSOLE_KEY_FILE` 注入。
+
 ## 上游同步记录
 
 ### 2026-07-26：New API 与 CPA 稳定性批次
