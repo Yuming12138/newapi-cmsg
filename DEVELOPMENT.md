@@ -233,13 +233,15 @@ cli2api 是独立于 New API 的兼容网关，供渠道 36（Advanced Custom，
 Compose 位于 `/opt/cli2api/deploy/docker-compose.yml`，容器 `qoder-api-proxy`，
 仅监听 `127.0.0.1:3010`，数据在 `/opt/cli2api/data`。
 
-镜像 tag 固定为具体版本，不要使用 `:latest`：否则会出现镜像已更新而容器仍运行
-旧版本的情况。升级步骤：
+镜像 tag 必须保持为 `:latest`：宿主更新器只执行 pull 和重建，**不会改写 Compose
+里的 tag**。若把 tag 固定成某个版本号，更新器即使拉到新镜像，重建后仍运行旧版本，
+健康检查发现版本不符会判定更新失败并自动回滚（表现为「更新失败并被回滚：健康检查
+未达到 vX.Y.Z」）。同理，手动升级时也要先改 tag 或用更新器，不要依赖 `up -d`
+自动跟随。升级步骤：
 
 1. 核对目标版本与当前版本：`curl -s http://127.0.0.1:3010/health`；
-2. `sudo docker pull ghcr.io/caigee-cmd/cli2api:<tag>`；
-3. 修改 Compose 中的 image tag（先备份 Compose），执行
-   `sudo docker compose --env-file .env -f docker-compose.yml up -d qoder-api-proxy`；
+2. 面板「立即更新」或 `sudo docker pull ghcr.io/caigee-cmd/cli2api:latest`；
+3. 需要固定版本回滚时，临时改回具体 tag 并重建，验证后仍改回 `:latest`；
 4. 验证 `/health` 版本、`/api/accounts` 结构与真实请求。
 
 宿主更新器（可选，面板「立即更新」依赖它）由 `deploy/install-updater.sh` 安装：
