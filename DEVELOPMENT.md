@@ -233,22 +233,25 @@ cli2api 是独立于 New API 的兼容网关，供渠道 36（Advanced Custom，
 Compose 位于 `/opt/cli2api/deploy/docker-compose.yml`，容器 `qoder-api-proxy`，
 仅监听 `127.0.0.1:3010`，数据在 `/opt/cli2api/data`。
 
-镜像 tag 保持 `:latest`，与宿主更新器的重建方式一致。**但仅靠面板的自动更新
-在当前 updater 版本下会失败**：它按目标版本拉镜像（`docker pull repo:vX.Y.Z`），
-而 Compose 用 `repo:latest` 重建；拉版本 tag 不会移动本地 `:latest`，于是容器
-回到旧镜像，版本化健康检查失败并自动回滚（报「健康检查未达到 vX.Y.Z」）。
+镜像 tag 保持 `:latest`。宿主更新器按目标版本拉镜像（`docker pull repo:vX.Y.Z`），
+而 Compose 用 `repo:latest` 重建；拉版本 tag 不会移动本地 `:latest`，容器因此回到
+旧镜像，版本化健康检查失败并自动回滚（报「健康检查未达到 vX.Y.Z」）。
 
-因此升级走脚本：
+为此需要三个 systemd 单元配合，安装后控制台「立即更新」可正常使用：
+
+| 单元 | 作用 |
+| --- | --- |
+| `cli2api-updater.service` | 官方宿主更新器（监听 socket，拉镜像、备份、重建、校验、回滚） |
+| `cli2api-image-sync.service` | 每 3 秒对齐 `:latest` 到本地最新版本 tag（只前进不降级），补齐 updater 缺失的一步 |
+| `cli2api-updater-watchdog.timer` | 每 5 分钟检查，若 job 处于 checking/downloading 且超过 15 分钟则重启更新器，防止下载阶段无限卡住 |
+
+`docker pull` 一个已存在的镜像不产生事件，所以同步用轮询而非 `docker events`。
+若需要绕过控制台，仍可用脚本升级（行为一致，且失败自动回滚）：
 
 ```bash
 sudo /opt/scripts/update-cli2api.sh          # 升到 latest
 sudo /opt/scripts/update-cli2api.sh v0.7.26  # 升到指定版本
 ```
-
-脚本会 pull、把 `:latest` 对齐到目标、重建、校验版本；失败时自动把 `:latest`
-指回上一个镜像并重建，实现回滚。面板仍可用于查看版本与更新日志，但不要用它
-执行升级，除非先手动 `docker pull repo:latest` 让本地 `latest` 对齐（否则必定
-回滚）。
 
 宿主更新器（可选，面板「立即更新」依赖它）由 `deploy/install-updater.sh` 安装：
 二进制在 `/usr/local/bin/cli2api-updater`，systemd 单元 `cli2api-updater.service`，
