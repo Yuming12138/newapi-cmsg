@@ -233,16 +233,22 @@ cli2api 是独立于 New API 的兼容网关，供渠道 36（Advanced Custom，
 Compose 位于 `/opt/cli2api/deploy/docker-compose.yml`，容器 `qoder-api-proxy`，
 仅监听 `127.0.0.1:3010`，数据在 `/opt/cli2api/data`。
 
-镜像 tag 必须保持为 `:latest`：宿主更新器只执行 pull 和重建，**不会改写 Compose
-里的 tag**。若把 tag 固定成某个版本号，更新器即使拉到新镜像，重建后仍运行旧版本，
-健康检查发现版本不符会判定更新失败并自动回滚（表现为「更新失败并被回滚：健康检查
-未达到 vX.Y.Z」）。同理，手动升级时也要先改 tag 或用更新器，不要依赖 `up -d`
-自动跟随。升级步骤：
+镜像 tag 保持 `:latest`，与宿主更新器的重建方式一致。**但仅靠面板的自动更新
+在当前 updater 版本下会失败**：它按目标版本拉镜像（`docker pull repo:vX.Y.Z`），
+而 Compose 用 `repo:latest` 重建；拉版本 tag 不会移动本地 `:latest`，于是容器
+回到旧镜像，版本化健康检查失败并自动回滚（报「健康检查未达到 vX.Y.Z」）。
 
-1. 核对目标版本与当前版本：`curl -s http://127.0.0.1:3010/health`；
-2. 面板「立即更新」或 `sudo docker pull ghcr.io/caigee-cmd/cli2api:latest`；
-3. 需要固定版本回滚时，临时改回具体 tag 并重建，验证后仍改回 `:latest`；
-4. 验证 `/health` 版本、`/api/accounts` 结构与真实请求。
+因此升级走脚本：
+
+```bash
+sudo /opt/scripts/update-cli2api.sh          # 升到 latest
+sudo /opt/scripts/update-cli2api.sh v0.7.26  # 升到指定版本
+```
+
+脚本会 pull、把 `:latest` 对齐到目标、重建、校验版本；失败时自动把 `:latest`
+指回上一个镜像并重建，实现回滚。面板仍可用于查看版本与更新日志，但不要用它
+执行升级，除非先手动 `docker pull repo:latest` 让本地 `latest` 对齐（否则必定
+回滚）。
 
 宿主更新器（可选，面板「立即更新」依赖它）由 `deploy/install-updater.sh` 安装：
 二进制在 `/usr/local/bin/cli2api-updater`，systemd 单元 `cli2api-updater.service`，
