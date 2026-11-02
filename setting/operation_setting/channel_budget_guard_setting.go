@@ -53,7 +53,9 @@ type ChannelBudgetGuardSetting struct {
 	// ASXSExcludeSubscriptionIDs keeps specific ASXS subscriptions out of the
 	// account-wide total, e.g. a personal short-lived day pass that should not
 	// be shared by the pools fed from the account balance.
-	ASXSExcludeSubscriptionIDs []string `json:"asxs_exclude_subscription_ids,omitempty"`
+	// Do not add ",omitempty": the config loader uses the raw json tag as the
+	// option key, so a tag option would change the key name.
+	ASXSExcludeSubscriptionIDs []string `json:"asxs_exclude_subscription_ids"`
 }
 
 var channelBudgetGuardSetting = ChannelBudgetGuardSetting{
