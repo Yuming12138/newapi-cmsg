@@ -121,7 +121,23 @@ func fetchASXSAccountDailyBalance(ctx context.Context) (ASXSAccountDailyBalance,
 	if err != nil {
 		return result, err
 	}
-	return parseASXSAccountDailyBalance(raw, time.Now())
+	return parseASXSAccountDailyBalance(raw, time.Now(), asxsExcludedSubscriptionIDs())
+}
+
+// asxsExcludedSubscriptionIDs returns the subscription IDs the operator keeps
+// out of the shared account total, configured on the budget guard setting.
+func asxsExcludedSubscriptionIDs() map[string]bool {
+	cfg := operation_setting.GetChannelBudgetGuardSetting()
+	if cfg == nil || len(cfg.ASXSExcludeSubscriptionIDs) == 0 {
+		return nil
+	}
+	excluded := make(map[string]bool, len(cfg.ASXSExcludeSubscriptionIDs))
+	for _, id := range cfg.ASXSExcludeSubscriptionIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			excluded[id] = true
+		}
+	}
+	return excluded
 }
 
 func asxsAccountProxyChannel() (*model.Channel, error) {
@@ -202,7 +218,7 @@ func replaceASXSAccountToken(path, token string) error {
 	return directory.Sync()
 }
 
-func parseASXSAccountDailyBalance(raw []byte, now time.Time) (ASXSAccountDailyBalance, error) {
+func parseASXSAccountDailyBalance(raw []byte, now time.Time, excluded map[string]bool) (ASXSAccountDailyBalance, error) {
 	result := ASXSAccountDailyBalance{Currency: "USD", UpdatedAt: now.Unix()}
 	var state asxsBillingState
 	if err := common.Unmarshal(raw, &state); err != nil {
@@ -236,6 +252,11 @@ func parseASXSAccountDailyBalance(raw []byte, now time.Time) (ASXSAccountDailyBa
 			continue
 		}
 		seen[subscription.ID] = true
+		// Excluded subscriptions (e.g. a personal day pass) stay out of the
+		// shared account total without marking the snapshot partial.
+		if excluded[subscription.ID] {
+			continue
+		}
 		if subscription.ExpiresAt != "" {
 			expiresAt, err := time.Parse(time.RFC3339Nano, subscription.ExpiresAt)
 			if err != nil {

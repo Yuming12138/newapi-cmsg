@@ -26,7 +26,7 @@ func TestParseASXSAccountDailyBalanceSumsDistinctActiveSubscriptions(t *testing.
 			{"subscriptionId":"non-daily","windows":[{"limitType":"total","limitMicros":5000000,"leftMicros":5000000}]}
 		]
 	}`)
-	got, err := parseASXSAccountDailyBalance(raw, now)
+	got, err := parseASXSAccountDailyBalance(raw, now, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestParseASXSAccountDailyBalanceUsesTotalSubscription(t *testing.T) {
 		"windows":[{"limitType":"total","limitMicros":1000000000,"leftMicros":968112206}],
 		"subscriptionWindows":[{"subscriptionId":"two-hundred","windows":[{"limitType":"total","limitMicros":1000000000,"leftMicros":968112206}]}]
 	}`)
-	got, err := parseASXSAccountDailyBalance(raw, now)
+	got, err := parseASXSAccountDailyBalance(raw, now, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestParseASXSAccountDailyBalancePrefersDailyWindow(t *testing.T) {
 		"subscriptions":[{"id":"mixed","limits":[{"limitType":"daily","limitMicros":300000000,"leftMicros":250000000},{"limitType":"total","limitMicros":1000000000,"leftMicros":900000000}]}],
 		"subscriptionWindows":[{"subscriptionId":"mixed","windows":[{"limitType":"total","limitMicros":1000000000,"leftMicros":900000000},{"limitType":"daily","limitMicros":300000000,"leftMicros":250000000}]}]
 	}`)
-	got, err := parseASXSAccountDailyBalance(raw, now)
+	got, err := parseASXSAccountDailyBalance(raw, now, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestParseASXSAccountDailyBalanceFallsBackToStaticSubscriptionLimit(t *testi
 		],
 		"windows":[{"limitType":"daily","limitMicros":300000000,"leftMicros":216950000}]
 	}`)
-	got, err := parseASXSAccountDailyBalance(raw, now)
+	got, err := parseASXSAccountDailyBalance(raw, now, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestParseASXSAccountDailyBalanceFallsBackToStaticSubscriptionLimit(t *testi
 }
 
 func TestParseASXSAccountDailyBalanceRejectsErrorPayload(t *testing.T) {
-	got, err := parseASXSAccountDailyBalance([]byte(`{"error":"expired session"}`), time.Now())
+	got, err := parseASXSAccountDailyBalance([]byte(`{"error":"expired session"}`), time.Now(), nil)
 	if err == nil || got.Balance != nil {
 		t.Fatalf("incomplete account response = %+v, error=%v; want unavailable balance", got, err)
 	}
@@ -97,7 +97,7 @@ func TestParseASXSAccountDailyBalanceRejectsErrorPayload(t *testing.T) {
 
 func TestParseASXSAccountDailyBalanceKeepsExhaustedZero(t *testing.T) {
 	raw := []byte(`{"balanceMicros":0,"subscriptions":[{"id":"exhausted","limits":[{"limitType":"daily","limitMicros":20000000,"leftMicros":0}]}]}`)
-	got, err := parseASXSAccountDailyBalance(raw, time.Now())
+	got, err := parseASXSAccountDailyBalance(raw, time.Now(), nil)
 	if err != nil || got.Balance == nil || *got.Balance != 0 {
 		t.Fatalf("exhausted subscription = %+v, error=%v; want a real $0 balance", got, err)
 	}
@@ -141,5 +141,46 @@ func TestASXSAccountGuardUsageUsesAggregateDailyBalance(t *testing.T) {
 	}
 	if _, err := asxsAccountGuardUsage(ASXSAccountDailyBalance{}); err == nil {
 		t.Fatal("missing account balance must not replace a channel balance")
+	}
+}
+
+func TestParseASXSAccountDailyBalanceExcludesSubscription(t *testing.T) {
+	now := time.Date(2026, 11, 2, 21, 0, 0, 0, time.UTC)
+	future := now.Add(48 * time.Hour).Format(time.RFC3339Nano)
+	raw := []byte(`{
+		"balanceMicros": 10000000,
+		"subscriptions": [
+			{"id": "shared-card", "expiresAt": "` + future + `", "limits": [{"limitType": "daily", "limitMicros": 300000000, "leftMicros": -650000}]},
+			{"id": "personal-day-pass", "expiresAt": "` + future + `", "limits": [{"limitType": "daily", "limitMicros": 90000000, "leftMicros": 44050000}]}
+		],
+		"subscriptionWindows": [
+			{"subscriptionId": "shared-card", "windows": [{"limitType": "daily", "limitMicros": 300000000, "leftMicros": -650000}]},
+			{"subscriptionId": "personal-day-pass", "windows": [{"limitType": "daily", "limitMicros": 90000000, "leftMicros": 44050000}]}
+		]
+	}`)
+
+	all, err := parseASXSAccountDailyBalance(raw, now, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if all.Balance == nil || *all.Balance != 8.81 {
+		t.Fatalf("expected combined balance 8.81 (negative clamped to 0), got %v", *all.Balance)
+	}
+	if all.SubscriptionCount != 2 {
+		t.Fatalf("expected 2 subscriptions, got %d", all.SubscriptionCount)
+	}
+
+	excluded, err := parseASXSAccountDailyBalance(raw, now, map[string]bool{"personal-day-pass": true})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if excluded.Balance == nil || *excluded.Balance != 0 {
+		t.Fatalf("expected excluded balance 0, got %v", excluded.Balance)
+	}
+	if excluded.SubscriptionCount != 1 {
+		t.Fatalf("expected 1 counted subscription, got %d", excluded.SubscriptionCount)
+	}
+	if excluded.Partial {
+		t.Fatalf("exclusion should not mark the snapshot partial")
 	}
 }

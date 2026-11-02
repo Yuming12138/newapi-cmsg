@@ -50,6 +50,10 @@ type ChannelBudgetGuardSetting struct {
 	AutoDiscovery       ChannelBudgetGuardAutoDiscoverySetting `json:"auto_discovery"`
 	Channels            []ChannelBudgetGuardChannelSetting     `json:"channels"`
 	SharedBalancePools  []ChannelBudgetGuardSharedPool         `json:"shared_balance_pools"`
+	// ASXSExcludeSubscriptionIDs keeps specific ASXS subscriptions out of the
+	// account-wide total, e.g. a personal short-lived day pass that should not
+	// be shared by the pools fed from the account balance.
+	ASXSExcludeSubscriptionIDs []string `json:"asxs_exclude_subscription_ids,omitempty"`
 }
 
 var channelBudgetGuardSetting = ChannelBudgetGuardSetting{
