@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -67,6 +68,15 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) types.
 	} else {
 		// normal group ratio
 		groupRatioInfo.GroupRatio = ratio_setting.GetGroupRatio(relayInfo.UsingGroup)
+	}
+
+	// CMSG: channel-level peak/valley pricing. Evaluated per request against
+	// Beijing time so no scheduler is needed at slot boundaries. Channels
+	// without a schedule return 1 and keep the existing billing behaviour.
+	if channelID := common.GetContextKeyInt(ctx, constant.ContextKeyChannelId); channelID > 0 {
+		if peakValleyRatio := ratio_setting.GetChannelPeakValleyRatio(channelID, time.Now()); peakValleyRatio > 0 {
+			groupRatioInfo.GroupRatio *= peakValleyRatio
+		}
 	}
 
 	return groupRatioInfo
