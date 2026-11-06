@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,9 +107,19 @@ func ValidateSSRFProtectedFetchURL(urlStr string) error {
 	return validateURLWithCurrentFetchSetting(urlStr, true)
 }
 
+// ForceDirectClientEnabled reports whether the emergency direct-only relay
+// transport is active.
+func ForceDirectClientEnabled() bool {
+	return os.Getenv("CMSG_FORCE_DIRECT") == "true"
+}
+
 func newRelayHTTPTransport() *http.Transport {
+	proxyFunc := http.ProxyFromEnvironment
+	if ForceDirectClientEnabled() {
+		proxyFunc = nil
+	}
 	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy:                 proxyFunc,
 		MaxIdleConns:          common.RelayMaxIdleConns,
 		MaxIdleConnsPerHost:   common.RelayMaxIdleConnsPerHost,
 		IdleConnTimeout:       time.Duration(common.RelayIdleConnTimeout) * time.Second,
@@ -136,7 +147,11 @@ func newRelayHTTPClient(transport *http.Transport) *http.Client {
 func InitHttpClient() {
 	resetResponseHeaderTimeoutClients()
 	transport := newRelayHTTPTransport()
-	transport.Proxy = http.ProxyFromEnvironment
+	if ForceDirectClientEnabled() {
+		transport.Proxy = nil
+	} else {
+		transport.Proxy = http.ProxyFromEnvironment
+	}
 	httpClient = newRelayHTTPClient(transport)
 	ssrfProtectedHTTPClient = newProtectedFetchHTTPClient()
 }
@@ -284,6 +299,12 @@ func newProxyHTTPClient(proxyURL *url.URL) (*http.Client, error) {
 
 // GetHttpClientWithProxy returns the default client or a cached proxy-enabled client.
 func GetHttpClientWithProxy(rawProxyURL string) (*http.Client, error) {
+	if ForceDirectClientEnabled() {
+		if client := GetHttpClient(); client != nil {
+			return client, nil
+		}
+		return http.DefaultClient, nil
+	}
 	trimmedProxyURL := strings.TrimSpace(rawProxyURL)
 	if trimmedProxyURL == "" {
 		if client := GetHttpClient(); client != nil {

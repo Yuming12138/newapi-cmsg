@@ -561,6 +561,10 @@ func keepUpstreamRedirectResponse(_ *http.Request, _ []*http.Request) error {
 }
 
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
+	if service.ForceDirectClientEnabled() {
+		logger.LogWarn(c, fmt.Sprintf("CMSG direct-relay: channel=%d proxy=%q url=%s",
+			info.ChannelId, info.ChannelSetting.Proxy, req.URL.String()))
+	}
 	responseHeaderTimeout := time.Duration(0)
 	if info.IsStream && info.ChannelSetting.ResponseHeaderTimeoutSeconds > 0 {
 		responseHeaderTimeout = time.Duration(info.ChannelSetting.ResponseHeaderTimeoutSeconds) * time.Second
