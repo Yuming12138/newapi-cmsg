@@ -174,8 +174,9 @@ func TestChannelCapability(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	endpointType := capabilityTestEndpoint(ch, name)
 	started := time.Now()
-	result := testChannelWithPrompt(ch, uid, name, "", false, pelicanCapabilityPrompt, effort)
+	result := testChannelWithPrompt(ch, uid, name, endpointType, false, pelicanCapabilityPrompt, effort)
 	text := capabilityResponseText(result.responseBody)
 	svg := extractCapabilitySVG(text)
 	ok := capabilityAnswerMatches(text)
@@ -190,4 +191,19 @@ func TestChannelCapability(c *gin.Context) {
 	}
 	common.SysLog(fmt.Sprintf("capability probe channel=%d requested_model=%s observed_model=%s provider=%s status=%s quality_pass=%t latency_ms=%d", id, name, result.upstreamModel, constant.GetChannelTypeName(ch.Type), status, ok, time.Since(started).Milliseconds()))
 	c.JSON(http.StatusOK, gin.H{"success": true, "channel_id": id, "requested_model": name, "reasoning_effort": effort, "observed_model": result.upstreamModel, "provider": constant.GetChannelTypeName(ch.Type), "channel_name": ch.Name, "quality_pass": ok, "answer_match": ok, "fallback_used": false, "status": status, "failure_reason": capabilityFailureReason(ok, text), "answer_preview": capabilityAnswerPreview(text), "svg_detected": svg != "", "svg_preview": svg, "latency_ms": time.Since(started).Milliseconds()})
+}
+
+// capabilityTestEndpoint picks the protocol route a channel actually serves for
+// the selected model. Advanced Custom channels commonly expose only a
+// Responses-to-Chat route, so probing them through Chat Completions would test
+// a different path (and hit its short token cap) instead of the production path.
+func capabilityTestEndpoint(channel *model.Channel, modelName string) string {
+	if channel == nil || channel.Type != constant.ChannelTypeAdvancedCustom {
+		return ""
+	}
+	settings := channel.GetOtherSettings()
+	if settings.AdvancedCustom != nil && settings.AdvancedCustom.SupportsPath("/v1/responses") {
+		return string(constant.EndpointTypeOpenAIResponse)
+	}
+	return ""
 }

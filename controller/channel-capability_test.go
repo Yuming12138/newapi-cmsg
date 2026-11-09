@@ -1,6 +1,11 @@
 package controller
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
+)
 
 func TestParseCapabilityTestChannelID(t *testing.T) {
 	tests := []struct {
@@ -23,6 +28,22 @@ func TestParseCapabilityTestChannelID(t *testing.T) {
 				t.Fatalf("parseCapabilityTestChannelID(%q) = (%d, %t), want (%d, %t)", tt.raw, got, ok, tt.want, tt.ok)
 			}
 		})
+	}
+}
+
+func TestCapabilityTestEndpointForAdvancedCustomResponsesRoute(t *testing.T) {
+	settings := `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/responses","upstream_path":"/v1/chat/completions","converter":"openai_responses_to_openai_chat_completions"},{"incoming_path":"/v1/chat/completions","upstream_path":"/v1/chat/completions","converter":"none"}]}}`
+	ch := &model.Channel{Type: constant.ChannelTypeAdvancedCustom, OtherSettings: settings}
+	if got := capabilityTestEndpoint(ch, "gpt-6.1-sol"); got != string(constant.EndpointTypeOpenAIResponse) {
+		t.Fatalf("capabilityTestEndpoint() = %q, want %q", got, constant.EndpointTypeOpenAIResponse)
+	}
+}
+
+func TestCapabilityTestEndpointForChatOnlyAdvancedCustomRoute(t *testing.T) {
+	settings := `{"advanced_custom":{"advanced_routes":[{"incoming_path":"/v1/chat/completions","upstream_path":"/v1/chat/completions","converter":"none"}]}}`
+	ch := &model.Channel{Type: constant.ChannelTypeAdvancedCustom, OtherSettings: settings}
+	if got := capabilityTestEndpoint(ch, "gpt-6.1-sol"); got != "" {
+		t.Fatalf("capabilityTestEndpoint() = %q, want empty endpoint", got)
 	}
 }
 
