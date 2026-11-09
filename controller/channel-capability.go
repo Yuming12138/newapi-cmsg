@@ -13,9 +13,9 @@ import (
 	"time"
 )
 
-const pelicanCapabilityPrompt = `Create one self-contained SVG illustration of a pelican riding a bicycle.
+const pelicanCapabilityPrompt = `Create a polished, richly detailed self-contained SVG illustration of a pelican riding a bicycle along a coastal road. Use layered gradients, soft shadows, highlights, detailed feathers, a long articulated beak, wings, and legs that connect naturally to the pedals. Draw a convincing bicycle with two large spoked wheels, a frame, chain, crank and handlebars. Add a coastal background with sky, clouds, sea, waves, road and foreground details. Use smooth looping SVG/CSS animations for wheel rotation, crank and pedal motion, leg pedaling, body bobbing and background motion. Use a wide 16:9 viewBox, a balanced composition and a polished color palette. Return only the complete <svg>...</svg> document with no Markdown fence and no explanation.`
 
-Return only the complete <svg>...</svg> document, with no Markdown code fence and no explanation. The SVG must be directly renderable without external files, fonts, images, or network resources. It should visibly contain a pelican, a bicycle with two wheels, legs connected to pedals, and a coastal/background scene. Include at least one declarative animation using SVG animate/animateTransform or CSS keyframes so that the bicycle ride has visible motion. Keep the SVG reasonably compact and make sure it has a viewBox.`
+const capabilityProbeMaxOutputTokens = uint(24000)
 
 var capabilityModelPreference = []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"}
 
@@ -77,6 +77,62 @@ func extractCapabilitySVG(text string) string {
 
 func capabilityAnswerMatches(text string) bool {
 	return extractCapabilitySVG(text) != ""
+}
+
+type capabilitySVGMetrics struct {
+	ViewBox    string `json:"view_box"`
+	Paths      int    `json:"paths"`
+	Groups     int    `json:"groups"`
+	Gradients  int    `json:"gradients"`
+	Animations int    `json:"animations"`
+	Bytes      int    `json:"bytes"`
+}
+
+func capabilitySVGAttribute(svg, name string) string {
+	lower := strings.ToLower(svg)
+	needle := strings.ToLower(name)
+	index := strings.Index(lower, needle)
+	if index < 0 {
+		return ""
+	}
+	rest := svg[index+len(needle):]
+	equals := strings.Index(rest, "=")
+	if equals < 0 {
+		return ""
+	}
+	rest = strings.TrimSpace(rest[equals+1:])
+	if rest == "" {
+		return ""
+	}
+	quote := rest[0]
+	if quote != '\'' && quote != '"' {
+		return ""
+	}
+	end := strings.IndexByte(rest[1:], quote)
+	if end < 0 {
+		return ""
+	}
+	return strings.TrimSpace(rest[1 : end+1])
+}
+
+func countCapabilitySVGToken(svg, token string) int {
+	return strings.Count(strings.ToLower(svg), strings.ToLower(token))
+}
+
+func inspectCapabilitySVG(svg string) capabilitySVGMetrics {
+	lower := strings.ToLower(svg)
+	animations := countCapabilitySVGToken(lower, "<animate") + countCapabilitySVGToken(lower, "@keyframes")
+	if strings.Contains(lower, "animation:") && animations == 0 {
+		animations = 1
+	}
+	return capabilitySVGMetrics{
+		ViewBox:    capabilitySVGAttribute(svg, "viewBox"),
+		Paths:      countCapabilitySVGToken(lower, "<path"),
+		Groups:     countCapabilitySVGToken(lower, "<g"),
+		Gradients:  countCapabilitySVGToken(lower, "<lineargradient") + countCapabilitySVGToken(lower, "<radialgradient"),
+		Animations: animations,
+		Bytes:      len(svg),
+	}
 }
 
 func capabilityAnswerPreview(text string) string {
@@ -180,6 +236,7 @@ func TestChannelCapability(c *gin.Context) {
 	text := capabilityResponseText(result.responseBody)
 	svg := extractCapabilitySVG(text)
 	ok := capabilityAnswerMatches(text)
+	metrics := inspectCapabilitySVG(svg)
 	status := "failed"
 	if ok {
 		status = "passed"
@@ -189,8 +246,28 @@ func TestChannelCapability(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "channel_id": id, "requested_model": name, "reasoning_effort": effort, "quality_pass": false, "status": "unhealthy", "failure_reason": "upstream_error", "reason": result.localErr.Error(), "latency_ms": time.Since(started).Milliseconds()})
 		return
 	}
-	common.SysLog(fmt.Sprintf("capability probe channel=%d requested_model=%s observed_model=%s provider=%s status=%s quality_pass=%t latency_ms=%d", id, name, result.upstreamModel, constant.GetChannelTypeName(ch.Type), status, ok, time.Since(started).Milliseconds()))
-	c.JSON(http.StatusOK, gin.H{"success": true, "channel_id": id, "requested_model": name, "reasoning_effort": effort, "observed_model": result.upstreamModel, "provider": constant.GetChannelTypeName(ch.Type), "channel_name": ch.Name, "quality_pass": ok, "answer_match": ok, "fallback_used": false, "status": status, "failure_reason": capabilityFailureReason(ok, text), "answer_preview": capabilityAnswerPreview(text), "svg_detected": svg != "", "svg_preview": svg, "latency_ms": time.Since(started).Milliseconds()})
+	common.SysLog(fmt.Sprintf("capability probe channel=%d requested_model=%s observed_model=%s provider=%s status=%s svg_valid=%t latency_ms=%d", id, name, result.upstreamModel, constant.GetChannelTypeName(ch.Type), status, ok, time.Since(started).Milliseconds()))
+	c.JSON(http.StatusOK, gin.H{
+		"success":          true,
+		"channel_id":       id,
+		"requested_model":  name,
+		"reasoning_effort": effort,
+		"observed_model":   result.upstreamModel,
+		"provider":         constant.GetChannelTypeName(ch.Type),
+		"channel_name":     ch.Name,
+		"quality_pass":     ok,
+		"structure_pass":   ok,
+		"answer_match":     ok,
+		"evaluation_scope": "single_turn_no_tools",
+		"fallback_used":    false,
+		"status":           status,
+		"failure_reason":   capabilityFailureReason(ok, text),
+		"answer_preview":   capabilityAnswerPreview(text),
+		"svg_detected":     svg != "",
+		"svg_preview":      svg,
+		"svg_metrics":      metrics,
+		"latency_ms":       time.Since(started).Milliseconds(),
+	})
 }
 
 // capabilityTestEndpoint picks the protocol route a channel actually serves for

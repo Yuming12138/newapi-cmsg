@@ -246,6 +246,9 @@ func testChannelWithPrompt(channel *model.Channel, testUserID int, testModel str
 	if len(reasoningEffort) > 0 {
 		applyTestReasoningEffort(request, reasoningEffort[0])
 	}
+	if strings.TrimSpace(probePrompt) != "" && strings.TrimSpace(endpointType) != string(constant.EndpointTypeOpenAIResponse) {
+		applyTestMaxOutputTokens(request, capabilityProbeMaxOutputTokens)
+	}
 
 	info, err := relaycommon.GenRelayInfo(c, relayFormat, request, nil)
 
@@ -554,6 +557,18 @@ func applyTestReasoningEffort(request dto.Request, effort string) {
 			req.Reasoning = &dto.Reasoning{}
 		}
 		req.Reasoning.Effort = effort
+	}
+}
+
+// buildTestRequest otherwise caps generic probes at 16 tokens, which only
+// proves connectivity. A rich SVG capability probe needs room for the full
+// document while keeping the limit bounded.
+func applyTestMaxOutputTokens(request dto.Request, maxTokens uint) {
+	switch req := request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		req.MaxTokens = lo.ToPtr(maxTokens)
+	case *dto.OpenAIResponsesRequest:
+		req.MaxOutputTokens = lo.ToPtr(maxTokens)
 	}
 }
 
