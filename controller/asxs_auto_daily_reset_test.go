@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -43,7 +44,10 @@ func TestASXSAutoDailyResetControlRoundTrip(t *testing.T) {
 	require.Equal(t, want, got)
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	// Windows uses ACLs and does not represent Unix owner-only permission bits.
+	if runtime.GOOS != "windows" {
+		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 }
 
 func TestASXSAutoDailyResetControlRejectsWrongSite(t *testing.T) {

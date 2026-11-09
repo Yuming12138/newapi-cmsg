@@ -158,6 +158,17 @@ func TestRegisterAcceptsValidRegistrationCode(t *testing.T) {
 	require.Equal(t, "cmsg", user.Group)
 }
 
+func TestRegistrationCodeRotationRejectsPreviousCodes(t *testing.T) {
+	setupUserRegisterControllerTest(t)
+	common.RegistrationCodeEnabled = true
+	common.RegistrationCodes = "previous-code;another-previous-code"
+	require.Empty(t, validateRegistrationCode("previous-code"))
+	common.RegistrationCodes = "replacement-code"
+	require.Equal(t, "user.registration_code_invalid", validateRegistrationCode("previous-code"))
+	require.Equal(t, "user.registration_code_invalid", validateRegistrationCode("another-previous-code"))
+	require.Empty(t, validateRegistrationCode("replacement-code"))
+}
+
 func TestRegisterCannotOverrideDefaultCMSGGroup(t *testing.T) {
 	for _, requestedGroup := range []string{"", "default", "vip", "asxs", "cmsg"} {
 		t.Run(requestedGroup, func(t *testing.T) {

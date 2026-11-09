@@ -65,6 +65,9 @@ git push origin dev/cmsg
 | `pkg/billingexpr/expr.md` | 修改表达式计费前必读 |
 | `AGENTS.md` | 项目契约与生产安全约束 |
 
+注册口令轮换、可信代理和注册专用限流见
+[注册入口与可信代理](docs/registration-security.md)。
+
 按变更范围验证，详情见根目录及前端 `AGENTS.md`：
 
 - 文档：Markdown 格式、相对链接、`git diff --check`。
