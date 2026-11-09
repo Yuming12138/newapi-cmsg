@@ -2,6 +2,30 @@ package controller
 
 import "testing"
 
+func TestParseCapabilityTestChannelID(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want int
+		ok   bool
+	}{
+		{"channel 36", "36", 36, true},
+		{"channel 1", "1", 1, true},
+		{"surrounding whitespace", " 12 ", 12, true},
+		{"zero", "0", 0, false},
+		{"negative", "-1", 0, false},
+		{"not a number", "abc", 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := parseCapabilityTestChannelID(tt.raw)
+			if got != tt.want || ok != tt.ok {
+				t.Fatalf("parseCapabilityTestChannelID(%q) = (%d, %t), want (%d, %t)", tt.raw, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
 func TestCapabilityAnswerMatches(t *testing.T) {
 	tests := []struct {
 		name string
