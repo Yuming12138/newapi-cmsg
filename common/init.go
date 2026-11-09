@@ -129,6 +129,11 @@ func InitEnv() {
 	CriticalRateLimitEnable = GetEnvOrDefaultBool("CRITICAL_RATE_LIMIT_ENABLE", true)
 	CriticalRateLimitNum = GetEnvOrDefault("CRITICAL_RATE_LIMIT", 20)
 	CriticalRateLimitDuration = int64(GetEnvOrDefault("CRITICAL_RATE_LIMIT_DURATION", 20*60))
+	RegistrationRateLimitNum = GetEnvOrDefault("REGISTRATION_RATE_LIMIT", 5)
+	RegistrationRateLimitDuration = int64(GetEnvOrDefault("REGISTRATION_RATE_LIMIT_DURATION", 10*60))
+	if RegistrationRateLimitNum <= 0 || RegistrationRateLimitDuration <= 0 || RegistrationRateLimitDuration > 86400 {
+		log.Fatal("REGISTRATION_RATE_LIMIT must be positive and REGISTRATION_RATE_LIMIT_DURATION must be between 1 and 86400 seconds")
+	}
 
 	SearchRateLimitEnable = GetEnvOrDefaultBool("SEARCH_RATE_LIMIT_ENABLE", true)
 	SearchRateLimitNum = GetEnvOrDefault("SEARCH_RATE_LIMIT", 10)
