@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 )
 
@@ -92,6 +93,23 @@ func TestCapabilityFailureReason(t *testing.T) {
 				t.Fatalf("capabilityFailureReason() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestInspectCapabilitySVG(t *testing.T) {
+	svg := `<svg viewBox="0 0 1600 900"><defs><linearGradient id="sky"/><radialGradient id="sun"/></defs><style>@keyframes spin { to { transform: rotate(360deg); } }</style><g><path d="M0 0"/><animateTransform attributeName="transform" type="rotate"/></g></svg>`
+	got := inspectCapabilitySVG(svg)
+	if got.ViewBox != "0 0 1600 900" || got.Paths != 1 || got.Groups != 1 || got.Gradients != 2 || got.Animations != 2 || got.Bytes != len(svg) {
+		t.Fatalf("inspectCapabilitySVG() = %+v", got)
+	}
+}
+
+func TestApplyTestMaxOutputTokensForCapabilityProbe(t *testing.T) {
+	request := buildTestRequest("gpt-6.1-sol", "", &model.Channel{}, false, pelicanCapabilityPrompt)
+	applyTestMaxOutputTokens(request, capabilityProbeMaxOutputTokens)
+	chatRequest, ok := request.(*dto.GeneralOpenAIRequest)
+	if !ok || chatRequest.MaxTokens == nil || *chatRequest.MaxTokens != capabilityProbeMaxOutputTokens {
+		t.Fatalf("capability probe max output tokens not applied: %#v", request)
 	}
 }
 

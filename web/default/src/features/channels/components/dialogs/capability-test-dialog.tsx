@@ -20,7 +20,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { HtmlContent } from '@/components/html-content'
 import {
   Dialog,
   DialogContent,
@@ -36,6 +35,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { HtmlContent } from '@/components/html-content'
 import { testChannelCapability } from '../../api'
 import { useChannels } from '../channels-provider'
 
@@ -47,6 +47,8 @@ type CapabilityTestDialogProps = {
 type CapabilityTestResult = {
   success?: boolean
   quality_pass?: boolean
+  structure_pass?: boolean
+  evaluation_scope?: string
   status?: string
   failure_reason?: string
   requested_model?: string
@@ -54,6 +56,14 @@ type CapabilityTestResult = {
   answer_preview?: string
   svg_detected?: boolean
   svg_preview?: string
+  svg_metrics?: {
+    view_box?: string
+    paths?: number
+    groups?: number
+    gradients?: number
+    animations?: number
+    bytes?: number
+  }
   reason?: string
   error?: string
   latency_ms?: number
@@ -72,9 +82,7 @@ const CAPABILITY_EFFORT_OPTIONS = [
   { value: 'ultra', label: 'Ultra' },
 ]
 
-const CAPABILITY_PROMPT = `Create one self-contained SVG illustration of a pelican riding a bicycle.
-
-Return only the complete <svg>...</svg> document, with no Markdown code fence and no explanation. The SVG must be directly renderable without external files, fonts, images, or network resources. It should visibly contain a pelican, a bicycle with two wheels, legs connected to pedals, and a coastal/background scene. Include at least one declarative animation using SVG animate/animateTransform or CSS keyframes so that the bicycle ride has visible motion. Keep the SVG reasonably compact and make sure it has a viewBox.`
+const CAPABILITY_PROMPT = `Create a polished, richly detailed self-contained SVG illustration of a pelican riding a bicycle along a coastal road. Use layered gradients, soft shadows, highlights, detailed feathers, a long articulated beak, wings, and legs that connect naturally to the pedals. Draw a convincing bicycle with two large spoked wheels, a frame, chain, crank and handlebars. Add a coastal background with sky, clouds, sea, waves, road and foreground details. Use smooth looping SVG/CSS animations for wheel rotation, crank and pedal motion, leg pedaling, body bobbing and background motion. Use a wide 16:9 viewBox, a balanced composition and a polished color palette. Return only the complete <svg>...</svg> document with no Markdown fence and no explanation.`
 
 const PREFERRED_MODELS = [
   'gpt-6-astra',
@@ -131,7 +139,9 @@ export function CapabilityTestDialog({
   useEffect(() => {
     if (!isCapabilityTesting || testStartedAt == null) return
     const updateElapsed = () => {
-      setElapsedSeconds(Math.max(0, Math.floor((Date.now() - testStartedAt) / 1000)))
+      setElapsedSeconds(
+        Math.max(0, Math.floor((Date.now() - testStartedAt) / 1000))
+      )
     }
     updateElapsed()
     const timer = window.setInterval(updateElapsed, 1000)
@@ -155,7 +165,9 @@ export function CapabilityTestDialog({
       )
       setCapabilityResult(result as CapabilityTestResult)
       if (result.success) {
-        (result.quality_pass ? toast.success : toast.error)(
+        ;((result.structure_pass ?? result.quality_pass)
+          ? toast.success
+          : toast.error)(
           t('Capability test: {{status}} ({{latency}} ms)', {
             status: result.failure_reason || result.status,
             latency: result.latency_ms,
@@ -191,14 +203,14 @@ export function CapabilityTestDialog({
           <DialogTitle>{t('Test Capability')}</DialogTitle>
           <DialogDescription>
             {t(
-              'Generate a self-contained animated pelican SVG on this channel. The preview is sanitized before it is displayed.'
+              'Generate a detailed animated pelican SVG in one turn without tools. The preview is sanitized before display; this compares channel output, not Codex multi-turn editing.'
             )}
           </DialogDescription>
         </DialogHeader>
 
-        <div className='rounded-md border bg-muted/30 p-3 text-sm'>
+        <div className='bg-muted/30 rounded-md border p-3 text-sm'>
           <div className='mb-1 font-medium'>{t('Prompt')}</div>
-          <pre className='max-h-40 overflow-auto whitespace-pre-wrap text-xs'>
+          <pre className='max-h-40 overflow-auto text-xs whitespace-pre-wrap'>
             {CAPABILITY_PROMPT}
           </pre>
         </div>
@@ -238,7 +250,7 @@ export function CapabilityTestDialog({
         </Select>
 
         {isCapabilityTesting && (
-          <div className='rounded-md border border-dashed p-3 text-sm text-muted-foreground'>
+          <div className='text-muted-foreground rounded-md border border-dashed p-3 text-sm'>
             {t('Waiting for the model to finish...')} ({elapsedSeconds}s)
           </div>
         )}
@@ -246,7 +258,16 @@ export function CapabilityTestDialog({
         {capabilityResult && (
           <div className='max-h-[60vh] overflow-auto rounded-md border p-3 text-sm'>
             <div>
-              <b>{t('Result')}:</b> {capabilityResult.status || t('unknown')}
+              <b>{t('Result')}:</b>{' '}
+              {(capabilityResult.structure_pass ??
+              capabilityResult.quality_pass)
+                ? t('SVG structure valid')
+                : capabilityResult.status || t('unknown')}
+            </div>
+            <div className='text-muted-foreground'>
+              {t(
+                'The test runs one turn without tools. It checks that the SVG is structurally valid and contains drawing elements; it does not score artistic quality.'
+              )}
             </div>
             <div>
               <b>{t('Failure reason')}:</b>{' '}
@@ -260,10 +281,37 @@ export function CapabilityTestDialog({
               <b>{t('Observed model')}:</b>{' '}
               {capabilityResult.observed_model || t('unknown')}
             </div>
+            {capabilityResult.svg_metrics && (
+              <div className='text-muted-foreground mt-1 flex flex-wrap gap-x-4 gap-y-1'>
+                <span>
+                  {t('Canvas')}:{' '}
+                  {capabilityResult.svg_metrics.view_box || t('unknown')}
+                </span>
+                <span>
+                  {t('Drawing elements')}:{' '}
+                  {capabilityResult.svg_metrics.paths ?? 0}
+                </span>
+                <span>
+                  {t('Groups')}: {capabilityResult.svg_metrics.groups ?? 0}
+                </span>
+                <span>
+                  {t('Gradients')}:{' '}
+                  {capabilityResult.svg_metrics.gradients ?? 0}
+                </span>
+                <span>
+                  {t('Animations')}:{' '}
+                  {capabilityResult.svg_metrics.animations ?? 0}
+                </span>
+                <span>
+                  {t('SVG size')}:{' '}
+                  {Math.round((capabilityResult.svg_metrics.bytes ?? 0) / 1024)} KB
+                </span>
+              </div>
+            )}
             {capabilityResult.svg_preview && (
-              <div className='mt-3 rounded-md border bg-muted/20 p-2'>
+              <div className='bg-muted/20 mt-3 rounded-md border p-2'>
                 <div className='mb-2 font-medium'>{t('SVG preview')}</div>
-                <div className='min-h-48 max-h-[28rem] overflow-auto rounded-sm bg-background p-2'>
+                <div className='bg-background max-h-[28rem] min-h-48 overflow-auto rounded-sm p-2'>
                   <HtmlContent
                     content={capabilityResult.svg_preview}
                     variant='isolated'
@@ -274,7 +322,7 @@ export function CapabilityTestDialog({
             )}
             <div className='mt-3'>
               <div className='mb-1 font-medium'>{t('Raw model response')}</div>
-              <pre className='max-h-80 overflow-auto whitespace-pre-wrap text-xs'>
+              <pre className='max-h-80 overflow-auto text-xs whitespace-pre-wrap'>
                 {capabilityResult.answer_preview ||
                   capabilityResult.reason ||
                   capabilityResult.error ||
