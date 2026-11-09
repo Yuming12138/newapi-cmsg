@@ -141,10 +141,18 @@ func capabilityResponseText(responseBody []byte) string {
 	return strings.Join(parts, "")
 }
 
+func parseCapabilityTestChannelID(raw string) (int, bool) {
+	id, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || id <= 0 {
+		return 0, false
+	}
+	return id, true
+}
+
 func TestChannelCapability(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil || (id != 1 && id != 12 && id != 27) {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "capability probe only supports channels 1, 12, and 27"})
+	id, validID := parseCapabilityTestChannelID(c.Param("id"))
+	if !validID {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid channel id"})
 		return
 	}
 	ch, err := model.CacheGetChannel(id)
