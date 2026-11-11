@@ -4468,6 +4468,8 @@
     "Daily spendable budget": "今日可用额度",
     "ASXS account subscriptions and official model account balances": "ASXS 订阅总余额与模型官方账户余额",
     "Total daily subscription balance": "今日订阅总余额",
+    "Today's shared quota": "今日共享额度",
+    "ASXS shared quota and official model account balances": "ASXS 共享额度与模型官方账户余额",
     "Official account balance": "官方账户总余额",
     "Partially synced": "部分未同步",
     "Updated {{time}}": "更新于 {{time}}",

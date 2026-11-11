@@ -134,6 +134,9 @@ type DailyQuotaPoolGroup struct {
 	// cpaIdentityKey is kept internal so the same CPA account exposed through
 	// multiple channel rows is counted only once in the spendable pool.
 	cpaIdentityKey string
+	// balanceSource preserves the ASXS guard's configured source for dashboard
+	// selection without changing the public pool's source identifiers.
+	balanceSource string
 }
 
 func GetDailyQuotaPoolSnapshot(ctx context.Context) (DailyQuotaPoolSummary, bool, error) {
@@ -170,15 +173,16 @@ func summarizeDailyQuotaPool(asxs ChannelBudgetPoolSummary, asxsHandled bool, ch
 	groups := map[string]struct{}{}
 	if asxsHandled && asxs.ChannelCount > 0 {
 		group := DailyQuotaPoolGroup{
-			Source:       "asxs_daily_subscription",
-			Group:        defaultString(asxs.Group, "asxs"),
-			ChannelCount: asxs.ChannelCount,
-			TotalUSD:     asxs.TotalUSD,
-			UsedUSD:      asxs.UsedUSD,
-			RemainingUSD: asxs.RemainingUSD,
-			UpdatedAt:    asxs.UpdatedAt,
-			Available:    asxs.AvailableChannelCount > 0 && asxs.RemainingUSD > 0,
-			Partial:      asxs.Partial || asxs.FailedChannelCount > 0,
+			Source:        "asxs_daily_subscription",
+			balanceSource: asxs.Source,
+			Group:         defaultString(asxs.Group, "asxs"),
+			ChannelCount:  asxs.ChannelCount,
+			TotalUSD:      asxs.TotalUSD,
+			UsedUSD:       asxs.UsedUSD,
+			RemainingUSD:  asxs.RemainingUSD,
+			UpdatedAt:     asxs.UpdatedAt,
+			Available:     asxs.AvailableChannelCount > 0 && asxs.RemainingUSD > 0,
+			Partial:       asxs.Partial || asxs.FailedChannelCount > 0,
 		}
 		appendDailyQuotaPoolGroup(&summary, &group, quotaPerUSD)
 		groups[group.Group] = struct{}{}

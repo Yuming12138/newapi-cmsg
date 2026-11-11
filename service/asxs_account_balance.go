@@ -20,12 +20,12 @@ import (
 
 const asxsAccountTokenFileDefault = "/data/ops/asxs-account-token"
 
-// ASXSAccountDailyBalance is the account-wide subscription remainder. Channel
-// balances can use this same account total when the channel guard is configured
-// with the asxs_account source. DailyLimitUSD is kept for compatibility with
-// the guard settings and contains the selected subscription limits, including
-// total subscriptions when no daily window exists.
+// ASXSAccountDailyBalance is the dashboard's ASXS remainder. It follows the
+// configured guard source: key-level shared allowance for asxs_usage, or the
+// account-wide subscription total for asxs_account. DailyLimitUSD is kept for
+// compatibility with the guard settings and contains the selected limits.
 type ASXSAccountDailyBalance struct {
+	Source            string   `json:"source,omitempty"`
 	Balance           *float64 `json:"balance"`
 	Currency          string   `json:"currency"`
 	UpdatedAt         int64    `json:"updated_at"`

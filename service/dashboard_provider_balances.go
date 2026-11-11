@@ -42,17 +42,44 @@ func GetDashboardProviderBalances(ctx context.Context) (DashboardProviderBalance
 		return DashboardProviderBalances{}, err
 	}
 	balances := summarizeDashboardProviderBalances(channels)
+	pool, handled, poolErr := GetDailyQuotaPoolSnapshot(ctx)
+	if poolErr == nil && handled {
+		balances.DailyQuotaPool = &pool
+		if asxs, usageSource := dashboardASXSUsageBalance(pool); usageSource {
+			balances.ASXS = asxs
+			return balances, nil
+		}
+	}
 	asxs, err := fetchASXSAccountDailyBalance(ctx)
 	if err != nil {
 		balances.ASXS = unavailableASXSAccountDailyBalance()
 	} else {
 		balances.ASXS = asxs
 	}
-	pool, handled, poolErr := GetDailyQuotaPoolSnapshot(ctx)
-	if poolErr == nil && handled {
-		balances.DailyQuotaPool = &pool
-	}
 	return balances, nil
+}
+
+// Reuse the guard snapshot when ASXS is configured to use key-level allowance.
+// Account billing is a different scope and may be unreachable even while the
+// configured /api/usage endpoint and the relay channels work normally.
+func dashboardASXSUsageBalance(pool DailyQuotaPoolSummary) (ASXSAccountDailyBalance, bool) {
+	for _, group := range pool.GroupBreakdown {
+		if group.Source != "asxs_daily_subscription" || group.balanceSource != "asxs_usage" {
+			continue
+		}
+		result := unavailableASXSAccountDailyBalance()
+		result.Source = "asxs_usage"
+		if group.UpdatedAt <= 0 || !finitePoolAmount(group.RemainingUSD) || group.RemainingUSD < 0 {
+			return result, true
+		}
+		balance := math.Round(group.RemainingUSD*100) / 100
+		result.Balance = &balance
+		result.UpdatedAt = group.UpdatedAt
+		result.Partial = group.Partial
+		result.DailyLimitUSD = group.TotalUSD
+		return result, true
+	}
+	return ASXSAccountDailyBalance{}, false
 }
 
 func summarizeDashboardProviderBalances(channels []*model.Channel) DashboardProviderBalances {
