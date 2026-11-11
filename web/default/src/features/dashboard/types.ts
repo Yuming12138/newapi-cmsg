@@ -83,6 +83,7 @@ export interface KimiSubscriptionBalance {
 
 export interface DashboardProviderBalances {
   asxs: {
+    source?: string
     balance: number | null
     currency: 'USD'
     updated_at: number

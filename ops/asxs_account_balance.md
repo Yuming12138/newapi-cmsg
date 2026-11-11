@@ -1,6 +1,14 @@
 # ASXS account subscription balance
 
-The admin dashboard's ASXS card reads `GET /api/me/billing/state` with an ASXS
+The admin dashboard's ASXS card follows the channel budget guard's configured
+balance source. With `asxs_usage`, it reuses the ASXS portion of the daily shared
+pool snapshot, maintained through the configured `/api/usage` endpoint. The
+card is labelled "Today's shared quota" and shows the same refresh time as the
+pool. Channels 1 and 27 share that allowance and contribute it once. Loading
+the dashboard adds no upstream requests or account-token dependency in this
+mode. A synced zero remains a real zero; an unsynced balance stays unavailable.
+
+With `asxs_account`, the card reads `GET /api/me/billing/state` with an ASXS
 account session token. It totals one preferred window for each distinct active
 subscription: `daily` from `subscriptionWindows` when present, otherwise
 `total`; the subscription's own `limits` are used only when a runtime window is
@@ -10,9 +18,9 @@ account plan. The result is shown in USD. The account cash balance
 (`balanceMicros`) is intentionally excluded. ASXS uses 5,000,000 `leftMicros`
 units per US dollar; the displayed sum is rounded to cents.
 
-This display value is separate from channel `/api/usage` balances and the
-channel budget guard. Multiple channel keys can report the same quota pool, so
-their balances must not be added to calculate the account total.
+In account mode, multiple channel keys can report the same quota pool, so
+their balances must not be added to calculate the account total. The following
+token and proxy requirements apply to account mode.
 
 Place the raw account token, without `Bearer` or an environment variable name,
 as one line in `/opt/new-api/data/ops/asxs-account-token` on the production

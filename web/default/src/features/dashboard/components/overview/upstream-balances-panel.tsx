@@ -257,7 +257,7 @@ export function UpstreamBalancesPanel() {
       <div>
         <h3 className='text-sm font-semibold'>{t('Upstream balances')}</h3>
         <p className='text-muted-foreground mt-1 text-xs'>
-          {t('ASXS account subscriptions and official model account balances')}
+          {t('ASXS shared quota and official model account balances')}
         </p>
       </div>
       <div className='grid gap-2'>
@@ -280,7 +280,11 @@ export function UpstreamBalancesPanel() {
         )}
         <BalanceRow
           name='ASXS'
-          caption={t('Total daily subscription balance')}
+          caption={
+            asxs?.source === 'asxs_usage'
+              ? t("Today's shared quota")
+              : t('Total daily subscription balance')
+          }
           amount={asxs?.balance}
           currency='USD'
           updatedAt={asxs?.updated_at}
