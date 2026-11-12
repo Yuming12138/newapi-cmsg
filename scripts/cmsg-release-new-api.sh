@@ -14,6 +14,8 @@ set -euo pipefail
 #   CMSG_SKIP_TESTS=1          skip bun typecheck + go test
 #   CMSG_ALLOW_NON_DEV_BRANCH=1 allow running off another branch
 #   CMSG_ALLOW_OUT_OF_DATE=1   allow HEAD != origin/dev/cmsg (local unpushed commits)
+#   CMSG_SKIP_FETCH=1          skip `git fetch` and the origin check entirely
+#                              (use when GitHub is unreachable from this box)
 #   CMSG_RELEASE_NAME          override the release dir name
 #   CMSG_BUILD_CACHE           build output root (default ~/.cache/new-api-cmsg-releases)
 #
@@ -36,15 +38,21 @@ if [[ "${CMSG_ALLOW_NON_DEV_BRANCH:-0}" != "1" && "$branch" != "dev/cmsg" ]]; th
   exit 1
 fi
 
-git fetch origin dev/cmsg
-if [[ "${CMSG_ALLOW_OUT_OF_DATE:-0}" != "1" ]]; then
-  local_head="$(git rev-parse HEAD)"
-  remote_head="$(git rev-parse origin/dev/cmsg)"
-  if [[ "$local_head" != "$remote_head" ]]; then
-    echo "error: HEAD is not origin/dev/cmsg" >&2
-    echo "local : $local_head" >&2
-    echo "remote: $remote_head" >&2
-    exit 1
+# The upstream check needs GitHub. When the local proxy is down we still want to
+# ship to cmsg, so CMSG_SKIP_FETCH=1 skips both the fetch and the equality gate.
+if [[ "${CMSG_SKIP_FETCH:-0}" == "1" ]]; then
+  echo "skip origin check (CMSG_SKIP_FETCH=1)"
+else
+  git fetch origin dev/cmsg
+  if [[ "${CMSG_ALLOW_OUT_OF_DATE:-0}" != "1" ]]; then
+    local_head="$(git rev-parse HEAD)"
+    remote_head="$(git rev-parse origin/dev/cmsg)"
+    if [[ "$local_head" != "$remote_head" ]]; then
+      echo "error: HEAD is not origin/dev/cmsg" >&2
+      echo "local : $local_head" >&2
+      echo "remote: $remote_head" >&2
+      exit 1
+    fi
   fi
 fi
 
