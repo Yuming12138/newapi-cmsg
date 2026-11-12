@@ -40,7 +40,7 @@ export interface IntelligenceRankingProps {
 /** Height of the tallest bar, in px. Bars scale from 0 so heights stay honest. */
 const CHART_HEIGHT = 156
 /** Room reserved for the rotated (vertical) model name, in px. */
-const LABEL_HEIGHT = 132
+const LABEL_HEIGHT = 148
 
 export function IntelligenceRanking(props: IntelligenceRankingProps) {
   const { t } = useTranslation()
@@ -118,7 +118,7 @@ export function IntelligenceRanking(props: IntelligenceRankingProps) {
                 style={{ height: CHART_HEIGHT }}
               >
                 <div
-                  className='bg-primary/55 group-hover:bg-primary/85 w-7 rounded-t-[3px] transition-colors sm:w-8'
+                  className='bg-primary/80 group-hover:bg-primary w-8 rounded-t-[4px] transition-colors sm:w-10'
                   style={{ height: `${heightPct}%` }}
                 />
               </div>
@@ -126,7 +126,7 @@ export function IntelligenceRanking(props: IntelligenceRankingProps) {
                 className='border-border/60 mt-1 flex w-full flex-col items-center border-t pt-1.5'
                 style={{ height: LABEL_HEIGHT }}
               >
-                <span className='inline-block h-[104px] overflow-hidden'>
+                <span className='inline-block h-[124px] overflow-hidden'>
                   <span className='text-muted-foreground group-hover:text-foreground block rotate-180 text-[11px] leading-none tracking-tight whitespace-nowrap [writing-mode:vertical-rl]'>
                     {entry.ourModel}
                   </span>
