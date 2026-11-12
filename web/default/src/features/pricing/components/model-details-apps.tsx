@@ -45,7 +45,7 @@ const COMPACT_NUMBER = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 1,
 })
 
-function RankBadge(props: { rank: number }) {
+export function RankBadge(props: { rank: number }) {
   const rank = props.rank
   const isPodium = rank <= 3
   const palette =

@@ -4891,5 +4891,14 @@
       }
     },
     "Upstream account credits total": "上游账号积分合计"
-  }
+  },
+  "Intelligence Ranking": "模型智能排名",
+  "{{count}} of our models ranked": "本站 {{count}} 个模型上榜",
+  "Data source": "数据来源",
+  "View model details": "查看模型详情",
+  "Index": "指数",
+  "Ranked by Artificial Analysis Intelligence Index": "依据 Artificial Analysis Intelligence Index 排序",
+  "{{total}} models tracked": "收录 {{total}} 个模型",
+  "Snapshot": "数据快照",
+  "Only models available on this site are shown": "仅展示本站已上架的模型"
 }

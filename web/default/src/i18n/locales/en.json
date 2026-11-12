@@ -4890,5 +4890,14 @@
       }
     },
     "Upstream account credits total": "Upstream account credits total"
-  }
+  },
+  "Intelligence Ranking": "Intelligence Ranking",
+  "{{count}} of our models ranked": "{{count}} of our models ranked",
+  "Data source": "Data source",
+  "View model details": "View model details",
+  "Index": "Index",
+  "Ranked by Artificial Analysis Intelligence Index": "Ranked by Artificial Analysis Intelligence Index",
+  "{{total}} models tracked": "{{total}} models tracked",
+  "Snapshot": "Snapshot",
+  "Only models available on this site are shown": "Only models available on this site are shown"
 }
