@@ -39,8 +39,8 @@ export interface IntelligenceRankingProps {
 
 /** Height of the tallest bar, in px. Bars scale from 0 so heights stay honest. */
 const CHART_HEIGHT = 156
-/** Room reserved for the rotated (vertical) model name, in px. */
-const LABEL_HEIGHT = 148
+/** Room reserved for the diagonal model name, in px. */
+const LABEL_HEIGHT = 104
 
 export function IntelligenceRanking(props: IntelligenceRankingProps) {
   const { t } = useTranslation()
@@ -123,15 +123,18 @@ export function IntelligenceRanking(props: IntelligenceRankingProps) {
                 />
               </div>
               <div
-                className='border-border/60 mt-1 flex w-full flex-col items-center border-t pt-1.5'
+                className='border-border/60 mt-1 h-px w-full border-t'
+                aria-hidden='true'
+              />
+              <div className='mt-1 h-3'>{icon}</div>
+              <div
+                className='relative w-full'
                 style={{ height: LABEL_HEIGHT }}
+                title={entry.ourModel}
               >
-                <span className='inline-block h-[124px] overflow-hidden'>
-                  <span className='text-muted-foreground group-hover:text-foreground block rotate-180 text-[11px] leading-none tracking-tight whitespace-nowrap [writing-mode:vertical-rl]'>
-                    {entry.ourModel}
-                  </span>
+                <span className='text-muted-foreground group-hover:text-foreground absolute top-1 left-1/2 origin-top-left rotate-[55deg] text-[11px] leading-none tracking-tight whitespace-nowrap transition-colors'>
+                  {entry.ourModel}
                 </span>
-                <span className='mt-1 shrink-0'>{icon}</span>
               </div>
             </button>
           )
