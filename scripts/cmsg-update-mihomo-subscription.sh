@@ -24,6 +24,7 @@ curl -fsSL --connect-timeout 15 --max-time 90 -A 'Clash.Meta' "$url" -o "$tmp"
 python3 - "$tmp" /opt/mihomo/config.yaml "$controller_secret_file" "$tmp.preferred" "$tmp.config" <<'PYOPENAI'
 from pathlib import Path
 import re
+import socket
 import sys
 
 subscription_path = Path(sys.argv[1])
@@ -49,6 +50,38 @@ for line in sub_lines:
 if len(proxy_lines) < 3:
     raise SystemExit(f"subscription yielded only {len(proxy_lines)} proxy nodes")
 
+# --- 1b. Pin node server hostnames to IPs -----------------------------------
+# Airport node servers are hostnames such as *.jiedian.stream. Public DoH does
+# not serve them and the production Mihomo container runs a fake-ip DNS stack
+# that cannot resolve them either ("dns resolve failed: couldn't find ip"),
+# which leaves every proxy unusable. The host resolver (systemd-resolved) can
+# still resolve them, so bake those IPs into the config. Drop any node whose
+# hostname has no A record instead of leaving a dead first-choice member.
+PSEUDO_MARKERS = ("剩余流量", "套餐到期", "距离下次重置", "🪧", "官网", "Expire", "Traffic")
+server_pattern = re.compile(r"(\bserver:\s*)([A-Za-z0-9][A-Za-z0-9.\-]*)")
+pinned_lines = []
+dropped = []
+for line in proxy_lines:
+    match = server_pattern.search(line)
+    if not match:
+        pinned_lines.append(line)
+        continue
+    hostname = match.group(2)
+    if re.match(r"^\d+\.\d+\.\d+\.\d+$", hostname):
+        pinned_lines.append(line)  # already an IP
+        continue
+    try:
+        ip = socket.gethostbyname(hostname)
+    except OSError:
+        dropped.append(hostname)
+        continue
+    pinned_lines.append(line[:match.start(2)] + ip + line[match.end(2):])
+proxy_lines = pinned_lines
+if len(proxy_lines) < 3:
+    raise SystemExit(f"only {len(proxy_lines)} usable nodes after DNS pinning")
+print(f"DNS pinning: {len(proxy_lines)} nodes usable, {len(dropped)} unresolvable dropped",
+      file=sys.stderr)
+
 # --- 2. Resolve group members by stable name prefixes -----------------------
 available_names = []
 name_pattern = re.compile(r"\bname:\s*(?:'((?:''|[^'])*)'|\"([^\"]*)\"|([^,}\n]+))")
@@ -59,6 +92,11 @@ for line in proxy_lines:
     value = next(group for group in match.groups() if group is not None).strip()
     available_names.append(value.replace("''", "'"))
 
+real_node_names = [
+    name for name in available_names
+    if not any(marker in name for marker in PSEUDO_MARKERS)
+]
+
 
 def try_resolve_node(prefix: str):
     """Best-effort resolve: return the node when exactly one subscription node
@@ -68,11 +106,18 @@ def try_resolve_node(prefix: str):
 
 
 def resolve_group(prefixes, minimum, group_label):
+    """Prefer the measured node order, but a subscription change must not make
+    the whole config generation fail. When the legacy prefixes no longer match
+    (e.g. after switching airports), fall back to the subscription's own node
+    list. Once fewer than `minimum` prefix matches exist, use the full node
+    list so a fallback group has enough healthy candidates to switch to."""
     nodes = []
     for prefix in prefixes:
         node = try_resolve_node(prefix)
         if node and node not in nodes:
             nodes.append(node)
+    if len(nodes) < minimum:
+        nodes = list(real_node_names)
     if len(nodes) < minimum:
         raise SystemExit(
             f"{group_label}: only resolved {len(nodes)} nodes from subscription, "
@@ -137,67 +182,155 @@ def yaml_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+template_lines = template_path.read_text(encoding="utf-8").splitlines()
+
+
+def list_indent_after(header):
+    """Detect the indentation of list items under a top-level section so the
+    injected lines match the template (airport configs use either a flush-left
+    '- item' list or a 4-space indented one)."""
+    seen_header = False
+    for line in template_lines:
+        if not seen_header:
+            if line.strip() == header + ":":
+                seen_header = True
+            continue
+        if re.match(r"^[a-zA-Z_-]+:", line):
+            break
+        stripped = line.lstrip()
+        if stripped.startswith("- "):
+            return line[: len(line) - len(stripped)]
+    return "    "
+
+
+group_indent = list_indent_after("proxy-groups")
+rule_indent = list_indent_after("rules")
+
+
 # Health-check interval for the codex egress group. Keep this short: a Fallback
 # group only notices a dead node on its next probe, so interval=120 left traffic
 # stranded on a broken node for up to two minutes (observed 2026-09-08, 22:12).
-openai_group_line = (
-    "    - { name: OpenAI稳定, type: fallback, proxies: ["
-    + ", ".join(yaml_quote(node) for node in openai_nodes)
-    + "], url: 'https://chatgpt.com/backend-api/codex/responses', interval: 30, lazy: false }"
-)
+def group_line(name, nodes, url):
+    return (
+        group_indent + "- { name: " + name + ", type: fallback, proxies: ["
+        + ", ".join(yaml_quote(node) for node in nodes)
+        + "], url: '" + url + "', interval: 30, lazy: false }"
+    )
+
+
+openai_group_line = group_line(
+    "OpenAI稳定", openai_nodes, "https://chatgpt.com/backend-api/codex/responses")
 # Probe the domain this group actually carries. It used to probe api.asxs.top,
 # which stopped resolving (2026-09-08: DNS now points at a dead range, request
 # returns 000) — every member was then judged unhealthy and the group flapped
-# with no real signal, while asxs traffic had already moved to api.itygk.sbs.
-asxs_group_line = (
-    "    - { name: ASXS余额故障转移, type: fallback, proxies: ["
-    + ", ".join(yaml_quote(node) for node in asxs_nodes)
-    + "], url: 'https://api.itygk.sbs/', interval: 30, lazy: false }"
-)
+# with no real signal. The ASXS upstream later moved to api.itygk.sbs and then
+# to api.hfjtc.cfd (2026-11-07); keep the probe on the live host.
+asxs_group_line = group_line(
+    "ASXS余额故障转移", asxs_nodes, "https://api.hfjtc.cfd/")
 rule_lines = [
-    "    - 'DOMAIN,api.asxs.top,ASXS余额故障转移'",
-    "    - 'DOMAIN-SUFFIX,itygk.sbs,ASXS余额故障转移'",
-    "    - 'DOMAIN-SUFFIX,chatgpt.com,OpenAI稳定'",
-    "    - 'DOMAIN-SUFFIX,openai.com,OpenAI稳定'",
-    "    - 'DOMAIN-SUFFIX,oaistatic.com,OpenAI稳定'",
-    "    - 'DOMAIN,api.aabsv.sbs,DIRECT'",
-    "    - 'DOMAIN-SUFFIX,oaiusercontent.com,OpenAI稳定'",
+    rule_indent + "- 'DOMAIN,api.asxs.top,ASXS余额故障转移'",
+    rule_indent + "- 'DOMAIN-SUFFIX,itygk.sbs,ASXS余额故障转移'",
+    rule_indent + "- 'DOMAIN-SUFFIX,chatgpt.com,OpenAI稳定'",
+    rule_indent + "- 'DOMAIN-SUFFIX,openai.com,OpenAI稳定'",
+    rule_indent + "- 'DOMAIN-SUFFIX,oaistatic.com,OpenAI稳定'",
+    rule_indent + "- 'DOMAIN,api.aabsv.sbs,DIRECT'",
+    rule_indent + "- 'DOMAIN-SUFFIX,oaiusercontent.com,OpenAI稳定'",
 ]
 
 # --- 3. Compose: template with proxies section swapped in -------------------
-# Pseudo info nodes that airports embed for clients (traffic/expiry notices).
-PSEUDO_MARKERS = ("剩余流量", "套餐到期", "距离下次重置", "🪧", "官网", "Expire", "Traffic")
-real_node_names = [
-    name for name in available_names
-    if not any(marker in name for marker in PSEUDO_MARKERS)
-]
 # Legacy "all nodes" groups that production rules still point at. Their
 # membership is refreshed from the subscription on every run while the group
 # name/type/health-check are preserved.
 LEGACY_ALL_NODE_GROUPS = ("性价比机场", "自动选择", "故障转移")
 legacy_proxies_value = "[" + ", ".join(yaml_quote(n) for n in real_node_names) + "]"
 
-template_lines = template_path.read_text(encoding="utf-8").splitlines()
+# Groups we own and re-inject below. The template may store them as a single
+# flow mapping ("- { name: ..., ... }") or as a multi-line block
+# ("- name: ...\n  type: ...\n  proxies:\n  - node"). Drop the whole block so
+# no orphan "type:"/"proxies:" lines survive and break the YAML.
+OWNED_GROUPS = ("OpenAI稳定", "ASXS余额故障转移")
+
+
+def owned_group_start(line):
+    stripped = line.lstrip()
+    if not stripped.startswith("- "):
+        return None
+    for name in OWNED_GROUPS:
+        if name in stripped:
+            return name
+    return None
+
+
 out = []
 i = 0
 inserted_group = inserted_rules = False
 while i < len(template_lines):
     line = template_lines[i]
-    if line.strip() == "proxies:":
+    if line == "proxies:":
         out.append(line)
         i += 1
-        # Skip the template's own proxies block.
+        # Skip the template's own proxies block. Must match a FLUSH-LEFT key:
+        # proxy-groups also contain indented "  proxies:" keys, and treating
+        # those as the top-level section corrupts every group that follows.
         while i < len(template_lines) and not re.match(r"^[a-zA-Z_-]+:", template_lines[i]):
             i += 1
         out.extend(proxy_lines)
         continue
-    # Drop any previous copies of our groups/rules; they are re-injected below.
-    if "OpenAI稳定" in line or "ASXS余额故障转移" in line:
+    # Skip an owned group block entirely (single-line or multi-line).
+    if owned_group_start(line) is not None:
+        base_indent = len(line) - len(line.lstrip())
         i += 1
+        while i < len(template_lines):
+            nxt = template_lines[i]
+            if not nxt.strip():
+                i += 1
+                continue
+            indent = len(nxt) - len(nxt.lstrip())
+            if indent <= base_indent:
+                break  # next sibling list item / section
+            i += 1
         continue
     # Refresh legacy all-nodes groups with the new subscription's node list.
-    if any(("name: %s," % group) in line or ("name: '%s'," % group) in line for group in LEGACY_ALL_NODE_GROUPS):
-        line = re.sub(r"proxies: \[[^\]]*\]", "proxies: " + legacy_proxies_value, line)
+    # Handles both inline "proxies: [...]" and multi-line "proxies:\n  - node".
+    if any(("name: %s," % group) in line or ("name: '%s'," % group) in line
+           or line.strip() == "- name: %s" % group for group in LEGACY_ALL_NODE_GROUPS):
+        if "proxies: [" in line:
+            line = re.sub(r"proxies: \[[^\]]*\]", "proxies: " + legacy_proxies_value, line)
+            out.append(line)
+            i += 1
+        else:
+            out.append(line)
+            i += 1
+            while i < len(template_lines) and "proxies:" not in template_lines[i]:
+                out.append(template_lines[i])
+                i += 1
+            if i < len(template_lines):
+                proxies_key = template_lines[i]
+                key_indent = len(proxies_key) - len(proxies_key.lstrip())
+                out.append(proxies_key)  # the "proxies:" key line
+                i += 1
+                # Only consume member lines that are MORE indented than the
+                # "proxies:" key. A flush-left template also starts every
+                # following group with "- name:", so an unbounded skip would
+                # swallow the rest of proxy-groups and corrupt the YAML.
+                member_indent = None
+                while i < len(template_lines):
+                    nxt = template_lines[i]
+                    if not nxt.strip():
+                        break
+                    indent = len(nxt) - len(nxt.lstrip())
+                    # Members may sit at the SAME indent as the "proxies:"
+                    # key (YAML allows a sequence value there), so only a
+                    # strictly less-indented line starts a new group/section.
+                    if indent < key_indent or not nxt.lstrip().startswith("- "):
+                        break
+                    if member_indent is None:
+                        member_indent = " " * indent
+                    i += 1
+                if member_indent is None:
+                    member_indent = " " * (key_indent + 2)
+                out.extend(member_indent + "- " + yaml_quote(n) for n in real_node_names)
+        continue
     out.append(line)
     if line.strip() == "proxy-groups:" and not inserted_group:
         out.extend([openai_group_line, asxs_group_line])
