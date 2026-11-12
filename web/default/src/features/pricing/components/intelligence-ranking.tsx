@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMemo } from 'react'
-import { BarChart3, ChevronRight, ExternalLink } from 'lucide-react'
+import { BarChart3, ExternalLink } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
@@ -30,13 +30,17 @@ import {
   INTELLIGENCE_SOURCE_URL,
 } from '../lib/intelligence-ranking'
 import type { PricingModel } from '../types'
-import { RankBadge } from './model-details-apps'
 
 export interface IntelligenceRankingProps {
   models: PricingModel[]
   onModelClick: (modelName: string) => void
   className?: string
 }
+
+/** Height of the tallest bar, in px. Bars scale from 0 so heights stay honest. */
+const CHART_HEIGHT = 156
+/** Room reserved for the rotated (vertical) model name, in px. */
+const LABEL_HEIGHT = 132
 
 export function IntelligenceRanking(props: IntelligenceRankingProps) {
   const { t } = useTranslation()
@@ -87,53 +91,54 @@ export function IntelligenceRanking(props: IntelligenceRankingProps) {
         </a>
       </div>
 
-      <div className='grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4'>
+      <div className='flex items-end gap-1 overflow-x-auto pb-0.5 sm:gap-2'>
         {ranked.map((entry) => {
           const model = modelMap.get(entry.ourModel)
           const icon = model?.vendor_icon
-            ? getLobeIcon(model.vendor_icon, 14)
+            ? getLobeIcon(model.vendor_icon, 12)
             : null
+          // Keep a sliver visible for very low scores; scale starts at 0.
+          const heightPct = Math.max((entry.score / maxScore) * 100, 2)
           return (
             <button
               key={entry.ourModel}
               type='button'
               onClick={() => props.onModelClick(entry.ourModel)}
-              className='group hover:bg-muted/50 hover:border-foreground/20 flex min-w-0 items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors'
-              title={t('View model details')}
+              className='group flex min-w-[52px] flex-1 basis-0 flex-col items-center'
+              title={`${entry.ourModel} · #${entry.rank} · ${t('Index')} ${entry.score.toFixed(1)}`}
             >
-              <RankBadge rank={entry.rank} />
-              <div className='min-w-0 flex-1'>
-                <div className='flex items-center gap-1.5'>
-                  {icon}
-                  <span className='truncate text-xs font-medium'>
-                    {model?.model_name || entry.ourModel}
+              <span className='text-[11px] font-semibold tabular-nums'>
+                {entry.score.toFixed(1)}
+              </span>
+              <span className='text-muted-foreground/50 text-[10px] tabular-nums'>
+                #{entry.rank}
+              </span>
+              <div
+                className='mt-1 flex w-full items-end justify-center'
+                style={{ height: CHART_HEIGHT }}
+              >
+                <div
+                  className='bg-primary/55 group-hover:bg-primary/85 w-7 rounded-t-[3px] transition-colors sm:w-8'
+                  style={{ height: `${heightPct}%` }}
+                />
+              </div>
+              <div
+                className='border-border/60 mt-1 flex w-full flex-col items-center border-t pt-1.5'
+                style={{ height: LABEL_HEIGHT }}
+              >
+                <span className='inline-block h-[104px] overflow-hidden'>
+                  <span className='text-muted-foreground group-hover:text-foreground block rotate-180 text-[11px] leading-none tracking-tight whitespace-nowrap [writing-mode:vertical-rl]'>
+                    {entry.ourModel}
                   </span>
-                </div>
-                <div className='text-muted-foreground/70 mt-0.5 truncate text-[11px]'>
-                  {entry.name}
-                </div>
-                <div className='bg-muted/60 mt-1.5 h-1 overflow-hidden rounded-full'>
-                  <div
-                    className='bg-primary/70 h-full rounded-full'
-                    style={{ width: `${(entry.score / maxScore) * 100}%` }}
-                  />
-                </div>
+                </span>
+                <span className='mt-1 shrink-0'>{icon}</span>
               </div>
-              <div className='shrink-0 text-right'>
-                <div className='font-mono text-sm font-semibold tabular-nums'>
-                  {entry.score.toFixed(1)}
-                </div>
-                <div className='text-muted-foreground/60 text-[10px]'>
-                  {t('Index')}
-                </div>
-              </div>
-              <ChevronRight className='text-muted-foreground/40 group-hover:text-muted-foreground size-3.5 shrink-0 transition-colors' />
             </button>
           )
         })}
       </div>
 
-      <p className='text-muted-foreground/50 mt-2.5 text-[11px]'>
+      <p className='text-muted-foreground/50 mt-2 text-[11px]'>
         {t('Ranked by Artificial Analysis Intelligence Index')} ·{' '}
         {t('{{total}} models tracked', { total: INTELLIGENCE_LEADERBOARD_SIZE })}{' '}
         · {t('Snapshot')}: {INTELLIGENCE_SNAPSHOT_DATE} ·{' '}
