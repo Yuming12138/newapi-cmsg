@@ -128,7 +128,8 @@ function hasRatio(value: number | null | undefined): boolean {
  * the same rate to display ¥.
  *
  * Keep this list aligned with the domestic real-name models exposed on
- * channel 36 (cli2api / c2a).
+ * channel 36 (cli2api / c2a). The CNY rate comes from the system config
+ * (cnyPricingRate, default 7.3) so admin changes apply here too.
  */
 const CNY_MODEL_PREFIXES = [
   'kimi-',
@@ -137,8 +138,6 @@ const CNY_MODEL_PREFIXES = [
   'hy',
   'minimax-',
 ] as const
-
-const CNY_PRICE_RATE = 7.3
 
 function isCNYPricedModel(modelName: string): boolean {
   return CNY_MODEL_PREFIXES.some((prefix) => modelName.startsWith(prefix))
@@ -151,7 +150,7 @@ function formatModelCurrency(model: PricingModel, priceInUSD: number): string {
     abbreviate: false,
   }
   return isCNYPricedModel(model.model_name)
-    ? formatCNYFromUSD(priceInUSD, options, CNY_PRICE_RATE)
+    ? formatCNYFromUSD(priceInUSD, options)
     : formatCurrencyFromUSD(priceInUSD, options)
 }
 
