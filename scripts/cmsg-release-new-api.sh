@@ -102,28 +102,43 @@ if [[ ! -f "$compose_file" ]]; then
   echo "missing compose file: $remote_dir/$compose_file" >&2
   exit 1
 fi
-if ! grep -qE '\./releases/[^:]+/new-api:/new-api:ro' "$compose_file"; then
+# The compose mount may be relative (./releases/... or releases/...) or
+# absolute (/opt/new-api/releases/...). Detect the shape used by the file
+# instead of assuming one.
+release_mount_token="$(
+  grep -oE "[^ ':\"]*releases/[A-Za-z0-9._-]+/new-api:/new-api:ro" "$compose_file" | head -n 1 || true
+)"
+if [[ -z "$release_mount_token" ]]; then
   echo "compose does not mount a release binary to /new-api" >&2
   exit 1
 fi
+release_mount_path="${release_mount_token%%:*}"
+releases_dir="$(dirname "$release_mount_path")"
+new_mount_token="$(
+  printf '%s\n' "$release_mount_token" |
+    sed -E "s#/[^/]+/new-api:/new-api:ro\$#/${release}/new-api:/new-api:ro#"
+)"
 
-mkdir -p "releases/$release"
-install -m 0755 "$remote_tmp" "releases/$release/new-api"
-actual_sha="$(sha256sum "releases/$release/new-api" | awk '{print $1}')"
+mkdir -p "$releases_dir/$release"
+install -m 0755 "$remote_tmp" "$releases_dir/$release/new-api"
+actual_sha="$(sha256sum "$releases_dir/$release/new-api" | awk '{print $1}')"
 if [[ "$actual_sha" != "$expected_sha" ]]; then
   echo "installed artifact checksum mismatch" >&2
   exit 1
 fi
 
-active_release="$(grep -oE '\./releases/new-api-[^/]+/new-api:/new-api:ro' "$compose_file" | head -n 1 | cut -d/ -f3)"
+active_release="$(
+  printf '%s\n' "$release_mount_token" |
+    sed -E 's#.*/([^/]+)/new-api:/new-api:ro$#\1#'
+)"
 case "$active_release" in
   new-api-*) ;;
   *) echo "cannot identify active release" >&2; exit 1 ;;
 esac
 mkdir -p backups
 cp "$compose_file" "backups/$compose_file.current-$active_release"
-perl -0pi -e "s#\./releases/[^:]+/new-api:/new-api:ro#./releases/$release/new-api:/new-api:ro#" "$compose_file"
-grep -n './releases/.*/new-api:/new-api:ro' "$compose_file"
+perl -0pi -e "s#\Q${release_mount_token}\E#${new_mount_token}#" "$compose_file"
+grep -n 'releases/.*/new-api:/new-api:ro' "$compose_file"
 
 docker compose -f "$compose_file" up -d new-api
 
@@ -142,7 +157,7 @@ fi
 
 current_release="$release"
 mapfile -t old_releases < <(
-  find releases -maxdepth 1 -mindepth 1 -type d -name 'new-api-*' -printf '%T@ %f\n' |
+  find "$releases_dir" -maxdepth 1 -mindepth 1 -type d -name 'new-api-*' -printf '%T@ %f\n' |
     sort -rn |
     awk -v current="$current_release" -v keep="$keep_prior" '
       $2 == current { next }
@@ -153,13 +168,13 @@ mapfile -t old_releases < <(
 cp "$compose_file" "backups/$compose_file.current-$release"
 for old in "${old_releases[@]}"; do
   case "$old" in
-    new-api-*) rm -rf -- "releases/$old" ;;
+    new-api-*) rm -rf -- "$releases_dir/$old" ;;
   esac
 done
 for snapshot in backups/"$compose_file".current-new-api-*; do
   [[ -f "$snapshot" ]] || continue
   snapshot_release="${snapshot##*.current-}"
-  [[ -d "releases/$snapshot_release" ]] || rm -f -- "$snapshot"
+  [[ -d "$releases_dir/$snapshot_release" ]] || rm -f -- "$snapshot"
 done
 REMOTE
 
