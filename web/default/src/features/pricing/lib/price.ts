@@ -121,15 +121,37 @@ function hasRatio(value: number | null | undefined): boolean {
   return value !== undefined && value !== null && Number.isFinite(Number(value))
 }
 
-/** Kimi's official token prices are set in CNY, then stored as USD ratios. */
+/**
+ * CMSG: domestic model prices are quoted in CNY on the model square, while
+ * upstream (asxs / GPT) models stay in USD. The official CNY prices are
+ * converted to USD ratios when stored, so here they are converted back with
+ * the same rate to display ¥.
+ *
+ * Keep this list aligned with the domestic real-name models exposed on
+ * channel 36 (cli2api / c2a).
+ */
+const CNY_MODEL_PREFIXES = [
+  'kimi-',
+  'deepseek-',
+  'glm-',
+  'hy',
+  'minimax-',
+] as const
+
+const CNY_PRICE_RATE = 7.3
+
+function isCNYPricedModel(modelName: string): boolean {
+  return CNY_MODEL_PREFIXES.some((prefix) => modelName.startsWith(prefix))
+}
+
 function formatModelCurrency(model: PricingModel, priceInUSD: number): string {
   const options = {
     digitsLarge: 4,
     digitsSmall: 6,
     abbreviate: false,
   }
-  return model.model_name.startsWith('kimi-')
-    ? formatCNYFromUSD(priceInUSD, options, 7.3)
+  return isCNYPricedModel(model.model_name)
+    ? formatCNYFromUSD(priceInUSD, options, CNY_PRICE_RATE)
     : formatCurrencyFromUSD(priceInUSD, options)
 }
 
