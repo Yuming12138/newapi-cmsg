@@ -41,8 +41,8 @@ export interface IntelligenceRankingProps {
 
 /** Height of the tallest bar, in px. Bars scale from 0 so heights stay honest. */
 const CHART_HEIGHT = 156
-/** Room reserved for the diagonal model name, in px. */
-const LABEL_HEIGHT = 112
+/** Two-line gutter for the horizontal model name, in px. */
+const LABEL_HEIGHT = 30
 
 export function IntelligenceRanking(props: IntelligenceRankingProps) {
   const { t } = useTranslation()
@@ -125,7 +125,7 @@ export function IntelligenceRanking(props: IntelligenceRankingProps) {
                 style={{ height: CHART_HEIGHT }}
               >
                 <div
-                  className='w-8 rounded-t-[4px] opacity-80 transition-opacity group-hover:opacity-100 sm:w-10'
+                  className='w-10 rounded-t-[4px] opacity-80 transition-opacity group-hover:opacity-100 sm:w-12'
                   style={{ height: `${heightPct}%`, backgroundColor: color }}
                 />
               </div>
@@ -135,14 +135,11 @@ export function IntelligenceRanking(props: IntelligenceRankingProps) {
               />
               <div className='mt-1 h-3'>{icon}</div>
               <div
-                className='relative w-full'
+                className='mt-1 flex w-full items-start justify-center px-0.5'
                 style={{ height: LABEL_HEIGHT }}
                 title={entry.ourModel}
               >
-                {/* Right edge pinned to the column centre, then rotated
-                    counter-clockwise so the name runs bottom-left → top-right
-                    and wraps into a narrow block, like the source chart. */}
-                <span className='text-muted-foreground group-hover:text-foreground absolute top-0.5 right-1/2 w-[96px] origin-top-right rotate-[-60deg] text-right text-[10px] leading-tight break-words transition-colors'>
+                <span className='text-muted-foreground group-hover:text-foreground text-center text-[10px] leading-tight break-words transition-colors'>
                   {entry.ourModel}
                 </span>
               </div>
