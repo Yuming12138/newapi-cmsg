@@ -26,13 +26,19 @@ For commercial licensing, please contact support@quantumnous.com
  * https://artificialanalysis.ai/leaderboards/models and updating the list
  * below; keep entries in descending score order.
  *
- * The source page exposes one row per reasoning-effort variant (e.g. "GPT-6
- * Astra (Max)" / "(High)" / "(Low)"); we collapse them to one row per base
- * model, keeping the highest-scoring variant, so ranks stay meaningful.
+ * The leaderboard page only lists models that are not deprecated, so for older
+ * entries (GPT-6 Sol, GPT-5.6 Terra/Luna) the score was read from the model
+ * page at https://artificialanalysis.ai/models/<slug> instead.
+ *
+ * The source data has one row per reasoning-effort variant (e.g. "GPT-6 Astra
+ * (Max)" / "(High)" / "(Low)"); we collapse them to one row per base model,
+ * keeping the highest-scoring variant, so ranks stay meaningful.
  *
  * Only models actually listed in our model square are mapped via `ourModel`.
- * Variants without an independent leaderboard entry (hy4free, hy3,
- * deepseek-v4.1-flash-sg, gpt-5.6-*, gpt-6-sol, glm-5.2) are left unmapped.
+ * Still unmapped because Artificial Analysis publishes no index for them:
+ * gpt-5.5, gpt-5.6-sol, glm-5.2, hy3; plus the ones that are the same upstream
+ * model under another name (hy4free, deepseek-v4.1-flash-sg) and
+ * codex-auto-review, which is not a chat model.
  */
 export const INTELLIGENCE_SOURCE_URL =
   'https://artificialanalysis.ai/leaderboards/models'
@@ -60,6 +66,7 @@ export const INTELLIGENCE_LEADERBOARD: readonly IntelligenceEntry[] = [
   { name: 'Gemini 4 Argon', score: 50.41 },
   { name: 'Muse Wonder Full', score: 50.08 },
   { name: 'Kimi K3.1 Pro', score: 46.45, ourModel: 'kimi-k3.1-pro' },
+  { name: 'GPT-6 Sol', score: 44.16, ourModel: 'gpt-6-sol' },
   { name: 'Muse Wonder', score: 43.57 },
   { name: 'Claude Haiku 5.5', score: 36.48 },
   { name: 'Muse Ember', score: 36.02 },
@@ -71,24 +78,22 @@ export const INTELLIGENCE_LEADERBOARD: readonly IntelligenceEntry[] = [
     score: 32.59,
     ourModel: 'deepseek-v4.1-flash',
   },
+  { name: 'GPT-5.6 Terra', score: 32.34, ourModel: 'gpt-5.6-terra' },
   { name: 'GLM-5.3', score: 31.65, ourModel: 'glm-5.3' },
   { name: 'Gemini 3.8 Flash', score: 30.85 },
   { name: 'Inkling 2 Small', score: 30.63 },
   { name: 'MiMo-V2.6-Pro', score: 29.89 },
   { name: 'Ling 3.1 Flash 1019', score: 29.57 },
-  {
-    name: 'MiniMax-M3.1-Flash',
-    score: 29.06,
-    ourModel: 'minimax-m3.1-flash',
-  },
+  { name: 'MiniMax-M3.1-Flash', score: 29.06, ourModel: 'minimax-m3.1-flash' },
   { name: 'Qwen3.8-Flash-Next', score: 28.58 },
   { name: 'Step 5 Preview', score: 28.53 },
   { name: 'GPT-6 Luna', score: 27.86, ourModel: 'gpt-6-luna' },
-  { name: 'GLM-5.3-Flash', score: 27.8, ourModel: 'glm-5.3-flash' },
+  { name: 'GLM-5.3-Flash', score: 27.80, ourModel: 'glm-5.3-flash' },
   { name: 'MiMo-V2.6-Flash', score: 26.73 },
   { name: 'Mistral Large 4', score: 26.12 },
   { name: 'Muse Spark Open', score: 24.88 },
   { name: 'Agnes 2.5 Pro Theta', score: 24.03 },
+  { name: 'GPT-5.6 Luna', score: 23.79, ourModel: 'gpt-5.6-luna' },
   { name: 'DeepSeek V4 Pro 0813', score: 23.06, ourModel: 'deepseek-v4-pro' },
   { name: 'Nanbeige4.3-33B', score: 20.41 },
   { name: 'Qwen3.8 27B', score: 20.11 },
@@ -107,11 +112,11 @@ export const INTELLIGENCE_LEADERBOARD: readonly IntelligenceEntry[] = [
   { name: 'Muse Glimmer', score: 6.34 },
   { name: 'Command A+', score: 6.24 },
   { name: 'Nemotron 3.5 Lightning', score: 5.53 },
-  { name: 'Granite 4.2 8B', score: 5.1 },
+  { name: 'Granite 4.2 8B', score: 5.10 },
   { name: 'Granite 4.2 3B', score: 4.72 },
   { name: 'Mistral Medium 3.5', score: 4.65 },
   { name: 'Gemma 4 31B', score: 4.38 },
-  { name: 'Mistral Small 4', score: 4.3 },
+  { name: 'Mistral Small 4', score: 4.30 },
   { name: 'gpt-oss-120b', score: 3.82 },
   { name: 'North Mini Code', score: 3.42 },
   { name: 'NVIDIA Nemotron 3 Nano 4B', score: 1.82 },
