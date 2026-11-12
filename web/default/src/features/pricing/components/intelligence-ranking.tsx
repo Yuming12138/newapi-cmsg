@@ -22,7 +22,9 @@ import { useTranslation } from 'react-i18next'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
 import {
+  getModelVendor,
   getRankedOurModels,
+  getVendorColor,
   INTELLIGENCE_LEADERBOARD,
   INTELLIGENCE_LEADERBOARD_SIZE,
   INTELLIGENCE_SNAPSHOT_DATE,
@@ -40,7 +42,7 @@ export interface IntelligenceRankingProps {
 /** Height of the tallest bar, in px. Bars scale from 0 so heights stay honest. */
 const CHART_HEIGHT = 156
 /** Room reserved for the diagonal model name, in px. */
-const LABEL_HEIGHT = 104
+const LABEL_HEIGHT = 112
 
 export function IntelligenceRanking(props: IntelligenceRankingProps) {
   const { t } = useTranslation()
@@ -64,6 +66,9 @@ export function IntelligenceRanking(props: IntelligenceRankingProps) {
   if (ranked.length === 0) return null
 
   const maxScore = INTELLIGENCE_LEADERBOARD[0]?.score || 1
+  const legend = Array.from(
+    new Set(ranked.map((entry) => getModelVendor(entry.ourModel)))
+  ).sort((a, b) => a.localeCompare(b))
 
   return (
     <section
@@ -97,6 +102,8 @@ export function IntelligenceRanking(props: IntelligenceRankingProps) {
           const icon = model?.vendor_icon
             ? getLobeIcon(model.vendor_icon, 12)
             : null
+          const vendor = getModelVendor(entry.ourModel)
+          const color = getVendorColor(vendor)
           // Keep a sliver visible for very low scores; scale starts at 0.
           const heightPct = Math.max((entry.score / maxScore) * 100, 2)
           return (
@@ -105,7 +112,7 @@ export function IntelligenceRanking(props: IntelligenceRankingProps) {
               type='button'
               onClick={() => props.onModelClick(entry.ourModel)}
               className='group flex min-w-[52px] flex-1 basis-0 flex-col items-center'
-              title={`${entry.ourModel} · #${entry.rank} · ${t('Index')} ${entry.score.toFixed(1)}`}
+              title={`${entry.ourModel} · ${vendor} · #${entry.rank} · ${t('Index')} ${entry.score.toFixed(1)}`}
             >
               <span className='text-[11px] font-semibold tabular-nums'>
                 {entry.score.toFixed(1)}
@@ -118,8 +125,8 @@ export function IntelligenceRanking(props: IntelligenceRankingProps) {
                 style={{ height: CHART_HEIGHT }}
               >
                 <div
-                  className='bg-primary/80 group-hover:bg-primary w-8 rounded-t-[4px] transition-colors sm:w-10'
-                  style={{ height: `${heightPct}%` }}
+                  className='w-8 rounded-t-[4px] opacity-80 transition-opacity group-hover:opacity-100 sm:w-10'
+                  style={{ height: `${heightPct}%`, backgroundColor: color }}
                 />
               </div>
               <div
@@ -132,13 +139,31 @@ export function IntelligenceRanking(props: IntelligenceRankingProps) {
                 style={{ height: LABEL_HEIGHT }}
                 title={entry.ourModel}
               >
-                <span className='text-muted-foreground group-hover:text-foreground absolute top-1 left-1/2 origin-top-left rotate-[55deg] text-[11px] leading-none tracking-tight whitespace-nowrap transition-colors'>
+                {/* Right edge pinned to the column centre, then rotated
+                    counter-clockwise so the name runs bottom-left → top-right
+                    and wraps into a narrow block, like the source chart. */}
+                <span className='text-muted-foreground group-hover:text-foreground absolute top-0.5 right-1/2 w-[96px] origin-top-right rotate-[-60deg] text-right text-[10px] leading-tight break-words transition-colors'>
                   {entry.ourModel}
                 </span>
               </div>
             </button>
           )
         })}
+      </div>
+
+      <div className='mt-1 flex flex-wrap items-center gap-x-3 gap-y-1'>
+        {legend.map((vendor) => (
+          <span
+            key={vendor}
+            className='text-muted-foreground/70 inline-flex items-center gap-1 text-[10px]'
+          >
+            <span
+              className='size-2 rounded-[2px]'
+              style={{ backgroundColor: getVendorColor(vendor) }}
+            />
+            {vendor}
+          </span>
+        ))}
       </div>
 
       <p className='text-muted-foreground/50 mt-2 text-[11px]'>

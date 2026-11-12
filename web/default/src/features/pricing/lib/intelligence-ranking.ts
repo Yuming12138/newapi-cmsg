@@ -120,6 +120,61 @@ export const INTELLIGENCE_LEADERBOARD: readonly IntelligenceEntry[] = [
 /** Number of models on the snapshot board (used in the section footer). */
 export const INTELLIGENCE_LEADERBOARD_SIZE = INTELLIGENCE_LEADERBOARD.length
 
+/**
+ * Bar colours per vendor, in the spirit of the Artificial Analysis chart but
+ * tuned for our dark theme.
+ * OpenAI is near-white because the source chart paints it black and black is
+ * invisible on a dark page.
+ */
+export const VENDOR_COLORS: Record<string, string> = {
+  OpenAI: '#e6e6e6',
+  Anthropic: '#d97757',
+  Google: '#4285f4',
+  DeepSeek: '#4d6bfe',
+  'Z AI': '#8b5cf6',
+  Moonshot: '#22c55e',
+  Tencent: '#06b6d4',
+  MiniMax: '#f97316',
+  Alibaba: '#6f6cf0',
+  xAI: '#94a3b8',
+  Meta: '#0866ff',
+  Mistral: '#ff7000',
+}
+
+/** Extra colours for vendors we did not enumerate, picked by name hash. */
+const FALLBACK_COLORS = ['#a3a3a3', '#84cc16', '#ec4899', '#14b8a6']
+
+/**
+ * Vendor inferred from the model id. The public pricing payload carries no
+ * vendor field, and these prefixes are stable for our catalog.
+ */
+export function getModelVendor(modelId: string): string {
+  const id = modelId.toLowerCase()
+  if (id.startsWith('codex') || id.startsWith('gpt')) return 'OpenAI'
+  if (id.startsWith('deepseek')) return 'DeepSeek'
+  if (id.startsWith('glm')) return 'Z AI'
+  if (id.startsWith('minimax')) return 'MiniMax'
+  if (id.startsWith('kimi')) return 'Moonshot'
+  if (id.startsWith('hy')) return 'Tencent'
+  if (id.startsWith('qwen')) return 'Alibaba'
+  if (id.startsWith('claude')) return 'Anthropic'
+  if (id.startsWith('gemini')) return 'Google'
+  if (id.startsWith('grok')) return 'xAI'
+  if (id.startsWith('muse')) return 'Meta'
+  if (id.startsWith('mistral') || id.startsWith('mixtral')) return 'Mistral'
+  return 'Other'
+}
+
+export function getVendorColor(vendor: string): string {
+  const known = VENDOR_COLORS[vendor]
+  if (known) return known
+  let hash = 0
+  for (let i = 0; i < vendor.length; i++) {
+    hash = (hash * 31 + vendor.charCodeAt(i)) % 997
+  }
+  return FALLBACK_COLORS[hash % FALLBACK_COLORS.length]
+}
+
 export interface RankedOurModel extends IntelligenceEntry {
   /** 1-based position in the snapshot leaderboard. */
   rank: number
