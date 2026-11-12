@@ -3,6 +3,22 @@ set -euo pipefail
 
 # Build and deploy the CMSG New API binary from the WSL source checkout.
 # This script intentionally does not build on cmsg-root.
+#
+# Requires: branch dev/cmsg, clean tree, HEAD == origin/dev/cmsg.
+# Env overrides:
+#   CMSG_HOST                  ssh target (default cmsg-root)
+#   CMSG_REMOTE_DIR            remote compose dir (default /opt/new-api)
+#   CMSG_COMPOSE_FILE          compose file name (default docker-compose.prod.yml)
+#   CMSG_PUBLIC_STATUS_URL     public health URL checked at the end
+#   CMSG_KEEP_PRIOR_RELEASES   how many old release dirs to keep (default 2)
+#   CMSG_SKIP_TESTS=1          skip bun typecheck + go test
+#   CMSG_ALLOW_NON_DEV_BRANCH=1 allow running off another branch
+#   CMSG_ALLOW_OUT_OF_DATE=1   allow HEAD != origin/dev/cmsg (local unpushed commits)
+#   CMSG_RELEASE_NAME          override the release dir name
+#   CMSG_BUILD_CACHE           build output root (default ~/.cache/new-api-cmsg-releases)
+#
+# The compose mount may be relative (./releases/...) or absolute
+# (/opt/new-api/releases/...); both are detected at deploy time.
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
@@ -69,10 +85,20 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
   -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=${short_sha}' -extldflags '-static'" \
   -o "$out_bin" .
 
-file "$out_bin"
-if ! file "$out_bin" | grep -q 'statically linked'; then
-  echo "error: built binary is not statically linked" >&2
-  exit 1
+if command -v file >/dev/null 2>&1; then
+  file "$out_bin"
+  if ! file "$out_bin" | grep -q 'statically linked'; then
+    echo "error: built binary is not statically linked" >&2
+    exit 1
+  fi
+else
+  # Git Bash on Windows has no `file`; check the ELF magic instead and rely on
+  # CGO_ENABLED=0 + -extldflags '-static' for static linkage.
+  if ! head -c 4 "$out_bin" | LC_ALL=C grep -q $'\x7fELF'; then
+    echo "error: built artifact is not an ELF executable" >&2
+    exit 1
+  fi
+  echo "$out_bin: ELF magic ok (static enforced by CGO_ENABLED=0)"
 fi
 
 local_sha="$(sha256sum "$out_bin" | awk '{print $1}')"
@@ -80,7 +106,14 @@ echo "$local_sha  $out_bin" | tee "$out_dir/SHA256SUMS"
 
 remote_tmp="/tmp/$release/new-api"
 ssh "$host" "mkdir -p '/tmp/$release'"
-rsync -avP "$out_bin" "$host:$remote_tmp"
+if command -v rsync >/dev/null 2>&1; then
+  rsync -avP "$out_bin" "$host:$remote_tmp"
+else
+  # No rsync on this box (plain Git Bash); scp is good enough, the checksum
+  # below is what actually guards the transfer.
+  scp -q "$out_bin" "$host:$remote_tmp"
+  echo "uploaded $(stat -c '%s' "$out_bin" 2>/dev/null || wc -c <"$out_bin") bytes via scp"
+fi
 
 remote_tmp_sha="$(ssh "$host" "sha256sum '$remote_tmp'" | awk '{print $1}')"
 if [[ "$remote_tmp_sha" != "$local_sha" ]]; then
@@ -112,8 +145,8 @@ if [[ -z "$release_mount_token" ]]; then
   echo "compose does not mount a release binary to /new-api" >&2
   exit 1
 fi
-release_mount_path="${release_mount_token%%:*}"
-releases_dir="$(dirname "$release_mount_path")"
+release_mount_path="${release_mount_token%%:*}" # .../releases/<rel>/new-api
+releases_dir="$(dirname "$(dirname "$release_mount_path")")"
 new_mount_token="$(
   printf '%s\n' "$release_mount_token" |
     sed -E "s#/[^/]+/new-api:/new-api:ro\$#/${release}/new-api:/new-api:ro#"
