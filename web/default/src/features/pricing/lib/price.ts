@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { formatCNYFromUSD, formatCurrencyFromUSD } from '@/lib/currency'
+import { isCNYPricedModel } from '@/lib/model-currency'
 import { QUOTA_TYPE_VALUES, TOKEN_UNIT_DIVISORS } from '../constants'
 import type { PricingModel, TokenUnit, PriceType } from '../types'
 
@@ -127,22 +128,10 @@ function hasRatio(value: number | null | undefined): boolean {
  * converted to USD ratios when stored, so here they are converted back with
  * the same rate to display ¥.
  *
- * Keep this list aligned with the domestic real-name models exposed on
- * channel 36 (cli2api / c2a). The CNY rate comes from the system config
- * (cnyPricingRate, default 7.3) so admin changes apply here too.
+ * The prefix list lives in `@/lib/model-currency` so the usage logs agree with
+ * the square. The CNY rate comes from the system config (cnyPricingRate,
+ * default 7.3) so admin changes apply here too.
  */
-const CNY_MODEL_PREFIXES = [
-  'kimi-',
-  'deepseek-',
-  'glm-',
-  'hy',
-  'minimax-',
-] as const
-
-function isCNYPricedModel(modelName: string): boolean {
-  return CNY_MODEL_PREFIXES.some((prefix) => modelName.startsWith(prefix))
-}
-
 function formatModelCurrency(model: PricingModel, priceInUSD: number): string {
   const options = {
     digitsLarge: 4,

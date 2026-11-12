@@ -144,6 +144,8 @@ export interface LogOtherData {
   cache_creation_ratio_1h?: number
   is_model_mapped?: boolean
   upstream_model_name?: string
+  /** Model the charge was actually calculated on (our alias → upstream id). */
+  billing_model_name?: string
   billing_currency?: string
   billing_currency_rate?: number
   audio_ratio?: number

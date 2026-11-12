@@ -24,6 +24,7 @@ import {
   type CurrencyFormatOptions,
 } from '@/lib/currency'
 import { formatLogQuota } from '@/lib/format'
+import { isCNYPricedModel } from '@/lib/model-currency'
 import type { StatusBadgeProps } from '@/components/status-badge'
 import {
   BILLING_PRICING_VARS,
@@ -124,13 +125,14 @@ function usageLogCnyRate(
   ) {
     return other.billing_currency_rate
   }
-  const upstreamModel = other?.upstream_model_name || log.model_name
-  const model = upstreamModel.toLowerCase()
-  const isDeepSeekLog =
-    log.group.toLowerCase().startsWith('deepseek') &&
-    model.startsWith('deepseek-')
-  if (!model.startsWith('kimi-') && !isDeepSeekLog) return null
-  return useSystemConfigStore.getState().config.currency.cnyPricingRate
+  // CMSG: settle on the *billing* model, not the alias the caller asked for —
+  // gpt-6.1-sol served by a deepseek upstream is still an RMB cost. The prefix
+  // list is shared with the model square so both pages agree.
+  const billedModel = other?.billing_model_name || other?.upstream_model_name
+  if (isCNYPricedModel(billedModel || log.model_name)) {
+    return useSystemConfigStore.getState().config.currency.cnyPricingRate
+  }
+  return null
 }
 
 export function formatUsageLogQuota(
