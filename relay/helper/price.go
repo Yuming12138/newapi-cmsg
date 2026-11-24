@@ -88,22 +88,6 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 
 	groupRatioInfo := HandleGroupRatio(c, info)
 
-	if strings.HasPrefix(billingModelName, "mimo-") {
-		priceData := types.PriceData{
-			FreeModel:         true,
-			ModelRatio:        0,
-			CompletionRatio:   ratio_setting.GetCompletionRatio(billingModelName),
-			GroupRatioInfo:    groupRatioInfo,
-			UsePrice:          false,
-			QuotaToPreConsume: 0,
-		}
-		if common.DebugEnabled {
-			println(fmt.Sprintf("model_price_helper result: %s", priceData.ToSetting()))
-		}
-		info.PriceData = priceData
-		return priceData, nil
-	}
-
 	// Check if this model uses tiered_expr billing
 	if billing_setting.GetBillingMode(billingModelName) == billing_setting.BillingModeTieredExpr {
 		return modelPriceHelperTiered(c, info, billingModelName, promptTokens, meta, groupRatioInfo)

@@ -34,6 +34,7 @@ export const CNY_MODEL_PREFIXES = [
   'glm-',
   'hy',
   'minimax-',
+  'mimo-',
 ] as const
 
 export function isCNYPricedModel(modelName: string): boolean {

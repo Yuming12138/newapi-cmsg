@@ -437,14 +437,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	} else {
 		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, summary.GroupRatio, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
 	}
-	if strings.HasPrefix(summary.BillingModelName, "mimo-") {
-		other["mimo_free"] = true
-		other["mimo_tokenplan"] = true
-	}
 	isOfficialDeepSeek := relayInfo.ChannelType == constant.ChannelTypeDeepSeek &&
 		strings.EqualFold(strings.TrimRight(relayInfo.ChannelBaseUrl, "/"), "https://api.deepseek.com") &&
 		strings.HasPrefix(strings.ToLower(summary.BillingModelName), "deepseek-")
-	if strings.HasPrefix(strings.ToLower(summary.BillingModelName), "kimi-") || isOfficialDeepSeek {
+	billingModelLower := strings.ToLower(summary.BillingModelName)
+	if strings.HasPrefix(billingModelLower, "kimi-") || strings.HasPrefix(billingModelLower, "mimo-") || isOfficialDeepSeek {
 		other["billing_currency"] = "CNY"
 		other["billing_currency_rate"] = ratio_setting.USD2RMB
 	}
