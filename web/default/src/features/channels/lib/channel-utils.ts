@@ -333,6 +333,19 @@ export function isOfficialDeepSeekChannel(
   }
 }
 
+/** Xiaomi MiMo token-plan endpoint: balance is settled in RMB. */
+export function isOfficialXiaomiMiMoChannel(
+  channel: Pick<Channel, 'base_url'>
+): boolean {
+  try {
+    return new URL(channel.base_url || '')
+      .hostname.toLowerCase()
+      .endsWith('xiaomimimo.com')
+  } catch {
+    return false
+  }
+}
+
 export function formatBalance(
   balance: number | null | undefined,
   channel?: Pick<Channel, 'base_url'>
@@ -340,7 +353,9 @@ export function formatBalance(
   if (balance == null || Number.isNaN(balance)) return '-'
   const format =
     channel &&
-    (isOfficialMoonshotChannel(channel) || isOfficialDeepSeekChannel(channel))
+    (isOfficialMoonshotChannel(channel) ||
+      isOfficialDeepSeekChannel(channel) ||
+      isOfficialXiaomiMiMoChannel(channel))
       ? formatCNYFromUSD
       : formatCurrencyFromUSD
   return format(balance, {
