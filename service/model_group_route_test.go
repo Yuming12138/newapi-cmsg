@@ -125,10 +125,17 @@ func TestCacheGetRandomSatisfiedChannelUsesPreferredThenFallbackGroup(t *testing
 
 	originalDB := model.DB
 	originalMemoryCacheEnabled := common.MemoryCacheEnabled
-	db, err := gorm.Open(sqlite.Open("file:model-group-route?mode=memory&cache=shared"), &gorm.Config{})
+	originalSQLitePath, originalMasterNode := common.SQLitePath, common.IsMasterNode
+	t.Setenv("SQL_DSN", "")
+	t.Setenv("LOG_SQL_DSN", "")
+	common.SQLitePath, common.IsMasterNode = "file:model-group-route?mode=memory&cache=shared", false
+	err := model.InitDB()
+	common.SQLitePath, common.IsMasterNode = originalSQLitePath, originalMasterNode
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}))
-	model.DB = db
+	db := model.DB
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
 	common.MemoryCacheEnabled = true
 	t.Cleanup(func() {
 		model.DB = originalDB
@@ -137,6 +144,7 @@ func TestCacheGetRandomSatisfiedChannelUsesPreferredThenFallbackGroup(t *testing
 			model.InitChannelCache()
 		}
 	})
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}))
 
 	priority := int64(0)
 	channels := []model.Channel{
@@ -195,16 +203,37 @@ func TestCacheGetRandomSatisfiedChannelUsesPreferredThenFallbackGroup(t *testing
 	require.Equal(t, 12, channel.Id)
 	require.Equal(t, "cliproxy-codex", group)
 
-	require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 12).Update("status", common.ChannelStatusAutoDisabled).Error)
-	model.InitChannelCache()
-	fallbackContext := newContext()
-	channel, group, err = CacheGetRandomSatisfiedChannel(&RetryParam{
-		Ctx: fallbackContext, TokenGroup: "asxs", ModelName: "gpt-5.6-sol", Retry: common.GetPointer(0),
-	})
-	require.NoError(t, err)
-	require.Equal(t, 27, channel.Id)
-	require.Equal(t, "asxs-gpt56-direct", group)
-	require.Equal(t, "asxs-gpt56-direct", common.GetContextKeyString(fallbackContext, constant.ContextKeyAutoGroup))
+	for _, tc := range []struct {
+		name           string
+		status         int
+		abilityEnabled bool
+	}{
+		{name: "automatic_disable", status: common.ChannelStatusAutoDisabled, abilityEnabled: true},
+		{name: "manual_disable", status: common.ChannelStatusManuallyDisabled, abilityEnabled: true},
+		{name: "disabled_model", status: common.ChannelStatusEnabled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, db.Model(&model.Channel{}).Where("id = ?", 12).Update("status", tc.status).Error)
+			require.NoError(t, db.Model(&model.Ability{}).Where("channel_id = ?", 12).Update("enabled", tc.abilityEnabled).Error)
+			model.InitChannelCache()
+
+			for _, admin := range []bool{false, true} {
+				for _, retry := range []int{0, 1} {
+					ctx := newContext()
+					common.SetContextKey(ctx, constant.ContextKeyAdminAPIUnlimited, admin)
+					common.SetContextKey(ctx, constant.ContextKeyAutoGroup, "cliproxy-codex")
+					selected, group, err := CacheGetRandomSatisfiedChannel(&RetryParam{
+						Ctx: ctx, TokenGroup: "asxs", ModelName: "gpt-5.6-sol", Retry: common.GetPointer(retry),
+					})
+					require.NoError(t, err, "admin=%t retry=%d", admin, retry)
+					require.NotNil(t, selected, "admin=%t retry=%d", admin, retry)
+					require.Equal(t, 27, selected.Id, "admin=%t retry=%d", admin, retry)
+					require.Equal(t, "asxs-gpt56-direct", group)
+					require.Equal(t, group, common.GetContextKeyString(ctx, constant.ContextKeyAutoGroup))
+				}
+			}
+		})
+	}
 }
 
 func TestQuotaProtectionTriesSharedFallbackBeforeLunaReserve(t *testing.T) {
