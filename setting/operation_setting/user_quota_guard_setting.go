@@ -1,6 +1,10 @@
 package operation_setting
 
 import (
+	"slices"
+	"strconv"
+	"sync"
+
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/config"
 )
@@ -21,37 +25,60 @@ type UserQuotaGuardSetting struct {
 	DaytimeBaseUSD      float64 `json:"daytime_base_usd"`
 	// RestrictedBalanceCapUSD caps the personal grant and remaining wallet
 	// during the restricted window. Zero keeps the legacy uncapped policy.
-	RestrictedBalanceCapUSD float64                                      `json:"restricted_balance_cap_usd"`
-	UnlockedQuotaUSD        float64                                      `json:"unlocked_quota_usd"`
-	UnlockedQuotaSource     string                                       `json:"unlocked_quota_source"`
-	AutoManage              bool                                         `json:"auto_manage"`
-	IncludeRoles            []int                                        `json:"include_roles"`
-	IncludeGroups           []string                                     `json:"include_groups"`
-	IncludeUserIDs          []int                                        `json:"include_user_ids"`
-	ExcludeUserIDs          []int                                        `json:"exclude_user_ids"`
-	PerUserBaseUSD          map[string]float64                           `json:"per_user_base_usd"`
-	PerUserExtraUSD         map[string]float64                           `json:"per_user_extra_usd"`
-	DailyApprovals          map[string]map[string]UserQuotaGuardApproval `json:"daily_approvals"`
+	RestrictedBalanceCapUSD float64            `json:"restricted_balance_cap_usd"`
+	UnlockedQuotaUSD        float64            `json:"unlocked_quota_usd"`
+	UnlockedQuotaSource     string             `json:"unlocked_quota_source"`
+	AutoManage              bool               `json:"auto_manage"`
+	IncludeRoles            []int              `json:"include_roles"`
+	IncludeGroups           []string           `json:"include_groups"`
+	IncludeUserIDs          []int              `json:"include_user_ids"`
+	ExcludeUserIDs          []int              `json:"exclude_user_ids"`
+	PerUserBaseUSD          map[string]float64 `json:"per_user_base_usd"`
+	PerUserExtraUSD         map[string]float64 `json:"per_user_extra_usd"`
+	// PerUserFixedDailyUSD replaces the shared schedule and approval grants.
+	PerUserFixedDailyUSD map[string]float64                           `json:"per_user_fixed_daily_usd"`
+	DailyApprovals       map[string]map[string]UserQuotaGuardApproval `json:"daily_approvals"`
 }
 
 var userQuotaGuardSetting = UserQuotaGuardSetting{
-	Enabled:             true,
-	TickIntervalMinutes: 1,
-	QuotaPerUSD:         500000,
-	Timezone:            "Asia/Shanghai",
-	RestrictedStart:     "09:00",
-	RestrictedEnd:       "18:00",
-	DaytimeBaseUSD:      50,
-	UnlockedQuotaUSD:    405,
-	UnlockedQuotaSource: "asxs_channel_pool",
-	AutoManage:          true,
-	IncludeRoles:        []int{common.RoleCommonUser},
-	IncludeGroups:       []string{"asxs"},
-	IncludeUserIDs:      []int{},
-	ExcludeUserIDs:      []int{1},
-	PerUserBaseUSD:      map[string]float64{},
-	PerUserExtraUSD:     map[string]float64{},
-	DailyApprovals:      map[string]map[string]UserQuotaGuardApproval{},
+	Enabled:              true,
+	TickIntervalMinutes:  1,
+	QuotaPerUSD:          500000,
+	Timezone:             "Asia/Shanghai",
+	RestrictedStart:      "09:00",
+	RestrictedEnd:        "18:00",
+	DaytimeBaseUSD:       50,
+	UnlockedQuotaUSD:     405,
+	UnlockedQuotaSource:  "asxs_channel_pool",
+	AutoManage:           true,
+	IncludeRoles:         []int{common.RoleCommonUser},
+	IncludeGroups:        []string{"asxs"},
+	IncludeUserIDs:       []int{},
+	ExcludeUserIDs:       []int{1},
+	PerUserBaseUSD:       map[string]float64{},
+	PerUserExtraUSD:      map[string]float64{},
+	PerUserFixedDailyUSD: map[string]float64{},
+	DailyApprovals:       map[string]map[string]UserQuotaGuardApproval{},
+}
+
+var userQuotaGuardConfigMu sync.RWMutex
+
+type userQuotaGuardConfig UserQuotaGuardSetting
+
+func (s *UserQuotaGuardSetting) UpdateConfigFromMap(values map[string]string) error {
+	userQuotaGuardConfigMu.Lock()
+	defer userQuotaGuardConfigMu.Unlock()
+	return config.UpdateConfigFromMap((*userQuotaGuardConfig)(s), values)
+}
+
+func (s *UserQuotaGuardSetting) FixedDailyUSD(userID int) (float64, bool) {
+	userQuotaGuardConfigMu.RLock()
+	defer userQuotaGuardConfigMu.RUnlock()
+	if s == nil || !s.Enabled || slices.Contains(s.ExcludeUserIDs, userID) {
+		return 0, false
+	}
+	amount, ok := s.PerUserFixedDailyUSD[strconv.Itoa(userID)]
+	return amount, ok && amount > 0
 }
 
 func init() {

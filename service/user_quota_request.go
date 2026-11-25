@@ -266,6 +266,16 @@ func buildUserQuotaRequestStatus(cfg *operation_setting.UserQuotaGuardSetting, d
 		latest := requests[requestCount-1]
 		status.LatestRequest = &latest
 	}
+	if amount, fixed := cfg.FixedDailyUSD(userID); fixed {
+		status.Enabled = false
+		status.Reason = fmt.Sprintf("fixed daily quota of $%g cannot be topped up", amount)
+		status.RequestAmountUSD = 0
+		status.RequestAmountQuota = 0
+		status.MaxRequestsPerDay = 0
+		status.AutoApproveLimit = 0
+		status.RemainingRequests = 0
+		return status
+	}
 	switch {
 	case cfg == nil || !cfg.Enabled:
 		status.Reason = "quota guard is not enabled"
@@ -309,6 +319,9 @@ func userQuotaRequestDateKey(cfg *operation_setting.UserQuotaGuardSetting) strin
 func addUserQuotaGuardDailyApproval(cfg *operation_setting.UserQuotaGuardSetting, dateKey string, userID int, extraUSD float64, note string, updatedAt int64) error {
 	if cfg == nil {
 		return fmt.Errorf("quota guard setting is not available")
+	}
+	if amount, fixed := cfg.FixedDailyUSD(userID); fixed {
+		return fmt.Errorf("fixed daily quota of $%g cannot be topped up", amount)
 	}
 	if cfg.RestrictedBalanceCapUSD > 0 {
 		_, _, targetUSD := userQuotaRestrictedUSD(cfg, dateKey, userID)

@@ -383,7 +383,8 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return session, nil
 	}
 
-	if !operation_setting.IsQuotaChargedForUser(relayInfo.UserGroup, relayInfo.UsingGroup) {
+	_, fixedDaily := operation_setting.GetUserQuotaGuardSetting().FixedDailyUSD(relayInfo.UserId)
+	if !fixedDaily && !operation_setting.IsQuotaChargedForUser(relayInfo.UserGroup, relayInfo.UsingGroup) {
 		session := &BillingSession{
 			relayInfo: relayInfo,
 			funding:   &MeteredOnlyFunding{},
@@ -415,6 +416,9 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 				types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
 		relayInfo.UserQuota = userQuota
+		if fixedDaily {
+			relayInfo.ForcePreConsume = true
+		}
 
 		session := &BillingSession{
 			relayInfo: relayInfo,
@@ -424,6 +428,11 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 			return nil, apiErr
 		}
 		return session, nil
+	}
+
+	if fixedDaily {
+		// Apply the same daily balance across groups and billing preferences.
+		return tryWallet()
 	}
 
 	trySubscription := func() (*BillingSession, *types.NewAPIError) {
