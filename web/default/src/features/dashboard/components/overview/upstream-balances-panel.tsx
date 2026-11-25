@@ -25,7 +25,7 @@ type BalanceRowProps = {
   name: string
   caption: string
   amount: number | null | undefined
-  currency: 'USD' | 'credits'
+  currency: ProviderAccountBalance['currency']
   updatedAt?: number
   unavailableText: string
   partial?: boolean
@@ -105,6 +105,7 @@ export function UpstreamBalancesPanel() {
     refetchInterval: 5 * 60 * 1000,
   })
   const asxs = balancesQuery.data?.asxs
+  const mimo = balancesQuery.data?.mimo
   const c2a = balancesQuery.data?.c2a
   const pool = balancesQuery.data?.daily_quota_pool
   const noChannel = t('No active channel')
@@ -152,6 +153,18 @@ export function UpstreamBalancesPanel() {
           loading={balancesQuery.isPending}
           tone='text-amber-700 dark:text-amber-300'
         />
+        {mimo && mimo.channel_count > 0 && (
+          <BalanceRow
+            name='Xiaomi MiMo'
+            caption={t('Plan quota remaining (CNY equivalent)')}
+            amount={mimo.balance}
+            currency={mimo.currency}
+            updatedAt={mimo.updated_at}
+            unavailableText={waiting}
+            partial={mimo.partial}
+            tone='text-orange-700 dark:text-orange-300'
+          />
+        )}
         {c2a && (
           <BalanceRow
             name='C2A'

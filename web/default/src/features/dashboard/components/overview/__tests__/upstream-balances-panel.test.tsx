@@ -53,7 +53,10 @@ afterEach(async () => {
   await i18n.changeLanguage('en')
 })
 
-function renderBalance(asxs: DashboardProviderBalances['asxs']) {
+function renderPanel(
+  asxs: DashboardProviderBalances['asxs'],
+  mimo?: DashboardProviderBalances['mimo']
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -71,15 +74,20 @@ function renderBalance(asxs: DashboardProviderBalances['asxs']) {
     asxs,
     kimi: unavailable,
     deepseek: unavailable,
+    mimo,
   }
   client.setQueryData(['dashboard', 'provider-balances'], data)
-  const view = render(
+  return render(
     <I18nextProvider i18n={i18n}>
       <QueryClientProvider client={client}>
         <UpstreamBalancesPanel />
       </QueryClientProvider>
     </I18nextProvider>
   )
+}
+
+function renderBalance(asxs: DashboardProviderBalances['asxs']) {
+  const view = renderPanel(asxs)
   const row = view.getByText('ASXS').parentElement?.parentElement
   assert.ok(row)
   return within(row)
@@ -132,4 +140,23 @@ describe('ASXS dashboard balance source', () => {
     assert.ok(row.getByText('今日共享额度'))
     assert.ok(row.getByText(/57\.23/))
   })
+})
+
+test('shows the MiMo plan as a separate CNY balance with its sync time', () => {
+  const view = renderPanel(usageBalance, {
+    balance: 9.88,
+    currency: 'CNY',
+    updated_at: 100,
+    channel_count: 1,
+    account_count: 1,
+    synced_account_count: 1,
+    partial: false,
+  })
+  const card = view.getByText('Xiaomi MiMo').parentElement?.parentElement
+  assert.ok(card)
+  const row = within(card)
+  assert.ok(row.getByText('Plan quota remaining (CNY equivalent)'))
+  assert.ok(row.getByText(/(?:CN¥|CNY)\s*9\.88/))
+  assert.ok(row.getByText(/^Updated /))
+  assert.ok(view.getByText('ASXS'))
 })

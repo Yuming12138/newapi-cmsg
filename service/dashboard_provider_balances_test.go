@@ -55,6 +55,24 @@ func TestSummarizeProviderAccountBalanceDistinguishesMissingFromZero(t *testing.
 	}
 }
 
+func TestDashboardMiMoBalanceUsesOfficialSnapshotInYuan(t *testing.T) {
+	planURL := "https://token-plan-cn.xiaomimimo.com/v1"
+	unrelatedURL := "https://token-plan-cn.xiaomimimo.com.example.org"
+	summary := summarizeDashboardProviderBalances([]*model.Channel{
+		{Id: 46, Key: "plan", BaseURL: &planURL, Group: "mimo,asxs", Status: common.ChannelStatusEnabled, Balance: 1.3532, BalanceUpdatedTime: 200},
+		{Id: 47, Key: "plan", BaseURL: &planURL, Group: "mimo", Status: common.ChannelStatusEnabled, Balance: 2, BalanceUpdatedTime: 100},
+		{Id: 48, Key: "disabled", BaseURL: &planURL, Status: common.ChannelStatusManuallyDisabled, Balance: 100, BalanceUpdatedTime: 300},
+		{Id: 49, Key: "unrelated", BaseURL: &unrelatedURL, Status: common.ChannelStatusEnabled, Balance: 100, BalanceUpdatedTime: 300},
+		{Id: 50, Key: "legacy", BaseURL: &planURL, Status: common.ChannelStatusEnabled, Balance: 987842347, BalanceUpdatedTime: 300,
+			OtherInfo: `{"mimo_credit_guard":{"unit":"credits","updated_at":300}}`},
+	})
+	require.NotNil(t, summary.MiMo.Balance)
+	require.Equal(t, 9.88, *summary.MiMo.Balance)
+	require.Equal(t, "CNY", summary.MiMo.Currency)
+	require.EqualValues(t, 200, summary.MiMo.UpdatedAt)
+	require.Equal(t, 1, summary.MiMo.AccountCount)
+}
+
 func TestDashboardASXSUsageBalanceUsesOnlyConfiguredSharedAllowance(t *testing.T) {
 	for _, partial := range []bool{false, true} {
 		pool := summarizeDailyQuotaPool(ChannelBudgetPoolSummary{

@@ -4471,6 +4471,7 @@
     "Today's shared quota": "今日共享额度",
     "ASXS shared quota and official model account balances": "ASXS 共享额度与模型官方账户余额",
     "Official account balance": "官方账户总余额",
+    "Plan quota remaining (CNY equivalent)": "套餐剩余额度（人民币折算）",
     "Partially synced": "部分未同步",
     "Updated {{time}}": "更新于 {{time}}",
     "No active channel": "无启用渠道",
