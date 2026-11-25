@@ -129,9 +129,11 @@ func TestPreConsumeBilling_AdminOnlyMetersWithoutChargingAnyBalance(t *testing.T
 	require.Equal(t, actualQuota, getTokenUsedQuota(t, tokenID))
 }
 
-func TestPreConsumeBillingFixedDailyUsesWallet(t *testing.T) {
+func TestPreConsumeBillingFixedDailyUsesWalletOnChargedGroups(t *testing.T) {
 	truncate(t)
-	withQuotaPolicy(t, "none", "", nil)
+	withQuotaPolicy(t, "*", "charged", []operation_setting.QuotaPolicyRule{{
+		UserGroups: []string{"*"}, UsingGroups: []string{"mimo"}, Action: "metered_only",
+	}})
 
 	guard := operation_setting.GetUserQuotaGuardSetting()
 	require.NoError(t, guard.UpdateConfigFromMap(map[string]string{"per_user_fixed_daily_usd": `{"126":10}`}))
@@ -159,6 +161,16 @@ func TestPreConsumeBillingFixedDailyUsesWallet(t *testing.T) {
 	require.NotNil(t, apiErr)
 	require.Equal(t, types.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
 	require.Equal(t, http.StatusForbidden, apiErr.StatusCode)
+
+	// The same account can use a metered group without charging its daily wallet.
+	info.UsingGroup = "mimo"
+	require.Nil(t, PreConsumeBilling(c, amount, info))
+	require.Equal(t, BillingSourceMeteredOnly, info.BillingSource)
+	require.Zero(t, info.FinalPreConsumedQuota)
+	require.NoError(t, SettleBilling(c, info, amount))
+	require.Zero(t, getUserQuota(t, userID))
+	require.Equal(t, amount, getTokenRemainQuota(t, userID))
+	require.Equal(t, 2*amount, getTokenUsedQuota(t, userID))
 }
 
 func TestSettleBilling_MeteredUsageIsIdempotentAndAdjustable(t *testing.T) {
