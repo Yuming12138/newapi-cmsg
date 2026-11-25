@@ -49,6 +49,12 @@ func TestDashboardProviderBalancesAccess(t *testing.T) {
 		BaseURL: &kimiURL, Group: "kimi", Status: common.ChannelStatusEnabled,
 		Balance: 24.98 / ratio_setting.USD2RMB, BalanceUpdatedTime: 200,
 	}).Error)
+	mimoURL := "https://token-plan-cn.xiaomimimo.com"
+	require.NoError(t, db.Create(&model.Channel{
+		Id: 46, Type: constant.ChannelTypeOpenAI, Key: "test-mimo-upstream-key",
+		BaseURL: &mimoURL, Group: "mimo,asxs", Status: common.ChannelStatusEnabled,
+		Balance: 1.3532, BalanceUpdatedTime: 300,
+	}).Error)
 	engine := gin.New()
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("test-session-secret"))))
 	SetApiRouter(engine)
@@ -72,8 +78,14 @@ func TestDashboardProviderBalancesAccess(t *testing.T) {
 			require.NotNil(t, payload.Data.Kimi.Balance)
 			require.InDelta(t, 24.98, *payload.Data.Kimi.Balance, 0.001)
 			require.Equal(t, "CNY", payload.Data.DeepSeek.Currency)
+			require.Equal(t, "CNY", payload.Data.MiMo.Currency)
+			require.NotNil(t, payload.Data.MiMo.Balance)
+			require.Equal(t, 9.88, *payload.Data.MiMo.Balance)
+			require.EqualValues(t, 300, payload.Data.MiMo.UpdatedAt)
 			require.NotContains(t, response.Body.String(), "secret-upstream-key")
+			require.NotContains(t, response.Body.String(), "test-mimo-upstream-key")
 			require.NotContains(t, response.Body.String(), "api.moonshot.cn")
+			require.NotContains(t, response.Body.String(), "token-plan-cn.xiaomimimo.com")
 		})
 	}
 

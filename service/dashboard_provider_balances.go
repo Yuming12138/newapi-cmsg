@@ -29,6 +29,7 @@ type DashboardProviderBalances struct {
 	ASXS           ASXSAccountDailyBalance `json:"asxs"`
 	Kimi           ProviderAccountBalance  `json:"kimi"`
 	DeepSeek       ProviderAccountBalance  `json:"deepseek"`
+	MiMo           ProviderAccountBalance  `json:"mimo"`
 	C2A            ProviderAccountBalance  `json:"c2a"`
 	DailyQuotaPool *DailyQuotaPoolSummary  `json:"daily_quota_pool,omitempty"`
 }
@@ -104,8 +105,21 @@ func summarizeDashboardProviderBalances(channels []*model.Channel) DashboardProv
 		DeepSeek: summarizeProviderAccountBalance(channels, func(channel *model.Channel) bool {
 			return isDeepSeekBalanceChannel(channel, deepSeekSetting)
 		}),
-		C2A: summarizeC2ACreditBalance(channels),
+		MiMo: summarizeProviderAccountBalance(channels, isMiMoTokenPlanBalanceChannel),
+		C2A:  summarizeC2ACreditBalance(channels),
 	}
+}
+
+func isMiMoTokenPlanBalanceChannel(channel *model.Channel) bool {
+	base, err := url.Parse(strings.TrimSpace(channel.GetBaseURL()))
+	if err != nil || base.Scheme != "https" || !strings.EqualFold(base.Hostname(), "token-plan-cn.xiaomimimo.com") {
+		return false
+	}
+	// The legacy estimator can store Credits in the balance field. The official
+	// sync writes a USD equivalent, which the dashboard converts back to CNY.
+	credit, _ := parseGuardObject(channel.OtherInfo)["mimo_credit_guard"].(map[string]interface{})
+	estimatedAt, ok := guardObjectInt64(credit, "updated_at")
+	return !ok || estimatedAt < channel.BalanceUpdatedTime
 }
 
 // summarizeC2ACreditBalance sums Advanced Custom (cli2api) channel balances.

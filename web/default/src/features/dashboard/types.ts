@@ -92,6 +92,7 @@ export interface DashboardProviderBalances {
   }
   kimi: ProviderAccountBalance
   deepseek: ProviderAccountBalance
+  mimo?: ProviderAccountBalance
   c2a?: ProviderAccountBalance
   daily_quota_pool?: DailyQuotaPoolStatus
 }
