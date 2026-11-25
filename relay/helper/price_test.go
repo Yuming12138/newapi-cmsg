@@ -74,25 +74,31 @@ func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	require.Equal(t, common.QuotaPerUnit, info.TieredBillingSnapshot.QuotaPerUnit)
 }
 
-func TestModelPriceHelperTreatsMimoAsFreeModel(t *testing.T) {
+func TestModelPriceHelperKeepsConfiguredMimoPrice(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	savedRatios := ratio_setting.ModelRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"mimo-v2.6-pro":0.75}`))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
+	})
+
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 
 	info := &relaycommon.RelayInfo{
-		OriginModelName: "mimo-v2.5-pro",
-		UserGroup:       "default",
-		UsingGroup:      "default",
-		UserId:          10001,
+		OriginModelName:  "gpt-6.1-sol",
+		BillingModelName: "mimo-v2.6-pro",
+		UserGroup:        "default",
+		UsingGroup:       "mimo",
+		UserId:           10001,
 	}
 
 	priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{MaxTokens: 1000})
 	require.NoError(t, err)
-	require.True(t, priceData.FreeModel)
-	require.Zero(t, priceData.QuotaToPreConsume)
-	require.Zero(t, priceData.ModelRatio)
-	require.True(t, info.PriceData.FreeModel)
+	require.False(t, priceData.FreeModel)
+	require.Positive(t, priceData.QuotaToPreConsume)
+	require.Equal(t, 0.75, priceData.ModelRatio)
 }
 
 func TestModelPriceHelperUsesBillingModelName(t *testing.T) {

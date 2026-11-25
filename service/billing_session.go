@@ -383,8 +383,7 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return session, nil
 	}
 
-	_, fixedDaily := operation_setting.GetUserQuotaGuardSetting().FixedDailyUSD(relayInfo.UserId)
-	if !fixedDaily && !operation_setting.IsQuotaChargedForUser(relayInfo.UserGroup, relayInfo.UsingGroup) {
+	if !operation_setting.IsQuotaChargedForUser(relayInfo.UserGroup, relayInfo.UsingGroup) {
 		session := &BillingSession{
 			relayInfo: relayInfo,
 			funding:   &MeteredOnlyFunding{},
@@ -395,6 +394,7 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return session, nil
 	}
 
+	_, fixedDaily := operation_setting.GetUserQuotaGuardSetting().FixedDailyUSD(relayInfo.UserId)
 	pref := common.NormalizeBillingPreference(relayInfo.UserSetting.BillingPreference)
 
 	// 钱包路径需要先检查用户额度
