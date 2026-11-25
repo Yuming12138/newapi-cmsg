@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -125,6 +127,38 @@ func TestPreConsumeBilling_AdminOnlyMetersWithoutChargingAnyBalance(t *testing.T
 	require.Equal(t, 0, getUserQuota(t, userID))
 	require.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
 	require.Equal(t, actualQuota, getTokenUsedQuota(t, tokenID))
+}
+
+func TestPreConsumeBillingFixedDailyUsesWallet(t *testing.T) {
+	truncate(t)
+	withQuotaPolicy(t, "none", "", nil)
+
+	guard := operation_setting.GetUserQuotaGuardSetting()
+	require.NoError(t, guard.UpdateConfigFromMap(map[string]string{"per_user_fixed_daily_usd": `{"126":10}`}))
+	t.Cleanup(func() {
+		require.NoError(t, guard.UpdateConfigFromMap(map[string]string{"per_user_fixed_daily_usd": "{}"}))
+	})
+
+	const userID = 126
+	const amount = 2500
+	seedUser(t, userID, amount)
+	seedToken(t, userID, userID, "fixed-daily-token", 2*amount)
+	c := newBillingTestContext()
+	info := &relaycommon.RelayInfo{
+		UserId: userID, TokenId: userID, TokenKey: "fixed-daily-token",
+		UserGroup: "cmsg", UsingGroup: "asxs",
+	}
+	info.UserSetting.BillingPreference = "subscription_only"
+	require.Nil(t, PreConsumeBilling(c, amount, info))
+	require.Equal(t, BillingSourceWallet, info.BillingSource)
+	require.Equal(t, amount, info.FinalPreConsumedQuota)
+	require.NoError(t, SettleBilling(c, info, amount))
+	require.Zero(t, getUserQuota(t, userID))
+
+	apiErr := PreConsumeBilling(c, 1, info)
+	require.NotNil(t, apiErr)
+	require.Equal(t, types.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
+	require.Equal(t, http.StatusForbidden, apiErr.StatusCode)
 }
 
 func TestSettleBilling_MeteredUsageIsIdempotentAndAdjustable(t *testing.T) {

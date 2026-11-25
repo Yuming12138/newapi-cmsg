@@ -19,7 +19,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const userQuotaGuardStateOptionKey = "user_quota_guard_state"
+const (
+	userQuotaGuardStateOptionKey = "user_quota_guard_state"
+	userQuotaPhaseFixedDaily     = "fixed_daily"
+)
 
 type userQuotaGuardState struct {
 	Version int                                `json:"version"`
@@ -132,7 +135,8 @@ func runUserQuotaGuardOnce() {
 		}
 		userIDKey := strconv.Itoa(user.Id)
 		userState, exists := state.Users[userIDKey]
-		if !hadExistingState {
+		_, fixedDaily := cfg.FixedDailyUSD(user.Id)
+		if !hadExistingState && !fixedDaily {
 			state.Users[userIDKey] = initialUserQuotaGuardState(cfg, phase, user.Id, quotaPerUSD, unlockedQuotaUSD, unlockedQuotaSource)
 			stateChanged = true
 			initialized++
@@ -195,6 +199,8 @@ func filterUserQuotaGuardUsers(cfg *operation_setting.UserQuotaGuardSetting, use
 			continue
 		}
 		_, explicitlyIncluded := includeIDs[user.Id]
+		_, fixedDaily := cfg.FixedDailyUSD(user.Id)
+		explicitlyIncluded = explicitlyIncluded || fixedDaily
 		managed := false
 		if cfg.AutoManage {
 			roleOK := len(includeRoles) == 0 || includeRoles[user.Role]
@@ -236,6 +242,9 @@ func applyUserQuotaGuardPolicy(cfg *operation_setting.UserQuotaGuardSetting, use
 	// instead of through filterUserQuotaGuardUsers.
 	if user.Role >= common.RoleAdminUser {
 		return state, false, nil
+	}
+	if amount, fixed := cfg.FixedDailyUSD(user.Id); fixed {
+		return applyFixedDailyUserQuota(cfg, user, state, phase.DateKey, quotaFromUSD(amount, quotaPerUSD), quotaPerUSD)
 	}
 	if phase.Phase == "restricted" {
 		baseUSD, extraUSD, targetUSD := userQuotaRestrictedUSD(cfg, phase.DateKey, user.Id)
@@ -295,6 +304,56 @@ func applyUserQuotaGuardPolicy(cfg *operation_setting.UserQuotaGuardSetting, use
 		}, true, nil
 	}
 	return state, false, nil
+}
+
+func applyFixedDailyUserQuota(cfg *operation_setting.UserQuotaGuardSetting, user *model.User, state userQuotaGuardUserState, dateKey string, grantQuota, quotaPerUSD int) (userQuotaGuardUserState, bool, error) {
+	newDay := state.Phase == userQuotaPhaseFixedDaily && state.Date < dateKey
+	delta, capQuota := 0, grantQuota
+	if !newDay {
+		if state.Date == dateKey && (state.Phase == "restricted" || state.Phase == userQuotaPhaseFixedDaily) {
+			// Keep today's spending on activation and do not grant an increase mid-day.
+			grantQuota = min(grantQuota, state.AppliedRestrictedGrantQuota)
+			capQuota = grantQuota
+			delta = grantQuota - state.AppliedRestrictedGrantQuota
+		} else {
+			// A wallet that was already unlocked does not reflect today's spending.
+			// Count usage when first applying the fixed limit, and only lower its balance.
+			start, err := time.ParseInLocation("2006-01-02", dateKey, guardNow(cfg.Timezone).Location())
+			if err != nil {
+				return state, false, err
+			}
+			var used int
+			err = model.LOG_DB.Model(&model.Log{}).
+				Where("user_id = ? AND type = ? AND created_at >= ? AND created_at < ?", user.Id, model.LogTypeConsume, start.Unix(), start.AddDate(0, 0, 1).Unix()).
+				Select("COALESCE(SUM(quota), 0)").Scan(&used).Error
+			if err != nil {
+				return state, false, err
+			}
+			capQuota = max(0, grantQuota-max(used, 0))
+		}
+	}
+	next := userQuotaGuardUserState{Date: dateKey, Phase: userQuotaPhaseFixedDaily, AppliedRestrictedGrantQuota: grantQuota}
+	remark := fmt.Sprintf("每日固定额度 $%g；00:00 重置，用完不追加", float64(grantQuota)/float64(quotaPerUSD))
+	if newDay {
+		if err := updateGuardedUserQuota(user, grantQuota, remark); err != nil {
+			return state, false, err
+		}
+		return next, true, nil
+	}
+	if delta != 0 || user.Remark != remark {
+		if err := adjustGuardedUserQuota(user, delta, capQuota, true, remark); err != nil {
+			return state, false, err
+		}
+		return next, true, nil
+	}
+	if user.Quota > capQuota {
+		changed, err := capGuardedUserQuota(user, capQuota, remark)
+		if err != nil {
+			return state, false, err
+		}
+		return next, changed, nil
+	}
+	return next, false, nil
 }
 
 func resolveUserQuotaGuardUnlockedQuota(ctx context.Context, cfg *operation_setting.UserQuotaGuardSetting) (float64, string, error) {

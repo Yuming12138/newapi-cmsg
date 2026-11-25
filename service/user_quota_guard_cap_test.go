@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -188,4 +189,77 @@ func TestUserQuotaGuardTwentyFiveDollarRollout(t *testing.T) {
 
 	status := buildUserQuotaRequestStatus(cfg, phase.DateKey, 13, 500000, 0, nil)
 	require.Equal(t, 15.0, status.RequestAmountUSD, "$10 users may only request the remaining $15")
+}
+
+func TestUserQuotaGuardFixedDailyKeepsTodaysConsumption(t *testing.T) {
+	db := quotaCapTestDB(t)
+	const rate = 500000
+	cfg := &operation_setting.UserQuotaGuardSetting{
+		Enabled: true, RestrictedBalanceCapUSD: 65,
+		PerUserFixedDailyUSD: map[string]float64{"13": 10},
+	}
+	user := &model.User{Id: 13, Username: "fixed-daily-user", AffCode: "fixed-daily",
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Quota: 8 * rate}
+	require.NoError(t, db.Create(user).Error)
+	require.Len(t, filterUserQuotaGuardUsers(cfg, []*model.User{user}), 1)
+
+	apply := func(state userQuotaGuardUserState, date, phase string, wantBalance int) userQuotaGuardUserState {
+		t.Helper()
+		next, _, err := applyUserQuotaGuardPolicy(cfg, user, state, true, userQuotaPhase{DateKey: date, Phase: phase}, rate, 125, "daily_quota_pool")
+		require.NoError(t, err)
+		require.NoError(t, db.First(user, user.Id).Error)
+		require.Equal(t, wantBalance*rate, user.Quota)
+		require.Equal(t, userQuotaPhaseFixedDaily, next.Phase)
+		require.Equal(t, date, next.Date)
+		require.Equal(t, 10*rate, next.AppliedRestrictedGrantQuota)
+		return next
+	}
+
+	const today = "2026-11-25"
+	old := userQuotaGuardUserState{Date: today, Phase: "restricted", AppliedRestrictedGrantQuota: 15 * rate}
+	state := apply(old, today, "restricted", 3) // $7 spent on the day of activation
+	state = apply(state, today, "unlocked", 3)  // shared pool becomes available at 17:00
+	require.NoError(t, db.Model(user).Update("quota", 0).Error)
+	user.Quota = 0
+	state = apply(state, today, "unlocked", 0)
+
+	state = apply(state, "2026-11-26", "restricted", 10)
+	require.NoError(t, db.Model(user).Update("quota", 6*rate).Error)
+	user.Quota = 6 * rate
+	state = apply(state, "2026-11-26", "restricted", 6)
+	apply(state, "2026-11-27", "restricted", 10) // unused quota does not accumulate
+
+	status := buildUserQuotaRequestStatus(cfg, today, user.Id, rate, 0, nil)
+	require.False(t, status.Enabled)
+	require.False(t, status.CanRequest)
+	require.Zero(t, status.RequestAmountUSD)
+	require.ErrorContains(t, addUserQuotaGuardDailyApproval(cfg, today, user.Id, 20, "", 0), "cannot be topped up")
+	require.True(t, buildUserQuotaRequestStatus(cfg, today, 14, rate, 0, nil).CanRequest)
+}
+
+func TestUserQuotaGuardFixedDailyActivationAfterUnlock(t *testing.T) {
+	db := quotaCapTestDB(t)
+	oldLogDB := model.LOG_DB
+	model.LOG_DB = db
+	t.Cleanup(func() { model.LOG_DB = oldLogDB })
+	require.NoError(t, db.AutoMigrate(&model.Log{}))
+	const rate = 500000
+	const date = "2026-11-25"
+	user := &model.User{Id: 13, Username: "fixed-evening-user", AffCode: "fixed-evening",
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Quota: 125 * rate}
+	require.NoError(t, db.Create(user).Error)
+	usageTime := time.Date(2026, 11, 24, 17, 5, 0, 0, time.UTC).Unix() // 01:05 on the 25th in Shanghai
+	require.NoError(t, db.Create(&model.Log{UserId: user.Id, Type: model.LogTypeConsume, Quota: 6 * rate, CreatedAt: usageTime}).Error)
+	require.NoError(t, db.Create(&model.Log{UserId: user.Id, Type: model.LogTypeConsume, Quota: 9 * rate, CreatedAt: usageTime - 2*3600}).Error)
+	cfg := &operation_setting.UserQuotaGuardSetting{
+		Enabled: true, Timezone: "Asia/Shanghai",
+		PerUserFixedDailyUSD: map[string]float64{"13": 10},
+	}
+	old := userQuotaGuardUserState{Date: date, Phase: "unlocked"}
+	phase := userQuotaPhase{DateKey: date, Phase: "unlocked"}
+	state, changed, err := applyUserQuotaGuardPolicy(cfg, user, old, true, phase, rate, 125, "daily_quota_pool")
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, userQuotaPhaseFixedDaily, state.Phase)
+	require.Equal(t, 4*rate, user.Quota)
 }
