@@ -119,8 +119,8 @@ func normalizeASXSResponsesHistory(request dto.OpenAIResponsesRequest) (dto.Open
 			remove = []string{"content", "role", "quality", "size"}
 		case "message", "":
 			remove = []string{"quality", "size"}
-			if content := parsed.Get("content"); content.IsArray() {
-				original := content.Array()
+			if historyContent := parsed.Get("content"); historyContent.IsArray() {
+				original := historyContent.Array()
 				parts := make([]json.RawMessage, 0, len(original))
 				for _, part := range original {
 					switch part.Get("type").String() {
