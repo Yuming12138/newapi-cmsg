@@ -178,3 +178,39 @@ func TestConvertOpenAIResponsesRequestKeepsPlaintextReasoningForNonGPT5(t *testi
 
 	require.Equal(t, "reasoning", gjson.GetBytes(converted.Input, "0.type").String())
 }
+
+func TestASXSResponsesHistoryKeepsMessagesAndToolResults(t *testing.T) {
+	request := dto.OpenAIResponsesRequest{
+		Model: "gpt-6.2-sol",
+		Input: []byte(`[
+			{"type":"reasoning","id":"resp_chat_reasoning_0","content":[{"type":"summary_text","text":"bridge summary"}]},
+			{"type":"reasoning","id":"rs_deepseek","content":[{"type":"reasoning_text","text":"foreign plaintext"}],"summary":[]},
+			{"type":"reasoning","id":"rs_native","encrypted_content":"native-context","content":null,"summary":[]},
+			{"type":"message","role":"assistant","id":"resp_chat_msg_0","content":[{"type":"output_text","text":"previous answer"}],"quality":""},
+			{"type":"custom_tool_call","id":"foreign_tool","call_id":"call_1","name":"inspect","input":"file.txt","content":null,"role":""},
+			{"type":"custom_tool_call_output","call_id":"call_1","output":"result","content":null},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}
+		]`),
+	}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{
+		UpstreamModelName: request.Model, ChannelBaseUrl: "https://api.hfjtc.cfd",
+	}}
+
+	convertedAny, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, request)
+	require.NoError(t, err)
+	items := gjson.ParseBytes(convertedAny.(dto.OpenAIResponsesRequest).Input).Array()
+	require.Len(t, items, 5)
+	require.Equal(t, "native-context", items[0].Get("encrypted_content").String())
+	require.NotContains(t, items[0].Map(), "content")
+	require.Equal(t, "previous answer", items[1].Get("content.0.text").String())
+	require.NotContains(t, items[1].Map(), "id")
+	require.NotContains(t, items[1].Map(), "quality")
+	require.NotContains(t, items[2].Map(), "content")
+	require.NotContains(t, items[2].Map(), "role")
+	require.Equal(t, "call_1", items[2].Get("call_id").String())
+	require.Equal(t, "file.txt", items[2].Get("input").String())
+	require.Equal(t, "call_1", items[3].Get("call_id").String())
+	require.Equal(t, "result", items[3].Get("output").String())
+	require.Equal(t, "continue", items[4].Get("content.0.text").String())
+	require.Contains(t, string(request.Input), "bridge summary")
+}

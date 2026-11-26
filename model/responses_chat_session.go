@@ -30,6 +30,7 @@ type ResponsesChatSession struct {
 	ConversationId   string `gorm:"size:64;index"`
 	ParentResponseId string `gorm:"size:64;index"`
 	ModelName        string `gorm:"size:255"`
+	UpstreamScope    string `gorm:"size:64"`
 	Items            string `gorm:"type:text"`
 	PendingToolCalls string `gorm:"type:text"`
 	CreatedAt        int64  `gorm:"index"`

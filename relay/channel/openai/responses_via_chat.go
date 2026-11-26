@@ -16,7 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response, continuation *service.ResponsesContinuation) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
 		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
@@ -36,13 +36,21 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 
 	responseID := helper.GetResponseID(c)
-	responsesResp, usage, err := service.ChatCompletionsResponseToResponsesResponseWithCustom(&chatResp, responseID, info.CustomToolNames)
+	var customTools map[string]struct{}
+	if info != nil {
+		customTools = info.CustomToolNames
+	}
+	responsesResp, usage, err := service.ChatCompletionsResponseToResponsesResponseWithCustom(&chatResp, responseID, customTools)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if usage == nil || usage.TotalTokens == 0 {
 		text := service.ExtractOutputTextFromResponses(responsesResp)
-		usage = service.ResponseText2Usage(c, text, info.UpstreamModelName, info.GetEstimatePromptTokens())
+		modelName, promptTokens := chatResp.Model, 0
+		if info != nil {
+			modelName, promptTokens = info.UpstreamModelName, info.GetEstimatePromptTokens()
+		}
+		usage = service.ResponseText2Usage(c, text, modelName, promptTokens)
 		responsesResp.Usage = relayconvert.UsageFromChatUsage(usage)
 	}
 
@@ -51,11 +59,12 @@ func OaiChatToResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 	}
 
+	saveChatToResponsesContinuation(c, info, responsesResp, continuation)
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 	return usage, nil
 }
 
-func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response, continuation *service.ResponsesContinuation) (*dto.Usage, *types.NewAPIError) {
 	if resp == nil || resp.Body == nil {
 		return nil, types.NewOpenAIError(fmt.Errorf("invalid response"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
@@ -123,10 +132,26 @@ func OaiChatToResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	}
 
 	for _, event := range relayconvert.FinalizeChatCompletionsStreamToResponses(state) {
+		if info.StreamStatus.IsNormalEnd() && event.Payload.Response != nil {
+			saveChatToResponsesContinuation(c, info, event.Payload.Response, continuation)
+		}
 		if !sendEvent(event) {
 			return nil, streamErr
 		}
 	}
 
 	return usage, nil
+}
+
+func saveChatToResponsesContinuation(c *gin.Context, info *relaycommon.RelayInfo, response *dto.OpenAIResponsesResponse, continuation *service.ResponsesContinuation) {
+	if continuation == nil || response == nil {
+		return
+	}
+	output, err := common.Marshal(response.Output)
+	if err == nil {
+		err = continuation.Save(info, response.ID, output)
+	}
+	if err != nil {
+		logger.LogWarn(c, "could not save converted response continuation")
+	}
 }

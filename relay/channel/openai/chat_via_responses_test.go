@@ -192,7 +192,7 @@ func TestOaiChatToResponsesStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
 	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 
-	usage, err := OaiChatToResponsesStreamHandler(c, info, resp)
+	usage, err := OaiChatToResponsesStreamHandler(c, info, resp, nil)
 	require.Nil(t, err)
 	require.NotNil(t, usage)
 	require.Equal(t, 2, usage.PromptTokens)

@@ -24,7 +24,7 @@ func TestBuildForeignResponsesTranscriptDropsReasoningAndKeepsToolCalls(t *testi
 		{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "now switch to gpt"}}},
 	}
 
-	merged := buildForeignResponsesTranscript(baseItems, inputItems)
+	merged := mergePortableResponsesTranscripts(baseItems, inputItems)
 
 	require.Len(t, merged, 5)
 	for _, item := range merged {
@@ -36,14 +36,14 @@ func TestBuildForeignResponsesTranscriptDropsReasoningAndKeepsToolCalls(t *testi
 
 func TestBuildForeignResponsesTranscriptDeduplicatesRepeatedItems(t *testing.T) {
 	baseItems := []map[string]any{
-		{"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "exec", "arguments": "{}"},
+		{"type": "function_call", "call_id": "call_1", "name": "exec", "arguments": "{}"},
 	}
 	inputItems := []map[string]any{
 		{"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "exec", "arguments": "{}"},
 		{"type": "function_call_output", "call_id": "call_1", "output": "ok"},
 	}
 
-	merged := buildForeignResponsesTranscript(baseItems, inputItems)
+	merged := mergePortableResponsesTranscripts(baseItems, inputItems)
 
 	require.Len(t, merged, 2)
 	require.Equal(t, "function_call_output", merged[1]["type"])

@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/tidwall/gjson"
 
 	"github.com/gin-gonic/gin"
 )
@@ -41,6 +42,11 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		c.Set("image_generation_call", true)
 		c.Set("image_generation_call_quality", responsesResponse.GetQuality())
 		c.Set("image_generation_call_size", responsesResponse.GetSize())
+	}
+	if turn := asxsResponsesContinuation(c, info); turn != nil {
+		if err := turn.Save(info, responsesResponse.ID, []byte(gjson.GetBytes(responseBody, "output").Raw)); err != nil {
+			logger.LogWarn(c, "could not save ASXS response continuation")
+		}
 	}
 
 	// 写入新的 response body
@@ -83,6 +89,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
+	turn := asxsResponsesContinuation(c, info)
+	var history asxsResponsesHistory
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 
@@ -95,6 +103,15 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 		if info != nil && isASXSGrokChannel(info) {
 			data = restoreASXSGrokStreamData(c, data)
+		}
+		if turn != nil {
+			history.observe(data, streamResponse)
+			if streamResponse.Type == "response.completed" || streamResponse.Type == "response.incomplete" {
+				id, output := history.complete(data)
+				if err := turn.Save(info, id, output); err != nil {
+					logger.LogWarn(c, "could not save ASXS stream continuation")
+				}
+			}
 		}
 		if err := sendResponsesStreamData(c, streamResponse, data); err != nil {
 			if c.Request != nil && c.Request.Context().Err() != nil {

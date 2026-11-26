@@ -1,7 +1,9 @@
 package service
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -10,38 +12,46 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 )
 
-// ReplayForeignResponsesSession rebuilds a complete transcript when a Responses
-// request continues a session that another provider minted.
-//
-// DeepSeek and MiMo keep their conversation state in responses_chat_sessions,
-// keyed by the response id that was returned to the client, because their
-// Responses endpoints are stateless. When the client later sends that id to a
-// different upstream on purpose - for example a DeepSeek-origin thread that the
-// user switches to a GPT channel - the upstream can neither resolve the id nor
-// validate the reasoning ciphertext bound to it, and answers
-// "The upstream could not validate encrypted continuation context".
-//
-// Replaying the stored transcript turns the continuation into a plain stateless
-// request, so an intentional cross-provider switch keeps the conversation
-// instead of forcing the client to rebuild it. The boolean result reports
-// whether the request was rewritten.
-func ReplayForeignResponsesSession(info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (dto.OpenAIResponsesRequest, bool, error) {
+// PrepareResponsesContinuation loads local history for the requested parent.
+// A native scope keeps the original ID when the upstream can resolve it.
+// Chat Completions adapters pass an empty scope and always replay known IDs.
+func PrepareResponsesContinuation(info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest, nativeScope string) (dto.OpenAIResponsesRequest, *model.ResponsesChatSession, bool, error) {
 	responseID := strings.TrimSpace(request.PreviousResponseID)
 	if responseID == "" {
-		return request, false, nil
+		return request, nil, false, nil
 	}
 	session, err := model.GetResponsesChatSession(responseID)
 	if err != nil {
-		return request, false, err
+		return request, nil, false, err
 	}
 	if session == nil {
 		// The upstream minted the id itself; leave the stateful call alone.
-		return request, false, nil
+		return request, nil, false, nil
 	}
-	if info != nil && session.UserId != 0 && info.UserId != 0 && session.UserId != info.UserId {
-		// Sessions are per-user; never replay another account's transcript.
-		return request, false, nil
+	if info == nil || info.UserId <= 0 || session.UserId != info.UserId {
+		return request, nil, false, fmt.Errorf("previous_response_id not found")
 	}
+	// Native ASXS responses can still be continued upstream on the original
+	// model and credential. Use our transcript only when changing upstreams.
+	if nativeScope != "" && session.UpstreamScope == nativeScope {
+		return request, session, false, nil
+	}
+	updated, replayed, err := replayStoredResponsesSession(request, session)
+	return updated, session, replayed, err
+}
+
+// ResponsesUpstreamScope identifies native continuation state without storing
+// the upstream credential. Distinct channels with the same endpoint and key
+// can reuse the same native response ID.
+func ResponsesUpstreamScope(info *relaycommon.RelayInfo, modelName string) string {
+	if info == nil || info.ChannelMeta == nil || info.ChannelBaseUrl == "" || modelName == "" {
+		return ""
+	}
+	value := fmt.Sprintf("%s\x00%s\x00%s", strings.TrimRight(info.ChannelBaseUrl, "/"), modelName, info.ApiKey)
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(value)))
+}
+
+func replayStoredResponsesSession(request dto.OpenAIResponsesRequest, session *model.ResponsesChatSession) (dto.OpenAIResponsesRequest, bool, error) {
 	baseItems, err := decodeResponsesSessionItems(session.Items)
 	if err != nil {
 		return request, false, err
@@ -53,17 +63,38 @@ func ReplayForeignResponsesSession(info *relaycommon.RelayInfo, request dto.Open
 	if err != nil {
 		return request, false, err
 	}
-	replayed := buildForeignResponsesTranscript(baseItems, inputItems)
+	replayed := mergePortableResponsesTranscripts(baseItems, inputItems)
 	encoded, err := common.Marshal(replayed)
 	if err != nil {
 		return request, false, err
 	}
 	request.Input = encoded
 	request.PreviousResponseID = ""
-	// The original instructions are already the first system item of the stored
-	// transcript; sending them again would duplicate the system turn.
-	request.Instructions = nil
+	// Keep current instructions. Older providers already stored their own
+	// instructions as messages, so avoid repeating an identical system turn.
+	if len(replayed) != 0 {
+		first := replayed[0]
+		instructions := common.JsonRawMessageToString(request.Instructions)
+		if common.Interface2String(first["role"]) == "system" && instructions != "" && instructions == responsesReplayMessageText(first["content"]) {
+			request.Instructions = nil
+		}
+	}
 	return request, true, nil
+}
+
+func responsesReplayMessageText(content any) string {
+	if text, ok := content.(string); ok {
+		return text
+	}
+	var text strings.Builder
+	if parts, ok := content.([]any); ok {
+		for _, value := range parts {
+			if part, ok := value.(map[string]any); ok && common.Interface2String(part["type"]) == "input_text" {
+				text.WriteString(common.Interface2String(part["text"]))
+			}
+		}
+	}
+	return text.String()
 }
 
 func decodeResponsesSessionItems(data string) ([]map[string]any, error) {
@@ -123,19 +154,18 @@ func normalizeResponsesReplayInput(input json.RawMessage) ([]map[string]any, err
 	}
 }
 
-// buildForeignResponsesTranscript merges the stored transcript with the new
-// turn and drops reasoning items: their ciphertext belongs to the provider that
-// produced them, so the new upstream would reject the whole request with an
-// encrypted-continuation or decryption error. Visible messages and tool calls
-// carry everything the model needs to continue.
-func buildForeignResponsesTranscript(baseItems, inputItems []map[string]any) []map[string]any {
+// mergePortableResponsesTranscripts preserves visible history, tool calls and
+// results. A different provider cannot reuse the previous provider's reasoning
+// ciphertext or compaction state.
+func mergePortableResponsesTranscripts(baseItems, inputItems []map[string]any) []map[string]any {
 	merged := make([]map[string]any, 0, len(baseItems)+len(inputItems))
 	seen := make(map[string]struct{})
 	appendItem := func(item map[string]any) {
 		if item == nil {
 			return
 		}
-		if strings.EqualFold(common.Interface2String(item["type"]), "reasoning") {
+		switch common.Interface2String(item["type"]) {
+		case "reasoning", "compaction", "item_reference":
 			return
 		}
 		if key := responsesTranscriptItemKey(item); key != "" {
@@ -157,11 +187,11 @@ func buildForeignResponsesTranscript(baseItems, inputItems []map[string]any) []m
 
 func responsesTranscriptItemKey(item map[string]any) string {
 	itemType := common.Interface2String(item["type"])
-	if id := common.Interface2String(item["id"]); id != "" {
-		return itemType + "|id|" + id
-	}
 	if callID := common.Interface2String(item["call_id"]); callID != "" {
 		return itemType + "|call|" + callID
+	}
+	if id := common.Interface2String(item["id"]); id != "" {
+		return itemType + "|id|" + id
 	}
 	return ""
 }

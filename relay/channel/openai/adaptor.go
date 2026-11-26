@@ -619,19 +619,25 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	// this channel continue the thread instead of failing continuation checks.
 	continuationID := strings.TrimSpace(request.PreviousResponseID)
 	originalInput := append([]byte(nil), request.Input...)
-	var replayed bool
-	request, replayed, err := service.ReplayForeignResponsesSession(info, request)
+	nativeScope := service.ResponsesUpstreamScope(info, request.Model)
+	request, parent, replayed, err := service.PrepareResponsesContinuation(info, request, nativeScope)
 	if err != nil {
 		return nil, err
 	}
-	if isOpenAIReasoningResponsesModel(request, info) {
+	asxsHistory := isASXSResponsesHistoryChannel(info, request)
+	if asxsHistory {
+		request, err = normalizeASXSResponsesHistory(request)
+		if err != nil {
+			return nil, err
+		}
+	} else if isOpenAIReasoningResponsesModel(request, info) {
 		request, err = service.DropForeignReasoningItems(request)
 		if err != nil {
 			return nil, err
 		}
 	}
 	if continuationID != "" {
-		logger.LogInfo(c, fmt.Sprintf("responses continuation: previous_response_id=%s replayed=%t channel=%d items=%s", continuationID, replayed, channelIDOf(info), summarizeResponsesInput(originalInput)))
+		logger.LogInfo(c, fmt.Sprintf("responses continuation: replayed=%t channel=%d items=%s", replayed, channelIDOf(info), summarizeResponsesInput(originalInput)))
 	}
 	request, err = sanitizeGPTResponsesInputItemIDs(request, info)
 	if err != nil {
@@ -649,6 +655,9 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		if request.Reasoning != nil {
 			info.ReasoningEffort = request.Reasoning.Effort
 		}
+	}
+	if c != nil && asxsHistory && info.RelayMode == relayconstant.RelayModeResponses {
+		c.Set(asxsResponsesContinuationKey, service.TrackResponsesContinuation(info, request, parent, continuationID, nativeScope))
 	}
 	return request, nil
 }
@@ -741,7 +750,7 @@ func sanitizeGPTResponsesInputItemIDs(request dto.OpenAIResponsesRequest, info *
 	if info != nil && strings.TrimSpace(info.UpstreamModelName) != "" {
 		modelName = info.UpstreamModelName
 	}
-	if !dto.IsOpenAIGPT5Model(strings.TrimSpace(modelName)) || len(request.Input) == 0 {
+	if (!dto.IsOpenAIGPT5Model(strings.TrimSpace(modelName)) && !isASXSResponsesHistoryChannel(info, request)) || len(request.Input) == 0 {
 		return request, nil
 	}
 

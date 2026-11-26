@@ -58,7 +58,7 @@ func responsesChatSessionSize(session *ResponsesChatSession) int64 {
 	if session == nil {
 		return 0
 	}
-	return int64(len(session.ID) + len(session.ModelName) + len(session.Items) + len(session.PendingToolCalls) + 128)
+	return int64(len(session.ID) + len(session.ModelName) + len(session.UpstreamScope) + len(session.Items) + len(session.PendingToolCalls) + 128)
 }
 
 func responsesChatSessionCacheExpired(session *ResponsesChatSession) bool {

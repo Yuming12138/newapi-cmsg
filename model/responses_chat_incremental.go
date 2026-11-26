@@ -38,6 +38,7 @@ type ResponsesChatTurn struct {
 	UserId               int    `gorm:"index"`
 	TokenId              int    `gorm:"index"`
 	ModelName            string `gorm:"size:255"`
+	UpstreamScope        string `gorm:"size:64"`
 	ItemCount            int
 	DeltaItems           string `gorm:"type:text"`
 	PendingToolCalls     string `gorm:"type:text"`
@@ -384,6 +385,7 @@ func prepareResponsesChatTurn(session *ResponsesChatSession) (*responsesChatPrep
 		UserId:               session.UserId,
 		TokenId:              session.TokenId,
 		ModelName:            session.ModelName,
+		UpstreamScope:        session.UpstreamScope,
 		ItemCount:            len(full),
 		DeltaItems:           deltaItems,
 		PendingToolCalls:     pending,
@@ -593,6 +595,7 @@ func loadIncrementalResponsesChatSessionWithDB(db *gorm.DB, id string) (*Respons
 		ConversationId:   turn.ConversationId,
 		ParentResponseId: turn.ParentResponseId,
 		ModelName:        turn.ModelName,
+		UpstreamScope:    turn.UpstreamScope,
 		Items:            fullItems,
 		PendingToolCalls: pending,
 		CreatedAt:        turn.CreatedAt,
