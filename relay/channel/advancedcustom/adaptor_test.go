@@ -306,7 +306,7 @@ func TestAdaptorConvertsResponsesRequestToOpenAIChatUpstream(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "gpt-test", chatReq.Model)
 	require.Len(t, chatReq.Messages, 2)
-	assert.Equal(t, "system", chatReq.Messages[0].Role)
+	assert.Equal(t, "user", chatReq.Messages[0].Role, "the bridge requires instructions to be sent as a user turn")
 	assert.Equal(t, "system rules", chatReq.Messages[0].StringContent())
 	assert.Equal(t, "user", chatReq.Messages[1].Role)
 	assert.Equal(t, "hello", chatReq.Messages[1].StringContent())

@@ -277,6 +277,29 @@ func TestResponsesRequestToChatCompletionsRequestRejectsStatefulFields(t *testin
 	}
 }
 
+func TestResponsesRequestToChatKeepsToolTurnsWithoutForeignReasoning(t *testing.T) {
+	got, err := ResponsesRequestToChatCompletionsRequest(&dto.OpenAIResponsesRequest{
+		Model: "deepseek-v4.1-flash",
+		Input: []byte(`[
+			{"type":"message","role":"user","content":"inspect the file"},
+			{"type":"reasoning","content":[{"type":"reasoning_text","text":"old thinking"}]},
+			{"type":"message","role":"assistant","content":[{"type":"reasoning_text","text":"hidden"},{"type":"output_text","text":"I checked"}]},
+			{"type":"reasoning","encrypted_content":"a different provider's state","summary":[]},
+			{"type":"function_call","name":"inspect","call_id":"call_1","arguments":"{}"},
+			{"type":"function_call_output","call_id":"call_1","output":"file contents"},
+			{"type":"message","role":"user","content":"keep going"}
+		]`),
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Messages, 4)
+	require.Equal(t, "inspect the file", got.Messages[0].StringContent())
+	require.Equal(t, "I checked", got.Messages[1].StringContent())
+	require.Equal(t, "call_1", got.Messages[1].ParseToolCalls()[0].ID)
+	require.Equal(t, "call_1", got.Messages[2].ToolCallId)
+	require.Equal(t, "file contents", got.Messages[2].StringContent())
+	require.Equal(t, "keep going", got.Messages[3].StringContent())
+}
+
 func mustRawMessage(t *testing.T, value any) []byte {
 	t.Helper()
 	raw, err := common.Marshal(value)

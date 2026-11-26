@@ -11,11 +11,11 @@ import (
 )
 
 const (
-	responsesInputTypeFunctionCall            = "function_call"
-	responsesInputTypeFunctionCallOutput      = "function_call_output"
-	responsesInputTypeCustomToolCall          = "custom_tool_call"
-	responsesInputTypeCustomToolCallOutput    = "custom_tool_call_output"
-	responsesInputTypeAdditionalTools         = "additional_tools"
+	responsesInputTypeFunctionCall         = "function_call"
+	responsesInputTypeFunctionCallOutput   = "function_call_output"
+	responsesInputTypeCustomToolCall       = "custom_tool_call"
+	responsesInputTypeCustomToolCallOutput = "custom_tool_call_output"
+	responsesInputTypeAdditionalTools      = "additional_tools"
 )
 
 func ResponsesRequestToChatCompletionsRequest(req *dto.OpenAIResponsesRequest) (*dto.GeneralOpenAIRequest, error) {
@@ -172,6 +172,10 @@ func responsesRequestMessagesToChat(req *dto.OpenAIResponsesRequest) ([]dto.Mess
 func responsesInputItemToChatMessages(item map[string]any, messages []dto.Message) ([]dto.Message, error) {
 	itemType := strings.TrimSpace(common.Interface2String(item["type"]))
 	switch itemType {
+	case "reasoning", "compaction", "item_reference":
+		// Responses-only context is not a chat message. In particular a
+		// reasoning_text part cannot be sent as the content of a user message.
+		return messages, nil
 	case responsesInputTypeFunctionCall:
 		toolCall, err := responsesFunctionCallItemToChatToolCall(item)
 		if err != nil {
@@ -205,6 +209,9 @@ func responsesInputItemToChatMessages(item map[string]any, messages []dto.Messag
 	if err != nil {
 		return nil, err
 	}
+	if content == nil {
+		return messages, nil
+	}
 	return append(messages, dto.Message{Role: role, Content: content}), nil
 }
 
@@ -233,6 +240,7 @@ func responsesContentPartsToChatContent(parts []any) (any, error) {
 	chatParts := make([]any, 0, len(parts))
 	var textOnly strings.Builder
 	onlyText := true
+	skippedReasoning := false
 
 	for _, rawPart := range parts {
 		part, ok := rawPart.(map[string]any)
@@ -244,6 +252,10 @@ func responsesContentPartsToChatContent(parts []any) (any, error) {
 
 		partType := strings.TrimSpace(common.Interface2String(part["type"]))
 		switch partType {
+		case "reasoning_text", "summary_text":
+			// Some clients also embed these parts inside replayed message items.
+			skippedReasoning = true
+			continue
 		case "input_text", "output_text", "text":
 			text := common.Interface2String(part["text"])
 			textOnly.WriteString(text)
@@ -282,6 +294,9 @@ func responsesContentPartsToChatContent(parts []any) (any, error) {
 	}
 
 	if onlyText {
+		if len(chatParts) == 0 && skippedReasoning {
+			return nil, nil
+		}
 		return textOnly.String(), nil
 	}
 	return chatParts, nil

@@ -46,10 +46,11 @@ type Adaptor struct {
 	claudeAdaptor claude.Adaptor
 	geminiAdaptor gemini.Adaptor
 
-	resolved  bool
-	converted bool
-	route     dto.AdvancedCustomRoute
-	converter string
+	resolved     bool
+	converted    bool
+	route        dto.AdvancedCustomRoute
+	converter    string
+	continuation *service.ResponsesContinuation
 }
 
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
@@ -124,6 +125,11 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	case dto.AdvancedCustomConverterNone:
 		return a.convertOpenAICompatibleResponsesRequest(c, info, request)
 	case dto.AdvancedCustomConverterOpenAIResponsesToOpenAIChatCompletions:
+		parentID := request.PreviousResponseID
+		request, parent, _, err := service.PrepareResponsesContinuation(info, request, "")
+		if err != nil {
+			return nil, err
+		}
 		if info != nil && request.Reasoning != nil && request.Reasoning.Effort != "" {
 			// Keep the requested effort for billing logs, mirroring the native
 			// OpenAI Responses path (relay/channel/openai/adaptor.go).
@@ -142,6 +148,7 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		// have to travel as user turns or the model never sees them.
 		chatReq.Messages = relayconvert.ChatMessagesSystemRoleToUser(chatReq.Messages)
 		rewriteReasoningEffort(info, &chatReq.ReasoningEffort)
+		a.continuation = service.TrackResponsesContinuation(info, request, parent, parentID, "")
 		return a.convertOpenAICompatibleRequest(c, info, chatReq)
 	default:
 		return nil, fmt.Errorf("converter %q does not support OpenAI Responses requests", converter)
@@ -261,9 +268,9 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		return openai.OaiResponsesToChatHandler(c, info, resp)
 	case dto.AdvancedCustomConverterOpenAIResponsesToOpenAIChatCompletions:
 		if info.IsStream {
-			return openai.OaiChatToResponsesStreamHandler(c, info, resp)
+			return openai.OaiChatToResponsesStreamHandler(c, info, resp, a.continuation)
 		}
-		return openai.OaiChatToResponsesHandler(c, info, resp)
+		return openai.OaiChatToResponsesHandler(c, info, resp, a.continuation)
 	default:
 		return nil, types.NewOpenAIError(fmt.Errorf("unsupported advanced custom converter: %s", a.converter), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 	}

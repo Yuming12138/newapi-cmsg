@@ -88,7 +88,7 @@ func TestOaiChatToResponsesHandlerKeepsCacheWriteForSettlement(t *testing.T) {
 	body := `{"id":"chatcmpl_1","object":"chat.completion","model":"gpt-5.6-sol","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3619,"completion_tokens":36,"total_tokens":3655,"prompt_tokens_details":{"cached_tokens":2921,"cached_creation_tokens":120,"cache_write_tokens":3616}}}`
 	c, recorder, resp := newCacheWriteResponseContext(t, body, "application/json")
 
-	usage, apiErr := OaiChatToResponsesHandler(c, nil, resp)
+	usage, apiErr := OaiChatToResponsesHandler(c, nil, resp, nil)
 	require.Nil(t, apiErr)
 	require.NotNil(t, usage)
 	requireNativeCacheWriteUsage(t, 3619, 36, 2921, 3616,
@@ -108,7 +108,7 @@ func TestOaiChatToResponsesStreamHandlerKeepsCacheWriteForSettlement(t *testing.
 	c, recorder, resp := newCacheWriteResponseContext(t, body, "text/event-stream")
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.6-sol"}}
 
-	usage, apiErr := OaiChatToResponsesStreamHandler(c, info, resp)
+	usage, apiErr := OaiChatToResponsesStreamHandler(c, info, resp, nil)
 	require.Nil(t, apiErr)
 	require.NotNil(t, usage)
 	requireNativeCacheWriteUsage(t, 3619, 36, 2921, 3616,
